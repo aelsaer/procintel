@@ -1,0 +1,29 @@
+{
+  "_fixture_note": "SYNTHETIC test data, not a captured real data.gov.gr administrative-boundaries export — property names are a best-effort guess (see services/ingestion/connectors/ckan/boundaries.py).",
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"kallikratis_code": "6101", "name": "ΔΗΜΟΣ ΑΘΗΝΑΙΩΝ", "nuts_code": "EL301"},
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[23.7, 37.9], [23.8, 37.9], [23.8, 38.0], [23.7, 38.0], [23.7, 37.9]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {"kallikratis_code": "6102", "name": "ΔΗΜΟΣ ΒΥΡΩΝΟΣ"},
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [[[24.0, 38.0], [24.1, 38.0], [24.1, 38.1], [24.0, 38.1], [24.0, 38.0]]]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {"kallikratis_code": "6103", "name": "ΚΑΤΕΣΤΡΑΜΜΕΝΗ ΕΓΓΡΑΦΗ"},
+      "geometry": null
+    }
+  ]
+}

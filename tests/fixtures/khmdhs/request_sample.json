@@ -1,0 +1,20 @@
+{
+  "_fixture_note": "SYNTHETIC test data, not a captured real ΚΗΜΔΗΣ response.",
+  "data": [
+    {
+      "referenceNumber": "25REQ000111222",
+      "title": "Αίτημα προμήθειας γραφικής ύλης",
+      "submissionDate": "2025-01-05",
+      "organizationVatNumber": "094259216",
+      "organizationName": "ΔΗΜΟΣ ΔΟΚΙΜΗΣ",
+      "cpvItems": ["30192000"],
+      "nutsCode": "EL301",
+      "procedureType": "OPEN",
+      "totalCostWithoutVAT": 8000.00,
+      "vatAmount": 1920.00,
+      "totalCostWithVAT": 9920.00,
+      "currency": "EUR"
+    }
+  ],
+  "isLastPage": true
+}

@@ -1,0 +1,14 @@
+{
+  "_fixture_note": "SYNTHETIC test data, not a captured real Διαύγεια response — the exact field names are an unconfirmed best-effort guess (see services/ingestion/connectors/diavgeia/normalize.py). ΑΔΑ matches the contractRelatedAda in tests/fixtures/khmdhs/contract_sample.json so integration tests can link them.",
+  "subject": "Έγκριση διενέργειας διαγωνισμού καθαρισμού δημοσίων κτιρίων",
+  "type": "ΑΝΑΘΕΣΗ ΕΡΓΩΝ / ΠΡΟΜΗΘΕΙΩΝ / ΥΠΗΡΕΣΙΩΝ / ΜΕΛΕΤΩΝ",
+  "issueDate": "2025-01-09",
+  "protocolNumber": "12345/2025",
+  "organizationLabel": "ΔΗΜΟΣ ΔΟΚΙΜΗΣ",
+  "unitLabel": "ΤΜΗΜΑ ΠΡΟΜΗΘΕΙΩΝ",
+  "documentUrl": "https://diavgeia.gov.gr/doc/7A1H465FTH-THIK",
+  "signers": [
+    {"name": "Ιωάννης Παπαδόπουλος"},
+    {"name": "Μαρία Γεωργίου"}
+  ]
+}

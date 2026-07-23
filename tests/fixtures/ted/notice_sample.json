@@ -1,0 +1,20 @@
+{
+  "_fixture_note": "Synthetic values using TED Search API v3 field names and localized value shapes.",
+  "notice-identifier": "2025-TED-000123",
+  "publication-number": "123456-2025",
+  "notice-title": {"ell": ["Παροχή υπηρεσιών καθαρισμού δημοσίων κτιρίων"]},
+  "notice-type": ["29"],
+  "form-type": ["result"],
+  "buyer-name": {"ell": ["ΔΗΜΟΣ ΔΟΚΙΜΗΣ"]},
+  "buyer-identifier": ["094259216"],
+  "buyer-country": ["GRC"],
+  "winner-name": {"ell": ["ΑΛΦΑ ΚΑΘΑΡΙΣΜΟΙ ΙΚΕ"]},
+  "winner-identifier": ["090000045"],
+  "winner-country": ["GRC"],
+  "classification-cpv": ["90911200"],
+  "estimated-value-proc": [100000.00],
+  "result-value-notice": [124000.00],
+  "procedure-type": ["open"],
+  "place-of-performance": ["EL301", "GRC"],
+  "publication-date": "2025-01-15+02:00"
+}

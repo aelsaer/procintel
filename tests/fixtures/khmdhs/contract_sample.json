@@ -1,0 +1,54 @@
+{
+  "_fixture_note": "SYNTHETIC test data, not a captured real ΚΗΜΔΗΣ response. Built from the field list in description.txt §16 to exercise casing-drift handling (contractRelatedAda vs contractRelatedADA) and both list/scalar forms of nutsCode(s). AFM values are checksum-valid per §7.2 but are not real registered numbers.",
+  "data": [
+    {
+      "referenceNumber": "25SYMV012345678",
+      "title": "Παροχή υπηρεσιών καθαρισμού δημοσίων κτιρίων",
+      "submissionDate": "2025-01-10",
+      "organizationVatNumber": "094259216",
+      "organizationName": "ΔΗΜΟΣ ΔΟΚΙΜΗΣ",
+      "cpvItems": ["90911200", "90910000"],
+      "nutsCode": "EL301",
+      "commitmentNo": "Ψ1Ψ2Ω1Ξ-ΑΒΓ",
+      "decisionRelatedAda": "6Ω0Ζ465ΦΘΘ-ΔΕΖ",
+      "contractRelatedAda": "7Α1Η465ΦΘΘ-ΘΙΚ",
+      "cancellationADA": null,
+      "aaht": "99999999",
+      "publicFundingRefOps": "OPS-0001",
+      "espaFundProgramRef": null,
+      "procedureType": "OPEN",
+      "totalCostWithoutVAT": 100000.00,
+      "vatAmount": 24000.00,
+      "totalCostWithVAT": 124000.00,
+      "currency": "EUR",
+      "awardees": [
+        {"vatNumber": "090000045", "name": "ΑΛΦΑ ΚΑΘΑΡΙΣΜΟΙ ΙΚΕ"}
+      ]
+    },
+    {
+      "referenceNumber": "25SYMV098765432",
+      "title": "Προμήθεια ιατροτεχνολογικού εξοπλισμού",
+      "submissionDate": "2025-01-15",
+      "organizationVatNumber": "094259216",
+      "organizationName": "ΔΗΜΟΣ ΔΟΚΙΜΗΣ",
+      "cpvItems": ["33100000"],
+      "nutsCodes": ["EL301", "EL303"],
+      "commitmentNo": "Ψ3Ψ4Ω3Ξ-ΓΔΕ",
+      "decisionRelatedAda": "8Β2Ι465ΦΘΘ-ΛΜΝ",
+      "contractRelatedADA": "9Γ3Κ465ΦΘΘ-ΞΟΠ",
+      "cancellationADA": null,
+      "aaht": "99999999",
+      "publicFundingRefOps": null,
+      "espaFundProgramRef": "ESPA-2025-001",
+      "procedureType": "NEGOTIATED",
+      "totalCostWithoutVAT": 50000.00,
+      "vatAmount": 12000.00,
+      "totalCostWithVAT": 62000.00,
+      "currency": "EUR",
+      "awardees": [
+        {"vatNumber": "090000045", "name": "ΑΛΦΑ ΚΑΘΑΡΙΣΜΟΙ ΙΚΕ"}
+      ]
+    }
+  ],
+  "isLastPage": true
+}

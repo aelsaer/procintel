@@ -1,0 +1,24 @@
+{
+  "_fixture_note": "SYNTHETIC test data, not a captured real ΚΗΜΔΗΣ response. The 'auction' resource maps to act_type AWARD (description.txt §6.2).",
+  "data": [
+    {
+      "referenceNumber": "25AWRD000333444",
+      "title": "Ανάθεση προμήθειας γραφικής ύλης",
+      "submissionDate": "2025-01-20",
+      "organizationVatNumber": "094259216",
+      "organizationName": "ΔΗΜΟΣ ΔΟΚΙΜΗΣ",
+      "cpvItems": ["30192000"],
+      "nutsCode": "EL301",
+      "contractRelatedAda": "7Α1Η465ΦΘΘ-ΘΙΚ",
+      "procedureType": "OPEN",
+      "totalCostWithoutVAT": 7800.00,
+      "vatAmount": 1872.00,
+      "totalCostWithVAT": 9672.00,
+      "currency": "EUR",
+      "awardees": [
+        {"vatNumber": "090000045", "name": "ΑΛΦΑ ΚΑΘΑΡΙΣΜΟΙ ΙΚΕ"}
+      ]
+    }
+  ],
+  "isLastPage": true
+}

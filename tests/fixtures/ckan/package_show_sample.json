@@ -1,0 +1,20 @@
+{
+  "_fixture_note": "SYNTHETIC test data, not a captured real data.gov.gr response — field names are a best-effort guess at the standard CKAN package_show envelope (see services/ingestion/connectors/ckan/client.py). Confirm against the live deployment before relying on this shape.",
+  "success": true,
+  "result": {
+    "id": "plithysmos-dimon-2021",
+    "name": "plithysmos-dimon-2021",
+    "title": "Πληθυσμός ανά Δήμο (Απογραφή 2021)",
+    "license_id": "cc-by-4.0",
+    "organization": {
+      "title": "ΕΛΣΤΑΤ"
+    },
+    "resources": [
+      {
+        "id": "res-population-csv-001",
+        "format": "CSV",
+        "url": "https://data.gov.gr/dataset/plithysmos-dimon-2021/resource/res-001/download/population.csv"
+      }
+    ]
+  }
+}

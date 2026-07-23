@@ -1,0 +1,36 @@
+{
+  "_fixture_note": "Synthetic values using the published ΜΕΦ /api/spendings response schema.",
+  "items": [
+    {
+      "org.title": "ΥΠΟΥΡΓΕΙΟ ΔΟΚΙΜΗΣ",
+      "org.afm": "094259216",
+      "org.uid": "MEF-ORG-0001",
+      "uid": "MEF-SPENDING-0001",
+      "issuer_afm": "090000045",
+      "issuer_title": "ΑΛΦΑ ΚΑΘΑΡΙΣΜΟΙ ΙΚΕ",
+      "date": "12/01/2025",
+      "amount": "100.000,00",
+      "vat": "24.000,00",
+      "org_uid": "MEF-ORG-0001",
+      "adas": "7Α1Η465ΦΘΘ-ΘΙΚ",
+      "decisions": []
+    },
+    {
+      "org.title": "ΥΠΟΥΡΓΕΙΟ ΔΟΚΙΜΗΣ",
+      "org.afm": "094259216",
+      "org.uid": "MEF-ORG-0001",
+      "uid": "MEF-SPENDING-0002",
+      "issuer_afm": "090000045",
+      "issuer_title": "ΑΛΦΑ ΚΑΘΑΡΙΣΜΟΙ ΙΚΕ",
+      "date": "05/05/2020",
+      "amount": "9.999,00",
+      "vat": "0,00",
+      "org_uid": "MEF-ORG-0001",
+      "adas": null,
+      "decisions": []
+    }
+  ],
+  "count": 2,
+  "sum": "109.999,00",
+  "secondary": []
+}

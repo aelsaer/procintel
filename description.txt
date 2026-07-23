@@ -1,0 +1,3446 @@
+Attachment DEI_FiberBill_11_06_2026_0000087398.pdf added.
+None selected
+
+Skip to content
+Using Gmail with screen readers
+8 of 11,393
+(no subject)
+Inbox
+Andreas <adreas.saer@gmail.com>
+	
+Sun 19 Jul, 14:44 (23 hours ago)
+	
+	
+to me
+Προδιαγραφή λύσης v1.0
+Πλατφόρμα Επιχειρηματικής Πληροφόρησης για την Ελληνική Δημόσια Αγορά
+
+Η λύση δεν πρέπει να σχεδιαστεί ως crawler, μηχανή αναζήτησης εγγράφων ή πολιτικό εργαλείο. Πρέπει να σχεδιαστεί ως ενιαία πλατφόρμα δεδομένων και επιχειρηματικής πληροφόρησης για τις δημόσιες συμβάσεις.
+
+Η κεντρική της υπόσχεση είναι:
+
+    Συνδέουμε προκηρύξεις, αναθέσεις, συμβάσεις, αποφάσεις, πληρωμές, χρηματοδοτούμενα έργα, επιχειρήσεις και γεωγραφικά δεδομένα, ώστε μια εταιρεία να γνωρίζει ποιος αγοράζει, τι αγοράζει, από ποιον, σε ποια τιμή, με ποια χρηματοδότηση και πότε είναι πιθανό να αγοράσει ξανά.
+
+Η πλατφόρμα πρέπει να μετατρέπει τα δημόσια δεδομένα από:
+
+κατακερματισμένα API
++ ασύνδετα έγγραφα
++ διαφορετικές ονομασίες
++ ελλιπή κοινά κλειδιά
+
+σε:
+
+ενιαίες εταιρείες και φορείς
++ πλήρεις κύκλους ζωής συμβάσεων
++ συγκρίσιμες αγορές και κατηγορίες
++ εμπορικά σήματα και ειδοποιήσεις
++ τεκμηριωμένα analytics
+
+1. Τι ακριβώς είναι το προϊόν
+
+Η σωστή κατηγορία προϊόντος είναι:
+
+    Public Procurement Intelligence
+    Government Spend Analytics
+    Public Sector Market Intelligence
+    Tender, Supplier & Contract Intelligence
+
+Η προτεινόμενη ελληνική περιγραφή είναι:
+
+    Η πλατφόρμα market intelligence για την ελληνική δημόσια αγορά.
+
+Δεν είναι:
+
+    άλλη μία λίστα διαγωνισμών,
+    απλή υπηρεσία email alerts,
+    μηχανή αναζήτησης PDF,
+    εργαλείο αυτόματης απόδοσης πολιτικών ή ποινικών ευθυνών,
+    «corruption score» για φορείς ή επιχειρήσεις,
+    αντικατάσταση του ΚΗΜΔΗΣ, της Διαύγειας ή του ΕΣΗΔΗΣ.
+
+Είναι το ενοποιητικό και αναλυτικό επίπεδο πάνω από τις επίσημες πηγές.
+
+Το προϊόν πρέπει να απαντά σε ερωτήσεις όπως:
+
+    Ποιοι δημόσιοι φορείς αγοράζουν αυτό που πουλά η επιχείρησή μου;
+    Ποιοι είναι οι υφιστάμενοι προμηθευτές τους;
+    Πότε λήγουν οι σχετικές συμβάσεις;
+    Ποιες ανάγκες επαναλαμβάνονται κάθε χρόνο;
+    Ποια είναι η συνήθης αξία μιας σύμβασης;
+    Ποιοι ανταγωνιστές κερδίζουν τις περισσότερες αναθέσεις;
+    Ποια CPV παρουσιάζουν αύξηση;
+    Ποια έργα χρηματοδοτούνται από ΕΣΠΑ;
+    Πόσο μέρος ενός προϋπολογισμού έχει ήδη συμβασιοποιηθεί;
+    Ποιοι φορείς έχουν υψηλή συγκέντρωση σε συγκεκριμένους προμηθευτές;
+    Πόσο εξαρτημένη είναι μια εταιρεία από έναν δημόσιο πελάτη;
+    Ποιες συμβάσεις τροποποιούνται συχνά;
+    Ποιες ευκαιρίες αξίζει να ενταχθούν στο εμπορικό pipeline;
+    Ποια δεδομένα στηρίζουν κάθε υπολογισμό ή συμπέρασμα;
+
+2. Η βασική αρχή σχεδιασμού
+
+Το ΚΗΜΔΗΣ πρέπει να αποτελέσει τον κεντρικό κορμό του συστήματος, επειδή περιγράφει τις βασικές πράξεις του κύκλου μιας δημόσιας σύμβασης:
+
+Αίτημα
+→ Εγκεκριμένο αίτημα / ανάληψη υποχρέωσης
+→ Πρόσκληση ή διακήρυξη
+→ Ανάθεση
+→ Σύμβαση
+→ Τροποποίηση
+→ Πληρωμή
+
+Η επίσημη Open Data υπηρεσία του ΚΗΜΔΗΣ διαθέτει endpoints για αιτήματα, προκηρύξεις, αναθέσεις, συμβάσεις, πληρωμές, συνδεδεμένες πράξεις και σχετικά αρχεία. Η τεκμηρίωση αναφέρει όριο 350 αιτημάτων ανά λεπτό, αυτόματη ενημέρωση των Open Data περίπου κάθε 24 ώρες και άδεια CC BY 4.0. Επίσης, τα χρονικά φίλτρα πρέπει να χρησιμοποιούνται προσεκτικά, επειδή η υπηρεσία περιορίζει πρακτικά τα διαστήματα αναζήτησης σε παράθυρα έως περίπου 180 ημερών.
+
+Ιδιαίτερα σημαντικό είναι το endpoint adamChain, το οποίο επιστρέφει συνδεδεμένες πράξεις — αιτήματα, εγκεκριμένα αιτήματα, προκηρύξεις, αναθέσεις, συμβάσεις και πληρωμές. Αυτό πρέπει να χρησιμοποιηθεί ως η πρώτη και ισχυρότερη πηγή σύνδεσης του κύκλου ζωής και όχι να επιχειρηθεί εξαρχής η ανακατασκευή όλων των σχέσεων με fuzzy matching.
+
+Οι υπόλοιπες πηγές προσθέτουν context:
+
+ΚΗΜΔΗΣ      → τι αγοράστηκε και με ποια πράξη
+Διαύγεια    → ποια διοικητική απόφαση το ενέκρινε
+ΓΕΜΗ        → ποια ακριβώς εταιρεία είναι ο ανάδοχος
+ΑΝΑΠΤΥΞΗ    → σε ποιο χρηματοδοτούμενο έργο ανήκει
+ΜΕΦ         → ειδικές επιχορηγήσεις και δηλωμένες δαπάνες
+TED         → ευρωπαϊκή δημοσίευση και σύγκριση
+VIES        → επιβεβαίωση ευρωπαϊκού VAT
+data.gov    → δημογραφικό, γεωγραφικό και θεματικό context
+INSPIRE     → γεωχωρικά επίπεδα και χαρτογράφηση
+
+3. Επαληθευμένη κατάσταση των πηγών
+
+Η παρακάτω αποτύπωση βασίζεται στην κατάσταση που επαληθεύτηκε στις 19 Ιουλίου 2026.
+Πηγή	Ρόλος στο προϊόν	Κύρια κλειδιά	Προτεραιότητα	Κρίσιμος περιορισμός
+ΚΗΜΔΗΣ Open Data	Κεντρικός κορμός συμβάσεων	ΑΔΑΜ, ΑΦΜ, CPV, ΑΔΑ, NUTS	P0	Παράθυρα ημερομηνιών, ημερήσια περίπου ανανέωση
+Διαύγεια OpenData	Διοικητικές αποφάσεις και έγγραφα	ΑΔΑ	P0	Η δημόσια αναζήτηση βρίσκεται σε περιορισμένη λειτουργία· η άμεση ανάκτηση με ΑΔΑ πρέπει να προηγηθεί
+Open Data ΓΕΜΗ	Εταιρική ταυτοποίηση και κατάσταση	ΑΦΜ, ΓΕΜΗ	P1	Απαιτείται προσωπικό API key
+ΑΝΑΠΤΥΞΗ.gov.gr	Έργα ΕΣΠΑ, υποέργα, προϋπολογισμοί, πληρωμές	ΟΠΣ/MIS, ΑΦΜ	P1	Η σαφής δημόσια τεκμηρίωση API που εντοπίστηκε αφορά κυρίως το 2014–2020
+TED Search API	Ευρωπαϊκές προκηρύξεις και αναθέσεις	TED notice ID, VAT, CPV	P2	Χρειάζεται αντιστοίχιση διαφορετικών εκδόσεων eForms/XML
+Μητρώο Επιχορηγούμενων Φορέων	Ειδική εικόνα επιχορηγήσεων και δαπανών	ΑΦΜ, ΑΔΑ	P2	Δεν αποτελεί καθολικό μητρώο πληρωμών του Δημοσίου
+VIES	Επιβεβαίωση ευρωπαϊκού VAT	VAT number + χώρα	P2	Είναι validator, όχι πλήρες εταιρικό μητρώο
+data.gov.gr	Κατάλογος συμπληρωματικών datasets	NUTS, δήμος, φορέας	P3	Δεν είναι ένα ενιαίο επιχειρησιακό API
+Κτηματολόγιο INSPIRE	Χωρικός εμπλουτισμός	NUTS, δήμος, γεωμετρία	P3	Κάθε γεωχωρικό επίπεδο χρειάζεται ξεχωριστό έλεγχο πρόσβασης και άδειας
+3.1 ΚΗΜΔΗΣ
+
+Το ΚΗΜΔΗΣ πρέπει να υποστηριχθεί για όλους τους βασικούς πόρους:
+
+POST /khmdhs-opendata/request?page={page}
+POST /khmdhs-opendata/notice?page={page}
+POST /khmdhs-opendata/auction?page={page}
+POST /khmdhs-opendata/contract?page={page}
+POST /khmdhs-opendata/payment?page={page}
+
+GET /khmdhs-opendata/adamChain/{referenceNumber}
+
+Τα πεδία που πρέπει να διατηρούνται αυτούσια περιλαμβάνουν:
+
+    referenceNumber
+    title
+    submissionDate
+    organizationVatNumber
+    cpvItems
+    nutsCode
+    nutsCodes
+    commitmentNo
+    decisionRelatedAda
+    contractRelatedAda
+    cancellationADA
+    aaht
+    fundingDetails
+    publicFundingRefOps
+    espaFundProgramRef
+    regularBudgetFundedProgramRef
+    selfFundProgramRef
+    στοιχεία αναδόχων,
+    ποσά,
+    ΦΠΑ,
+    ημερομηνίες,
+    είδος διαδικασίας,
+    στοιχεία τροποποίησης,
+    σχετικά ΑΔΑΜ και ΑΔΑ.
+
+Η επίσημη τεκμηρίωση εμφανίζει σε ορισμένα σημεία μικρές διαφορές κεφαλαίων στα ονόματα πεδίων, όπως contractRelatedAda και contractRelatedADA. Ο parser επομένως δεν πρέπει να βασίζεται σε απόλυτη ευαισθησία κεφαλαίων· πρέπει να υπάρχει canonical mapping layer.
+3.2 Διαύγεια
+
+Η Διαύγεια χρησιμοποιείται για:
+
+    ανάκτηση πράξης με ΑΔΑ,
+    θέμα και τύπο απόφασης,
+    εκδούσα αρχή,
+    οργανωτική μονάδα,
+    υπογράφοντα,
+    ημερομηνίες,
+    συνημμένο PDF,
+    ιστορικό εκδόσεων,
+    πρόσθετες πράξεις που δεν έχουν συνδεθεί επαρκώς στο ΚΗΜΔΗΣ.
+
+Η πρώτη στρατηγική δεν πρέπει να είναι «κατεβάζω όλη τη Διαύγεια». Πρέπει να είναι:
+
+ΑΔΑ που εμφανίζεται στο ΚΗΜΔΗΣ
+→ άμεση ανάκτηση από Διαύγεια
+→ αποθήκευση πράξης και εγγράφου
+→ σύνδεση με τον συγκεκριμένο κύκλο σύμβασης
+
+Τα επίσημα δείγματα και endpoints υποστηρίζουν ανάκτηση απόφασης με ΑΔΑ, απλή και σύνθετη αναζήτηση, λεξικά, τύπους πράξεων, οργανισμούς, μονάδες και υπογράφοντες. Ωστόσο, η τρέχουσα επίσημη ενημέρωση της Διαύγειας αναφέρει περιορισμένη λειτουργία αναζήτησης λόγω εργασιών συντήρησης. Για τον λόγο αυτό, ο connector πρέπει να λειτουργεί σε degraded mode, με άμεση ανάκτηση γνωστών ΑΔΑ ως βασική λειτουργία και γενική αναζήτηση ως συμπληρωματικό backfill.
+3.3 ΓΕΜΗ
+
+Το ΓΕΜΗ προσθέτει:
+
+    επίσημη επωνυμία,
+    διακριτικό τίτλο,
+    αριθμό ΓΕΜΗ,
+    ΑΦΜ,
+    νομική μορφή,
+    κατάσταση επιχείρησης,
+    αρμόδια υπηρεσία ΓΕΜΗ,
+    ημερομηνία απόδοσης αριθμού ΓΕΜΗ,
+    ΚΑΔ,
+    δήμο και νομό,
+    δημόσια έγγραφα και ανακοινώσεις.
+
+Η επίσημη υπηρεσία Open Data υποστηρίζει αναζήτηση με ΑΦΜ, ΓΕΜΗ, επωνυμία, ΚΑΔ, κατάσταση, νομό και δήμο. Για παραγωγική χρήση απαιτείται αίτημα πρόσβασης και προσωπικό API key. Τα λεξικά νομικών μορφών, καταστάσεων και γεωγραφικών κωδικών πρέπει να αποθηκεύονται τοπικά και να ανανεώνονται περιοδικά.
+3.4 ΑΝΑΠΤΥΞΗ.gov.gr
+
+Το ΑΝΑΠΤΥΞΗ προσθέτει:
+
+    κωδικό ΟΠΣ/MIS,
+    πράξη και υποέργα,
+    δικαιούχο,
+    προϋπολογισμό,
+    συμβάσεις,
+    πληρωμές,
+    αναδόχους,
+    περιφέρειες,
+    ημερομηνίες,
+    κατάσταση και πρόοδο έργου.
+
+Η τεκμηρίωση του Open Data API για την περίοδο 2014–2020 αναφέρει ημερήσια ενημέρωση, JSON ως βασική μορφή, pagination και δεδομένα έργων, υποέργων, δικαιούχων, αναδόχων, προϋπολογισμών και πληρωμών. Η νέα πύλη 2021–2027 υπάρχει, αλλά πρέπει να αντιμετωπιστεί ως ξεχωριστός connector μέχρι να επιβεβαιωθεί πλήρως το δημόσιο συμβόλαιο API της.
+
+Σημαντική τεχνική διόρθωση:
+
+ΚΗΜΔΗΣ.espaFundProgramRef = MIS
+
+δεν πρέπει να θεωρηθεί καθολικά αληθές χωρίς επαλήθευση.
+
+Το ΚΗΜΔΗΣ διαθέτει περισσότερα του ενός σχετικά πεδία χρηματοδότησης, όπως publicFundingRefOps και espaFundProgramRef. Ο connector πρέπει να αποθηκεύει και τα δύο και να επιβεβαιώνει ποιο αντιστοιχεί πράγματι στον κωδικό ΟΠΣ/MIS ανά τύπο εγγραφής.
+3.5 Μητρώο Επιχορηγούμενων Φορέων
+
+Η υπηρεσία διαθέτει δημόσια endpoints για οργανισμούς, δαπάνες και έσοδα. Οι δαπάνες μπορούν να περιλαμβάνουν ΑΦΜ φορέα, ΑΦΜ λήπτη, επωνυμία, ποσό, ΦΠΑ, ημερομηνία και σχετικά ΑΔΑ.
+
+Δεν πρέπει, όμως, να χρησιμοποιηθεί σαν καθολική βάση «πραγματικών πληρωμών του Δημοσίου». Το μητρώο αφορά συγκεκριμένες κατηγορίες επιχορηγούμενων φορέων και έχουν εμφανιστεί διαδικασίες εκπρόθεσμης ή αναδρομικής υποβολής στοιχείων. Συνεπώς κάθε σχετικό metric πρέπει να εμφανίζει σαφώς την κάλυψη και την ημερομηνία τελευταίας ενημέρωσης.
+3.6 data.gov.gr
+
+Η νέα εθνική πύλη τέθηκε σε πλήρη λειτουργία τον Μάιο του 2026 και βασίζεται σε CKAN, με συμβατότητα DCAT-AP. Η επίσημη ανακοίνωση αναφέρει περισσότερα από 9.000 σύνολα δεδομένων, περισσότερους από 450 φορείς και περισσότερους από 30.000 πόρους, με APIs και μαζικές λήψεις σε μορφές όπως CSV, JSON, XML και XLSX.
+
+Το data.gov.gr πρέπει να χρησιμοποιηθεί ως:
+
+    catalogue of enrichment sources
+
+και όχι ως μία ενιαία επιχειρησιακή βάση.
+
+Η υλοποίηση πρέπει να διαθέτει generic CKAN connector για:
+
+package_search
+package_show
+resource_search
+
+και μετά ξεχωριστό configuration για κάθε dataset που επιλέγεται. Τα παραπάνω είναι τυπικές λειτουργίες του CKAN Action API, αλλά οι ακριβείς διαδρομές και περιορισμοί πρέπει να επιβεβαιώνονται στο deployment του data.gov.gr.
+3.7 Κτηματολόγιο INSPIRE
+
+Η Γεωπύλη INSPIRE του Ελληνικού Κτηματολογίου επιτρέπει αναζήτηση, απεικόνιση, τηλεφόρτωση και επίκληση γεωχωρικών δεδομένων.
+
+Η πρώτη γεωχωρική έκδοση του προϊόντος δεν χρειάζεται κτηματολογικά τεμάχια. Πρέπει να ξεκινήσει με:
+
+    διοικητικά όρια,
+    NUTS,
+    περιφέρειες,
+    περιφερειακές ενότητες,
+    δήμους,
+    ταχυδρομικούς κώδικες,
+    βασικές περιβαλλοντικές ή θεματικές ζώνες όπου επιτρέπεται.
+
+3.8 TED
+
+Το TED Search API επιτρέπει αναζήτηση δημοσιευμένων ευρωπαϊκών notices και μαζική λήψη XML. Η επίσημη έκδοση 3 διαθέτει endpoint αναζήτησης και δεν απαιτεί authentication για το Search API.
+
+Το TED πρέπει να χρησιμοποιηθεί για:
+
+    εντοπισμό ελληνικών συμβάσεων που δημοσιεύτηκαν ευρωπαϊκά,
+    σύγκριση με άλλες χώρες,
+    ανάλυση ευρωπαϊκών αγοραστών και προμηθευτών,
+    CPV market sizing,
+    σύγκριση αξιών και διαδικασιών,
+    εμπλουτισμό με eForms.
+
+3.9 VIES
+
+Το VIES πρέπει να χρησιμοποιείται μόνο για:
+
+    έλεγχο εγκυρότητας ευρωπαϊκού VAT,
+    επιβεβαίωση χώρας,
+    αποθήκευση ημερομηνίας ελέγχου,
+    βοηθητικό validation ξένων προμηθευτών.
+
+Δεν αποτελεί εταιρικό προφίλ. Η επίσημη υπηρεσία διαθέτει WSDL για checkVat και ελέγχει αριθμούς VAT μέσω των συστημάτων των κρατών-μελών.
+4. Οι κύριοι χρήστες
+4.1 Επιχειρήσεις που πωλούν στο Δημόσιο
+
+Χρειάζονται:
+
+    νέες ευκαιρίες,
+    έξυπνα alerts,
+    προφίλ φορέων,
+    προφίλ ανταγωνιστών,
+    προηγούμενους αναδόχους,
+    ιστορικές αξίες,
+    λήξεις συμβάσεων,
+    εκτίμηση επανάληψης ανάγκης,
+    bid/no-bid υποστήριξη,
+    εξαγωγή σε CRM ή Excel.
+
+Αυτό είναι το αρχικό και ισχυρότερο εμπορικό κοινό.
+4.2 Σύμβουλοι διαγωνισμών
+
+Χρειάζονται:
+
+    ενιαία παρακολούθηση πολλών πελατών,
+    saved searches ανά πελάτη,
+    προετοιμασία φακέλου,
+    εύρεση παρόμοιων προηγούμενων διαγωνισμών,
+    competitor landscape,
+    σχετικά έγγραφα,
+    deadlines και workflow.
+
+4.3 Τράπεζες, factoring και ασφαλιστικές
+
+Χρειάζονται:
+
+    δημόσιο χαρτοφυλάκιο μιας εταιρείας,
+    συμβάσεις που έχουν υπογραφεί,
+    συμβάσεις που λήγουν,
+    συγκέντρωση εσόδων,
+    εξάρτηση από έναν φορέα,
+    κατάσταση ΓΕΜΗ,
+    ιστορικό τροποποιήσεων,
+    διαθέσιμα σήματα πληρωμών,
+    source-backed due diligence.
+
+4.4 Μεγάλες επιχειρήσεις και όμιλοι
+
+Χρειάζονται:
+
+    enterprise market intelligence,
+    ανάλυση γεωγραφικών αγορών,
+    παρακολούθηση θυγατρικών και ανταγωνιστών,
+    API προς CRM ή data warehouse,
+    custom taxonomies,
+    account planning.
+
+4.5 Αναθέτουσες αρχές
+
+Μπορούν να χρησιμοποιήσουν:
+
+    benchmarking,
+    spend analysis,
+    supplier concentration,
+    σύγκριση με ομοειδείς φορείς,
+    contract monitoring,
+    παρακολούθηση χρηματοδότησης και εκτέλεσης.
+
+4.6 Ερευνητές και δημοσιογράφοι
+
+Αποτελούν δευτερεύον vertical:
+
+    πλήρης τεκμηρίωση πηγών,
+    σχέσεις φορέων–εταιρειών–συμβάσεων,
+    ιστορική ανάλυση,
+    exports,
+    reproducible queries.
+
+Το προϊόν δεν πρέπει να κατασκευάζει αυτόματα συμπεράσματα περί εύνοιας, διαφθοράς ή πολιτικής σύνδεσης. Πρέπει να παρουσιάζει γεγονότα, μοτίβα, δείκτες και πηγές.
+5. Οι βασικές λειτουργικές ενότητες
+5.1 Opportunities
+
+Η ενότητα εντοπίζει και προτεραιοποιεί ενεργές ή επερχόμενες ευκαιρίες.
+
+Περιλαμβάνει:
+
+    νέες προσκλήσεις και προκηρύξεις,
+    ημερομηνία λήξης,
+    φορέα,
+    CPV,
+    περιοχή,
+    προϋπολογισμό,
+    είδος διαδικασίας,
+    χρηματοδότηση,
+    σχετικά έγγραφα,
+    προηγούμενες παρόμοιες συμβάσεις,
+    incumbent προμηθευτή,
+    ανταγωνιστική ένταση,
+    opportunity score,
+    δυνατότητα αποθήκευσης στο pipeline.
+
+5.2 Buyer Intelligence
+
+Κάθε δημόσιος φορέας αποκτά canonical profile:
+
+    επίσημη και εναλλακτικές ονομασίες,
+    ΑΦΜ,
+    AAHT,
+    οργανωτική ιεραρχία,
+    γεωγραφία,
+    συνολική αξία συμβάσεων,
+    αριθμός αναθέσεων,
+    κυριότερα CPV,
+    κυριότεροι προμηθευτές,
+    συγκέντρωση προμηθευτών,
+    μέση διάρκεια διαδικασίας,
+    αναλογία τύπων διαδικασίας,
+    συμβάσεις που λήγουν,
+    επαναλαμβανόμενες ανάγκες,
+    έργα ΕΣΠΑ,
+    πρόσφατες αποφάσεις.
+
+5.3 Supplier Intelligence
+
+Κάθε εταιρεία αποκτά ενιαίο προφίλ:
+
+    επίσημη επωνυμία,
+    εμπορική ονομασία,
+    ΑΦΜ,
+    αριθμός ΓΕΜΗ,
+    νομική μορφή,
+    κατάσταση,
+    ΚΑΔ,
+    διεύθυνση,
+    δημόσιες συμβάσεις,
+    συνολική αξία αναθέσεων,
+    CPV δραστηριότητας,
+    κυριότεροι δημόσιοι πελάτες,
+    γεωγραφική παρουσία,
+    ενεργές συμβάσεις,
+    λήξεις,
+    τροποποιήσεις,
+    πιθανές πληρωμές,
+    συμμετοχή σε έργα ΕΣΠΑ,
+    ποσοστό εξάρτησης από συγκεκριμένους φορείς,
+    συνεργασίες ή κοινοπραξίες όπου προκύπτουν από επίσημες πηγές.
+
+5.4 Contract Lifecycle
+
+Η βασικότερη διαφοροποίηση του προϊόντος.
+
+Για κάθε διαδικασία εμφανίζεται timeline:
+
+Αίτημα
+↓
+Έγκριση / ανάληψη υποχρέωσης
+↓
+Προκήρυξη ή πρόσκληση
+↓
+Ανάθεση
+↓
+Υπογραφή σύμβασης
+↓
+Τροποποιήσεις
+↓
+Παρατάσεις
+↓
+Ακυρώσεις ή λύση
+↓
+Εντολές πληρωμής
+
+Κάθε κόμβος πρέπει να εμφανίζει:
+
+    τύπο πράξης,
+    ΑΔΑΜ,
+    ΑΔΑ,
+    ημερομηνία,
+    τίτλο,
+    ποσό,
+    φορέα,
+    ανάδοχο,
+    σχετικά έγγραφα,
+    πηγή,
+    confidence σύνδεσης.
+
+5.5 Market Intelligence
+
+Η αγορά ορίζεται ως συνδυασμός:
+
+CPV ή ομάδα CPV
++ γεωγραφία
++ τύπος φορέα
++ χρονική περίοδος
++ τύπος διαδικασίας
+
+Παραδείγματα:
+
+    υπηρεσίες κυβερνοασφάλειας στην Ελλάδα,
+    ιατρικός εξοπλισμός σε νοσοκομεία,
+    έργα οδοποιίας σε περιφέρειες,
+    λογισμικό σε δήμους,
+    καθαρισμός δημόσιων κτιρίων,
+    ενεργειακές αναβαθμίσεις σχολείων.
+
+Η ενότητα εμφανίζει:
+
+    συνολική αξία αγοράς,
+    αριθμό συμβάσεων,
+    μέση και διάμεση αξία,
+    εξέλιξη ανά έτος,
+    κορυφαίους αγοραστές,
+    κορυφαίους προμηθευτές,
+    HHI συγκέντρωσης,
+    γεωγραφική κατανομή,
+    είδος διαδικασιών,
+    τροποποιήσεις,
+    χρηματοδότηση,
+    προγραμματισμένες λήξεις.
+
+5.6 Funding Intelligence
+
+Συνδέει:
+
+σύμβαση
+→ χρηματοδοτικό πρόγραμμα
+→ κωδικό ΟΠΣ/MIS
+→ πράξη
+→ υποέργο
+→ προϋπολογισμό
+→ συμβάσεις
+→ πληρωμές
+
+Εμφανίζει:
+
+    αρχικό προϋπολογισμό,
+    επιλέξιμη δημόσια δαπάνη,
+    συμβασιοποιημένο ποσό,
+    πληρωμές,
+    ποσοστό εκτέλεσης,
+    δικαιούχο,
+    αναδόχους,
+    περιφέρεια,
+    ημερομηνίες,
+    σχετικές δημόσιες συμβάσεις.
+
+5.7 Relationship Explorer
+
+Πρόκειται για γράφο τεκμηριωμένων σχέσεων:
+
+Φορέας
+  ├── προκήρυξε → Διαγωνισμό
+  ├── ανέθεσε → Σύμβαση
+  ├── πλήρωσε → Εταιρεία
+  └── υλοποιεί → Έργο ΕΣΠΑ
+
+Εταιρεία
+  ├── ανέλαβε → Σύμβαση
+  ├── συμμετέχει → Κοινοπραξία
+  ├── εξυπηρετεί → Φορέα
+  └── δραστηριοποιείται → CPV
+
+Ο γράφος δεν πρέπει να υπονοεί προσωπική, κομματική ή αθέμιτη σχέση. Κάθε ακμή πρέπει να έχει:
+
+    τύπο,
+    ημερομηνία,
+    πηγή,
+    αναγνωριστικό εγγράφου,
+    confidence,
+    σύνδεσμο προς το τεκμήριο.
+
+5.8 Alerts
+
+Ο χρήστης δημιουργεί κανόνες όπως:
+
+Νέος διαγωνισμός με CPV 72*
+και προϋπολογισμό > 100.000 €
+και περιοχή Αττική
+
+ή:
+
+Νέα σύμβαση ανταγωνιστή με οποιονδήποτε δήμο
+
+ή:
+
+Σύμβαση σχετική με το CPV μου λήγει μέσα στο επόμενο διάστημα
+
+ή:
+
+Νέα τροποποίηση σε σύμβαση που παρακολουθώ
+
+Κανάλια:
+
+    email,
+    in-app,
+    webhook,
+    Microsoft Teams ή Slack για enterprise,
+    ημερήσιο digest,
+    άμεση ειδοποίηση για κρίσιμα γεγονότα.
+
+6. Εννοιολογικό μοντέλο δεδομένων
+
+Η σημαντικότερη αρχιτεκτονική απόφαση είναι να διαχωριστούν:
+
+    η διαδικασία προμήθειας,
+    οι πράξεις που δημοσιεύονται,
+    τα έγγραφα,
+    οι οντότητες,
+    οι σχέσεις,
+    τα παραγόμενα metrics.
+
+6.1 Procurement Process
+
+Μία διαδικασία είναι το επιχειρηματικό γεγονός:
+
+    «Ο φορέας Χ θέλει να αγοράσει Υ, προκήρυξε διαδικασία, επέλεξε ανάδοχο, υπέγραψε σύμβαση και πραγματοποίησε πληρωμές.»
+
+Δεν διαθέτει πάντοτε ένα μοναδικό επίσημο αναγνωριστικό. Για αυτό το προϊόν δημιουργεί εσωτερικό:
+
+process_id UUID
+
+Μία διαδικασία μπορεί να έχει:
+
+    πολλά αιτήματα,
+    μία ή περισσότερες προκηρύξεις,
+    πολλά τμήματα,
+    πολλές αναθέσεις,
+    πολλές συμβάσεις,
+    τροποποιήσεις,
+    πολλές πληρωμές,
+    ακυρωμένες πράξεις,
+    επαναδημοσιεύσεις.
+
+6.2 Procurement Act
+
+Κάθε δημοσιευμένη πράξη είναι ανεξάρτητη εγγραφή:
+
+REQUEST
+APPROVED_REQUEST
+NOTICE
+AWARD
+CONTRACT
+AMENDMENT
+CANCELLATION
+PAYMENT
+DIAVGEIA_DECISION
+TED_NOTICE
+
+Κάθε πράξη έχει:
+
+    εσωτερικό UUID,
+    τύπο,
+    τίτλο,
+    ημερομηνίες,
+    ποσά,
+    κατάσταση,
+    αναγνωριστικά,
+    φορέα,
+    εμπλεκόμενες εταιρείες,
+    πηγή,
+    raw record,
+    έγγραφα.
+
+6.3 Entity
+
+Οι βασικοί τύποι οντότητας είναι:
+
+PUBLIC_ORGANIZATION
+COMPANY
+CONSORTIUM
+FUNDING_PROGRAM
+PROJECT
+PERSON
+GEOGRAPHIC_AREA
+
+Τα φυσικά πρόσωπα πρέπει να αποθηκεύονται μόνο όταν είναι απαραίτητα για την αναπαράσταση δημόσια δημοσιευμένης πράξης, όπως ο υπογράφων, και με περιορισμένο σύνολο πεδίων.
+6.4 Identifier
+
+Κάθε οντότητα ή πράξη μπορεί να διαθέτει πολλά αναγνωριστικά:
+
+ADAM
+ADA
+AFM
+EU_VAT
+GEMI
+AAHT
+CPV
+NUTS
+MIS_OPS
+TED_NOTICE_ID
+SOURCE_NATIVE_ID
+
+Τα αναγνωριστικά αποθηκεύονται σε ξεχωριστό registry και όχι σαν τυχαίες στήλες σε πολλούς πίνακες.
+7. Το κεντρικό identifier registry
+7.1 Βασική δομή
+
+CREATE TABLE entity_identifiers (
+    id                  UUID PRIMARY KEY,
+    entity_id           UUID NOT NULL,
+    scheme              TEXT NOT NULL,
+    value_raw           TEXT NOT NULL,
+    value_normalized    TEXT NOT NULL,
+    country_code        CHAR(2),
+    source_record_id    UUID,
+    confidence          NUMERIC(5,4) NOT NULL DEFAULT 1,
+    valid_from          TIMESTAMPTZ,
+    valid_to            TIMESTAMPTZ,
+    is_current          BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX uq_entity_identifier_current
+ON entity_identifiers (
+    scheme,
+    COALESCE(country_code, ''),
+    value_normalized
+)
+WHERE is_current = TRUE
+  AND confidence = 1;
+
+7.2 Κανόνες ανά identifier
+ΑΔΑΜ
+
+    διατήρηση original value,
+    trim whitespace,
+    uppercase,
+    validation format,
+    αναγνώριση κατηγορίας από το τμήμα REQ, PROC, AWRD, SYMV, PAY,
+    ποτέ fuzzy match.
+
+ΑΔΑ
+
+    uppercase,
+    αφαίρεση whitespace,
+    validation μορφής,
+    ποτέ χρήση «παρόμοιου ΑΔΑ».
+
+ΑΦΜ
+
+    μόνο ψηφία,
+    ακριβώς εννέα ψηφία για ελληνικό ΑΦΜ,
+    διατήρηση αρχικών μηδενικών,
+    checksum validation,
+    country code GR.
+
+Ο έλεγχος ελληνικού ΑΦΜ μπορεί να υλοποιηθεί με:
+
+def valid_greek_afm(value: str) -> bool:
+    afm = "".join(ch for ch in value if ch.isdigit())
+
+    if len(afm) != 9:
+        return False
+
+    total = sum(int(afm[i]) * (2 ** (8 - i)) for i in range(8))
+    expected = (total % 11) % 10
+
+    return expected == int(afm[8])
+
+Αποτυχημένος checksum δεν σημαίνει αυτόματη απόρριψη της source εγγραφής. Σημαίνει:
+
+identifier_valid = false
+match_eligibility = restricted
+data_quality_issue = INVALID_AFM_CHECKSUM
+
+VAT εξωτερικού
+
+Αποθήκευση:
+
+country_code
+national_number
+normalized_eu_vat
+last_vies_check_at
+vies_valid
+vies_response_hash
+
+CPV
+
+Αποθήκευση:
+
+    οκταψήφιου βασικού κωδικού,
+    check digit όπου υπάρχει,
+    γονικής κατηγορίας,
+    prefix 2, 3, 4, 5 και 8 ψηφίων,
+    περιγραφής ανά γλώσσα.
+
+NUTS
+
+Αποθήκευση:
+
+    κωδικού,
+    επιπέδου,
+    ονομασίας,
+    έκδοσης ταξινόμησης,
+    γεωμετρίας όπου διατίθεται.
+
+MIS/OPS
+
+    διατήρηση raw μορφής,
+    μόνο ακριβής αντιστοίχιση όταν το source field δηλώνει ρητά κωδικό ΟΠΣ,
+    διαφορετικά candidate match με confidence.
+
+AAHT
+
+Χρήσιμο βοηθητικό κλειδί δημόσιου φορέα, αλλά δεν πρέπει να θεωρηθεί μόνο του καθολικό master identifier.
+8. Η σωστή στρατηγική αντιστοίχισης
+8.1 Ιεραρχία εμπιστοσύνης
+
+Η σύνδεση εγγραφών πρέπει να ακολουθεί αυτή τη σειρά:
+Επίπεδο 1 — Επίσημη σχέση πηγής
+
+Παράδειγμα:
+
+ΚΗΜΔΗΣ adamChain
+
+Confidence:
+
+1.000
+
+Επίπεδο 2 — Ακριβές κοινό αναγνωριστικό
+
+Παραδείγματα:
+
+ΑΔΑΜ = ΑΔΑΜ
+ΑΔΑ = ΑΔΑ
+ΑΦΜ + χώρα = ΑΦΜ + χώρα
+ΓΕΜΗ = ΓΕΜΗ
+MIS = MIS
+TED ID = TED ID
+
+Confidence:
+
+0.995–1.000
+
+Επίπεδο 3 — Πολλαπλά ακριβή χαρακτηριστικά
+
+Παράδειγμα:
+
+ίδιο ΑΦΜ φορέα
++ ίδιο ποσό
++ κοντινή ημερομηνία
++ ίδιο CPV
+
+Confidence ανάλογα με τα στοιχεία.
+Επίπεδο 4 — Fuzzy αντιστοίχιση
+
+Παράδειγμα:
+
+παρόμοιος τίτλος
++ ίδια επωνυμία
++ ίδια περιοχή
++ παρόμοιο ποσό
+
+Ποτέ αυτόματη συγχώνευση μόνο από επωνυμία.
+Επίπεδο 5 — Ανθρώπινη επιβεβαίωση
+
+Χρησιμοποιείται για αμφίβολες περιπτώσεις.
+8.2 Match statuses
+
+CONFIRMED_SOURCE_LINK
+CONFIRMED_IDENTIFIER
+AUTO_MATCHED
+PENDING_REVIEW
+REJECTED
+MANUALLY_CONFIRMED
+MANUALLY_SPLIT
+
+8.3 Προτεινόμενα thresholds
+
+Αποτελούν αρχικές τιμές προς βαθμονόμηση:
+
+score >= 0.95       → αυτόματη σύνδεση
+0.80 <= score < .95 → review queue
+score < 0.80        → καμία σύνδεση
+
+Σκληροί κανόνες:
+
+    διαφορετικό έγκυρο ΑΦΜ σημαίνει διαφορετική οντότητα,
+    διαφορετικό ΓΕΜΗ σημαίνει διαφορετική εταιρεία, εκτός τεκμηριωμένης εταιρικής μεταβολής,
+    ίδιο όνομα χωρίς άλλο κοινό στοιχείο δεν αρκεί,
+    διαφορετική χώρα VAT αποκλείει αυτόματη συγχώνευση.
+
+9. Κανονικοποίηση ελληνικών επωνυμιών
+
+Το σύστημα πρέπει να διατηρεί:
+
+name_original
+name_normalized
+name_search
+name_without_legal_form
+
+Παράδειγμα:
+
+Original:
+«ΑΛΦΑ ΤΕΧΝΟΛΟΓΙΚΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ Α.Ε.»
+
+Normalized:
+ΑΛΦΑ ΤΕΧΝΟΛΟΓΙΚΗ ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ ΑΕ
+
+Without legal form:
+ΑΛΦΑ ΤΕΧΝΟΛΟΓΙΚΗ
+
+Οι κανόνες περιλαμβάνουν:
+
+    Unicode normalization,
+    uppercase,
+    αφαίρεση τόνων μόνο στο search representation,
+    ενοποίηση τελείας και whitespace,
+    ενοποίηση Α.Ε., ΑΕ, ΑΝΩΝΥΜΗ ΕΤΑΙΡΕΙΑ,
+    ενοποίηση Ι.Κ.Ε., ΙΚΕ,
+    ενοποίηση Ε.Π.Ε., ΕΠΕ,
+    ενοποίηση Ο.Ε., ΟΕ,
+    ενοποίηση Ε.Ε., ΕΕ,
+    αφαίρεση εισαγωγικών,
+    διατήρηση της αρχικής μορφής για εμφάνιση.
+
+Δεν πρέπει να αφαιρούνται αδιακρίτως λέξεις όπως:
+
+    Ελλάς,
+    Ελληνική,
+    Τεχνική,
+    Εμπορική,
+    Υπηρεσίες,
+
+επειδή μπορούν να αποτελούν ουσιώδες μέρος της επωνυμίας.
+10. Προτεινόμενη αρχιτεκτονική
+
+┌────────────────────────────────────────────────────────────┐
+│ Επίσημες πηγές                                             │
+│ ΚΗΜΔΗΣ · Διαύγεια · ΓΕΜΗ · ΑΝΑΠΤΥΞΗ · TED · ΜΕΦ · VIES     │
+│ data.gov.gr · INSPIRE                                      │
+└────────────────────────────┬───────────────────────────────┘
+                             │
+                             ▼
+┌────────────────────────────────────────────────────────────┐
+│ Source Connectors                                           │
+│ pagination · rate limiting · retries · schema validation    │
+└────────────────────────────┬───────────────────────────────┘
+                             │
+                             ▼
+┌────────────────────────────────────────────────────────────┐
+│ Immutable Raw Zone                                          │
+│ JSON/XML/PDF · checksums · HTTP metadata · source license   │
+└────────────────────────────┬───────────────────────────────┘
+                             │
+                             ▼
+┌────────────────────────────────────────────────────────────┐
+│ Staging                                                     │
+│ source-specific normalized tables · quarantine · versions  │
+└────────────────────────────┬───────────────────────────────┘
+                             │
+                             ▼
+┌────────────────────────────────────────────────────────────┐
+│ Identity & Linkage Engine                                   │
+│ identifiers · entity resolution · lifecycle graph           │
+└────────────────────────────┬───────────────────────────────┘
+                             │
+                             ▼
+┌────────────────────────────────────────────────────────────┐
+│ Canonical Data Store                                        │
+│ PostgreSQL · PostGIS · temporal history · provenance        │
+└──────────────────────┬──────────────────────┬──────────────┘
+                       │                      │
+                       ▼                      ▼
+            ┌──────────────────┐    ┌────────────────────────┐
+            │ Search Index      │    │ Analytics / Data Marts │
+            │ OpenSearch        │    │ metrics · scores       │
+            └─────────┬────────┘    └────────────┬───────────┘
+                      │                          │
+                      └─────────────┬────────────┘
+                                    ▼
+┌────────────────────────────────────────────────────────────┐
+│ Serving Layer                                               │
+│ REST API · web app · exports · alerts · webhooks            │
+└────────────────────────────────────────────────────────────┘
+
+11. Προτεινόμενο τεχνικό stack
+Backend και data processing
+
+Python
+FastAPI
+Pydantic
+SQLAlchemy
+Alembic
+httpx
+Prefect ή Dagster
+Celery ή άλλο Redis-backed job queue
+
+Βάσεις
+
+PostgreSQL ως source of truth
+PostGIS για γεωγραφία
+OpenSearch για full-text και document search
+Redis για queues, locks και caching
+
+Αποθήκευση αρχείων
+
+S3-compatible object storage
+MinIO στο τοπικό περιβάλλον
+managed object storage στην παραγωγή
+
+Frontend
+
+Next.js
+TypeScript
+React Query
+component library με προσβάσιμα components
+MapLibre ή αντίστοιχη open mapping λύση
+
+Υποδομή
+
+Docker Compose για development
+containers για production
+Terraform για infrastructure-as-code
+OIDC provider για authentication
+managed secrets vault
+
+Παρατηρησιμότητα
+
+OpenTelemetry
+Prometheus
+Grafana
+Sentry
+structured JSON logs
+
+Τι δεν χρειάζεται αρχικά
+
+    Kafka,
+    Kubernetes,
+    Neo4j,
+    περίπλοκο microservice architecture,
+    real-time stream processing,
+    μεγάλο LLM pipeline.
+
+Ο relational graph πίνακας στο PostgreSQL επαρκεί για το MVP. Graph database εξετάζεται μόνο όταν πραγματικά queries πολλών βαθμών σχέσης γίνουν bottleneck.
+12. Αρχιτεκτονική repository
+
+procurement-intelligence/
+├── apps/
+│   ├── api/
+│   └── web/
+├── services/
+│   ├── ingestion/
+│   │   ├── connectors/
+│   │   │   ├── khmdhs/
+│   │   │   ├── diavgeia/
+│   │   │   ├── gemi/
+│   │   │   ├── anaptyxi/
+│   │   │   ├── mef/
+│   │   │   ├── ted/
+│   │   │   ├── vies/
+│   │   │   └── ckan/
+│   │   ├── orchestration/
+│   │   └── normalization/
+│   ├── documents/
+│   ├── entity_resolution/
+│   ├── linkage/
+│   ├── analytics/
+│   └── alerts/
+├── packages/
+│   ├── domain/
+│   ├── schemas/
+│   ├── source_clients/
+│   └── observability/
+├── db/
+│   ├── migrations/
+│   ├── seeds/
+│   └── marts/
+├── infra/
+│   ├── docker/
+│   ├── terraform/
+│   └── monitoring/
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   ├── contract/
+│   ├── fixtures/
+│   └── golden_records/
+└── docs/
+    ├── architecture/
+    ├── source-contracts/
+    ├── data-dictionary/
+    └── runbooks/
+
+13. Raw data layer
+
+Το raw layer πρέπει να είναι immutable.
+
+Κάθε HTTP response αποθηκεύεται πριν γίνει normalization.
+13.1 Προτεινόμενη διαδρομή object storage
+
+raw/
+  khmdhs/
+    contract/
+      ingestion_date=2026-07-19/
+        adam=26SYMV012345678/
+          8a70...f3.json
+
+documents/
+  khmdhs/
+    contract/
+      adam=26SYMV012345678/
+        original/
+          31bc...12.pdf
+
+13.2 Metadata κάθε raw record
+
+{
+  "source": "KHMDHS",
+  "resource": "contract",
+  "source_native_id": "26SYMV012345678",
+  "request_url_hash": "sha256:...",
+  "http_status": 200,
+  "content_type": "application/json",
+  "fetched_at": "2026-07-19T10:30:00Z",
+  "source_updated_at": "2026-07-18T14:20:00Z",
+  "content_sha256": "...",
+  "schema_version": "khmdhs-contract-observed-v3",
+  "license": "CC-BY-4.0",
+  "payload_location": "s3://..."
+}
+
+13.3 Γιατί διατηρείται το raw payload
+
+    επανεπεξεργασία χωρίς νέο download,
+    έλεγχος σφαλμάτων parser,
+    αντιμετώπιση schema drift,
+    πλήρης ιχνηλασιμότητα,
+    απόδειξη της αρχικής πηγής,
+    επανυπολογισμός metrics,
+    ιστορική σύγκριση αλλαγών.
+
+14. Source record και versioning
+
+CREATE TABLE source_records (
+    id                  UUID PRIMARY KEY,
+    source_system       TEXT NOT NULL,
+    resource_type       TEXT NOT NULL,
+    source_native_id    TEXT,
+    source_version      TEXT,
+    content_sha256      TEXT NOT NULL,
+    payload_uri         TEXT NOT NULL,
+    fetched_at          TIMESTAMPTZ NOT NULL,
+    source_updated_at   TIMESTAMPTZ,
+    http_status         INTEGER,
+    schema_version      TEXT,
+    license_code        TEXT,
+    parse_status        TEXT NOT NULL,
+    parse_error         JSONB,
+    is_latest           BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX uq_source_record_hash
+ON source_records (
+    source_system,
+    resource_type,
+    content_sha256
+);
+
+Όταν αλλάζει μια εγγραφή:
+
+    δεν αντικαθίσταται η παλιά raw έκδοση,
+    δημιουργείται νέο source_record,
+    η προηγούμενη έκδοση παίρνει is_latest = false,
+    εκτελείται field-level diff,
+    ενημερώνεται η canonical προβολή,
+    επανυπολογίζονται τα σχετικά metrics,
+    δημιουργείται event για alerts.
+
+15. Canonical schema
+15.1 Οντότητες
+
+CREATE TABLE entities (
+    id                  UUID PRIMARY KEY,
+    entity_type         TEXT NOT NULL,
+    canonical_name      TEXT NOT NULL,
+    normalized_name     TEXT NOT NULL,
+    country_code        CHAR(2),
+    status              TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX ix_entities_normalized_name
+ON entities USING gin (
+    normalized_name gin_trgm_ops
+);
+
+15.2 Εναλλακτικές ονομασίες
+
+CREATE TABLE entity_names (
+    id                  UUID PRIMARY KEY,
+    entity_id           UUID NOT NULL REFERENCES entities(id),
+    name                TEXT NOT NULL,
+    normalized_name     TEXT NOT NULL,
+    name_type           TEXT NOT NULL,
+    source_record_id    UUID REFERENCES source_records(id),
+    valid_from          TIMESTAMPTZ,
+    valid_to            TIMESTAMPTZ,
+    is_current          BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+15.3 Διευθύνσεις
+
+CREATE TABLE entity_addresses (
+    id                  UUID PRIMARY KEY,
+    entity_id           UUID NOT NULL REFERENCES entities(id),
+    address_line        TEXT,
+    postal_code         TEXT,
+    municipality        TEXT,
+    region              TEXT,
+    nuts_code           TEXT,
+    country_code        CHAR(2),
+    geom                geometry(Point, 4326),
+    source_record_id    UUID REFERENCES source_records(id),
+    valid_from          TIMESTAMPTZ,
+    valid_to            TIMESTAMPTZ,
+    is_current          BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+15.4 Διαδικασίες
+
+CREATE TABLE procurement_processes (
+    id                      UUID PRIMARY KEY,
+    public_id               TEXT UNIQUE NOT NULL,
+    title                   TEXT,
+    normalized_title        TEXT,
+    status                  TEXT,
+    buyer_entity_id         UUID REFERENCES entities(id),
+    primary_cpv_code        TEXT,
+    estimated_value         NUMERIC(20,2),
+    awarded_value           NUMERIC(20,2),
+    current_contract_value  NUMERIC(20,2),
+    currency                CHAR(3),
+    first_observed_at       TIMESTAMPTZ,
+    last_observed_at        TIMESTAMPTZ,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+15.5 Πράξεις
+
+CREATE TABLE procurement_acts (
+    id                  UUID PRIMARY KEY,
+    process_id          UUID REFERENCES procurement_processes(id),
+    act_type            TEXT NOT NULL,
+    title               TEXT,
+    normalized_title    TEXT,
+    publication_date    DATE,
+    submission_date     DATE,
+    decision_date       DATE,
+    start_date          DATE,
+    end_date            DATE,
+    status              TEXT,
+    amount_net          NUMERIC(20,2),
+    vat_amount          NUMERIC(20,2),
+    amount_gross        NUMERIC(20,2),
+    currency            CHAR(3),
+    procedure_type      TEXT,
+    source_record_id    UUID NOT NULL REFERENCES source_records(id),
+    is_current          BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+15.6 Αναγνωριστικά πράξεων
+
+CREATE TABLE act_identifiers (
+    id                  UUID PRIMARY KEY,
+    act_id              UUID NOT NULL REFERENCES procurement_acts(id),
+    scheme              TEXT NOT NULL,
+    value_raw           TEXT NOT NULL,
+    value_normalized    TEXT NOT NULL,
+    source_record_id    UUID REFERENCES source_records(id),
+    confidence          NUMERIC(5,4) NOT NULL DEFAULT 1
+);
+
+CREATE UNIQUE INDEX uq_act_identifier
+ON act_identifiers (
+    scheme,
+    value_normalized
+);
+
+15.7 Σχέσεις πράξεων
+
+CREATE TABLE act_links (
+    id                  UUID PRIMARY KEY,
+    from_act_id         UUID NOT NULL REFERENCES procurement_acts(id),
+    to_act_id           UUID NOT NULL REFERENCES procurement_acts(id),
+    link_type           TEXT NOT NULL,
+    link_method         TEXT NOT NULL,
+    confidence          NUMERIC(5,4) NOT NULL,
+    evidence            JSONB NOT NULL,
+    created_by          TEXT NOT NULL,
+    reviewed_by         UUID,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (
+        from_act_id,
+        to_act_id,
+        link_type
+    )
+);
+
+Πιθανά link_type:
+
+APPROVES
+ANNOUNCES
+AWARDS
+EXECUTES
+AMENDS
+EXTENDS
+CANCELS
+PAYS
+FUNDED_BY
+PUBLISHED_AS
+SUPERSEDES
+RELATED_TO
+
+15.8 Συμβαλλόμενα μέρη
+
+CREATE TABLE act_parties (
+    id                  UUID PRIMARY KEY,
+    act_id              UUID NOT NULL REFERENCES procurement_acts(id),
+    entity_id           UUID NOT NULL REFERENCES entities(id),
+    party_role          TEXT NOT NULL,
+    lot_id              UUID,
+    amount              NUMERIC(20,2),
+    currency            CHAR(3),
+    source_record_id    UUID REFERENCES source_records(id)
+);
+
+Ρόλοι:
+
+BUYER
+CONTRACTING_AUTHORITY
+SUPPLIER
+CONTRACTOR
+CONSORTIUM_MEMBER
+BENEFICIARY
+FUNDING_AUTHORITY
+DONOR
+RECIPIENT
+SIGNER_ORGANIZATION
+
+15.9 CPV
+
+CREATE TABLE act_cpv_codes (
+    act_id              UUID NOT NULL REFERENCES procurement_acts(id),
+    cpv_code            TEXT NOT NULL,
+    is_primary          BOOLEAN NOT NULL DEFAULT FALSE,
+    source_record_id    UUID REFERENCES source_records(id),
+    PRIMARY KEY (act_id, cpv_code)
+);
+
+15.10 Τοποθεσίες εκτέλεσης
+
+CREATE TABLE act_locations (
+    id                  UUID PRIMARY KEY,
+    act_id              UUID NOT NULL REFERENCES procurement_acts(id),
+    nuts_code           TEXT,
+    municipality_code   TEXT,
+    postal_code         TEXT,
+    place_text          TEXT,
+    geom                geometry(Geometry, 4326),
+    source_record_id    UUID REFERENCES source_records(id)
+);
+
+15.11 Έγγραφα
+
+CREATE TABLE documents (
+    id                  UUID PRIMARY KEY,
+    act_id              UUID REFERENCES procurement_acts(id),
+    source_record_id    UUID REFERENCES source_records(id),
+    document_type       TEXT,
+    title               TEXT,
+    source_url          TEXT,
+    object_uri          TEXT NOT NULL,
+    mime_type           TEXT,
+    file_size           BIGINT,
+    sha256              TEXT NOT NULL,
+    text_extraction_status TEXT,
+    page_count          INTEGER,
+    language            TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+15.12 Χρηματοδοτούμενα έργα
+
+CREATE TABLE funding_projects (
+    id                  UUID PRIMARY KEY,
+    mis_ops_code        TEXT,
+    program_code        TEXT,
+    title               TEXT NOT NULL,
+    beneficiary_id      UUID REFERENCES entities(id),
+    budget              NUMERIC(20,2),
+    contracted_amount   NUMERIC(20,2),
+    paid_amount         NUMERIC(20,2),
+    currency            CHAR(3),
+    start_date          DATE,
+    end_date            DATE,
+    status              TEXT,
+    source_record_id    UUID REFERENCES source_records(id)
+);
+
+15.13 Σύνδεση σύμβασης–έργου
+
+CREATE TABLE funding_links (
+    id                  UUID PRIMARY KEY,
+    act_id              UUID NOT NULL REFERENCES procurement_acts(id),
+    funding_project_id  UUID NOT NULL REFERENCES funding_projects(id),
+    link_method         TEXT NOT NULL,
+    confidence          NUMERIC(5,4) NOT NULL,
+    evidence            JSONB NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+16. ΚΗΜΔΗΣ connector
+16.1 Backfill
+
+Ο backfill πρέπει να γίνεται ανά:
+
+resource
+× χρονικό παράθυρο
+× σελίδα
+
+Προτεινόμενο παράθυρο:
+
+30 ημέρες
+
+και όχι ολόκληρο έτος, ακόμη και αν το API επιτρέψει μεγαλύτερο διάστημα.
+
+Παράδειγμα:
+
+contract
+2025-01-01 έως 2025-01-30
+page 0
+page 1
+...
+
+16.2 Incremental ingestion
+
+Καθημερινά:
+
+date_from = σήμερα - 7 ημέρες
+date_to   = σήμερα
+
+Το overlap είναι απαραίτητο επειδή:
+
+    οι πηγές μπορεί να διορθώνουν εγγραφές,
+    μπορεί να υπάρχει καθυστέρηση δημοσίευσης,
+    μπορεί να προστεθούν τροποποιήσεις,
+    το ίδιο ΑΔΑΜ μπορεί να εμφανιστεί με ενημερωμένο payload.
+
+Η αποφυγή διπλοτύπων γίνεται με:
+
+source + resource + ADAM + content_hash
+
+16.3 Rate limiting
+
+Παρότι το επίσημο όριο είναι 350 requests/minute, το προϊόν πρέπει να λειτουργεί συντηρητικά:
+
+στόχος 180–240 requests/minute
+
+με:
+
+    token bucket,
+    global limiter ανά source,
+    υποστήριξη Retry-After,
+    exponential backoff,
+    jitter,
+    circuit breaker.
+
+16.4 Προτεινόμενη ροή
+
+async def ingest_khmdhs_partition(
+    connector,
+    resource: str,
+    date_from: date,
+    date_to: date,
+) -> None:
+    page = 0
+
+    while True:
+        response = await connector.fetch_page(
+            resource=resource,
+            page=page,
+            date_from=date_from,
+            date_to=date_to,
+        )
+
+        raw_record_ids = await save_raw_response(response)
+
+        normalized = normalize_khmdhs_response(
+            resource=resource,
+            response=response,
+            raw_record_ids=raw_record_ids,
+        )
+
+        await upsert_staging(normalized)
+        await canonicalize(normalized)
+        await emit_change_events(normalized)
+
+        if response.is_last_page:
+            break
+
+        page += 1
+
+16.5 adamChain
+
+Για κάθε νέο ΑΔΑΜ:
+
+    καλείται το adamChain,
+    αποθηκεύεται ολόκληρη η απάντηση,
+    δημιουργούνται ή ενημερώνονται πράξεις,
+    δημιουργούνται deterministic edges,
+    όλες οι πράξεις εντάσσονται στο ίδιο process_id,
+    αν δύο υφιστάμενες διαδικασίες ενωθούν, γίνεται controlled process merge.
+
+16.6 Stable process IDs
+
+Δεν πρέπει να χρησιμοποιηθεί ως process_id το πρώτο ΑΔΑΜ, επειδή μια αλυσίδα μπορεί να επεκταθεί ή να συνδεθεί αργότερα.
+
+Η σωστή προσέγγιση είναι:
+
+    εσωτερικό UUID,
+    πίνακας process_members,
+    merge history,
+    alias από παλιό process ID προς νέο,
+    καμία αλλαγή στα δημόσια URLs μετά από merge.
+
+17. Διαύγεια connector
+17.1 Πρώτη ουρά εργασίας
+
+Κάθε φορά που εμφανίζεται ΑΔΑ στο ΚΗΜΔΗΣ:
+
+commitmentNo
+decisionRelatedAda
+contractRelatedAda
+cancellationADA
+
+δημιουργείται job:
+
+{
+  "job_type": "FETCH_DIAVGEIA_DECISION",
+  "ada": "ΑΔΑ...",
+  "origin_source": "KHMDHS",
+  "origin_act_id": "uuid",
+  "priority": "HIGH"
+}
+
+17.2 Αποθηκευμένα δεδομένα
+
+    metadata απόφασης,
+    θέμα,
+    τύπος,
+    ημερομηνία,
+    αριθμός πρωτοκόλλου,
+    εκδούσα αρχή,
+    μονάδα,
+    υπογράφοντες,
+    document URL,
+    PDF,
+    version log,
+    related decisions όπου παρέχονται.
+
+17.3 Degraded mode
+
+Ο connector πρέπει να έχει capabilities:
+
+DIRECT_ADA_FETCH
+SEARCH
+ADVANCED_SEARCH
+ORGANIZATION_LOOKUP
+SIGNER_LOOKUP
+VERSION_LOG
+
+Κάθε capability έχει status:
+
+AVAILABLE
+DEGRADED
+DISABLED
+UNKNOWN
+
+Η γενική αναζήτηση δεν πρέπει να μπλοκάρει τη βασική λειτουργία όταν η Διαύγεια βρίσκεται σε συντήρηση.
+17.4 Linkage
+
+Ακριβές ΑΔΑ:
+
+confidence = 1.0
+link_method = EXACT_ADA
+
+Αναζήτηση τίτλου ή φορέα:
+
+confidence < 1.0
+link_method = DIAVGEIA_SEARCH_MATCH
+
+και απαιτεί πολλαπλά στοιχεία επιβεβαίωσης.
+18. ΓΕΜΗ connector
+18.1 Ροή εμπλουτισμού
+
+νέος ΑΦΜ αναδόχου
+→ έλεγχος τοπικού cache
+→ έλεγχος checksum
+→ enqueue ΓΕΜΗ lookup
+→ αποθήκευση raw response
+→ ενημέρωση company profile
+→ δημιουργία temporal snapshot
+
+18.2 Snapshot και όχι overwrite
+
+Η εταιρική κατάσταση αλλάζει.
+
+Πρέπει να αποθηκεύονται:
+
+valid_from
+valid_to
+observed_at
+is_current
+
+Έτσι το προϊόν μπορεί να απαντήσει:
+
+    Ποια ήταν η κατάσταση της εταιρείας όταν υπογράφηκε η σύμβαση;
+
+και όχι μόνο:
+
+    Ποια είναι η κατάσταση σήμερα;
+
+18.3 Cache policy
+
+Προτεινόμενη πολιτική:
+
+    νέα εταιρεία: άμεσο lookup,
+    ενεργή εταιρεία: refresh ανά 30 ημέρες,
+    εταιρεία σε μεταβολή: συχνότερο refresh,
+    δημόσια έγγραφα: refresh βάσει τελευταίας ημερομηνίας δημοσίευσης,
+    αρνητικό αποτέλεσμα: επανέλεγχος αργότερα, όχι μόνιμο negative cache.
+
+18.4 Προϋπόθεση εκκίνησης
+
+Το αίτημα για API key ΓΕΜΗ πρέπει να υποβληθεί από την αρχή, αλλά το MVP δεν πρέπει να εξαρτηθεί λειτουργικά από την έγκρισή του.
+
+Ο connector υλοποιείται πίσω από interface:
+
+class CompanyRegistryProvider(Protocol):
+    async def find_by_vat(self, country: str, vat: str) -> CompanyResult:
+        ...
+
+    async def find_by_gemi(self, gemi_number: str) -> CompanyResult:
+        ...
+
+    async def search(self, query: CompanySearchQuery) -> list[CompanyResult]:
+        ...
+
+19. ΑΝΑΠΤΥΞΗ connector
+19.1 Βασικές οντότητες
+
+Program
+Project / Πράξη
+Subproject / Υποέργο
+Beneficiary
+Contractor
+Budget
+Contract
+Payment
+Region
+
+19.2 Join hierarchy
+
+Η σύνδεση με ΚΗΜΔΗΣ γίνεται ως εξής:
+Πρώτη επιλογή
+
+ακριβής κωδικός MIS/OPS
+
+μόνο όταν η σημασιολογία του πεδίου έχει επιβεβαιωθεί.
+Δεύτερη επιλογή
+
+ΑΦΜ δικαιούχου ή αναδόχου
++ τίτλος έργου
++ χρονική περίοδος
+
+Τρίτη επιλογή
+
+ΑΔΑ ή ΑΔΑΜ μέσα σε metadata ή έγγραφα
+
+Τέταρτη επιλογή
+
+normalized title
++ παρόμοιο ποσό
++ ίδια περιοχή
++ ίδιος δικαιούχος
+
+με review όταν η βεβαιότητα δεν είναι υψηλή.
+19.3 Διάκριση προγραμματικών περιόδων
+
+Πρέπει να υπάρχουν ξεχωριστά source adapters:
+
+ANAPTYXI_2007_2013
+ANAPTYXI_2014_2020
+ANAPTYXI_2021_2027
+
+Ακόμη και όταν καταλήγουν στο ίδιο canonical schema.
+19.4 Metrics
+
+    project budget,
+    contracted value,
+    paid value,
+    contract coverage,
+    payment execution,
+    days from project approval to first contract,
+    days from contract to first payment,
+    number of contractors,
+    concentration by contractor.
+
+20. Μητρώο Επιχορηγούμενων Φορέων connector
+20.1 Join policy
+
+Η σύνδεση δεν πρέπει να γίνεται μόνο με:
+
+ΚΗΜΔΗΣ contractor AFM = MEF recipient AFM
+
+επειδή η ίδια εταιρεία μπορεί να έχει πολλές άσχετες συναλλαγές.
+
+Ισχυρή σύνδεση απαιτεί συνδυασμό:
+
+ΑΦΜ
++ ΑΔΑ
++ ποσό
++ ημερομηνία
++ φορέας
+
+20.2 Confidence examples
+
+ίδιο ΑΔΑ + ίδιο ΑΦΜ                    → 0.99
+ίδιο ΑΔΑ + ίδιος φορέας                → 0.97
+ίδιο ΑΦΜ + ίδιο ποσό + ±5 ημέρες       → 0.90
+μόνο ίδιο ΑΦΜ                          → candidate, όχι link
+
+20.3 UI wording
+
+Όχι:
+
+    «Η σύμβαση πληρώθηκε.»
+
+Αλλά:
+
+    «Εντοπίστηκε δηλωμένη δαπάνη ή εντολή πληρωμής που πιθανόν σχετίζεται με τη σύμβαση.»
+
+Εκτός αν η σύνδεση και η σημασιολογία της πηγής το αποδεικνύουν πλήρως.
+21. TED connector
+21.1 Αποθήκευση
+
+Αποθηκεύονται:
+
+    raw XML ή JSON,
+    TED notice ID,
+    publication number,
+    eForms version,
+    notice type,
+    buyer,
+    supplier,
+    CPV,
+    lots,
+    estimated value,
+    awarded value,
+    procedure,
+    dates,
+    χώρα και NUTS,
+    related notices.
+
+21.2 Version-aware mapping
+
+Δεν πρέπει να επιχειρηθεί ένα ενιαίο parser χωρίς version awareness.
+
+TED parser
+  ├── legacy forms
+  ├── eForms version A
+  ├── eForms version B
+  └── unknown-version quarantine
+
+Κάθε normalized field πρέπει να γνωρίζει:
+
+source_path
+parser_version
+confidence
+
+21.3 Σύνδεση με ΚΗΜΔΗΣ
+
+Σειρά:
+
+    ακριβές TED notice ID,
+    ρητή αναφορά σε έγγραφο,
+    buyer VAT + publication date + CPV,
+    buyer name + title + amount + date,
+    manual review.
+
+22. data.gov.gr και γεωχωρικά datasets
+22.1 Dataset registry
+
+CREATE TABLE external_datasets (
+    id                  UUID PRIMARY KEY,
+    catalog_source      TEXT NOT NULL,
+    catalog_dataset_id  TEXT NOT NULL,
+    title               TEXT NOT NULL,
+    publisher           TEXT,
+    license_code        TEXT,
+    resource_type       TEXT,
+    resource_url        TEXT,
+    update_frequency    TEXT,
+    last_seen_at        TIMESTAMPTZ,
+    ingestion_status    TEXT,
+    adapter_name        TEXT,
+    config              JSONB
+);
+
+22.2 Πρώτα datasets
+
+Η πρώτη έκδοση πρέπει να επιλέξει λίγα, σταθερά datasets:
+
+    διοικητικά όρια,
+    πληθυσμός ανά δήμο ή NUTS,
+    βασικά στοιχεία σχολείων,
+    βασικά στοιχεία νοσοκομείων,
+    περιφερειακοί οικονομικοί δείκτες,
+    επιλεγμένα περιβαλλοντικά επίπεδα.
+
+22.3 Παράγωγα metrics
+
+δημόσιες συμβάσεις ανά κάτοικο
+αξία έργων ανά μαθητή
+αξία προμηθειών υγείας ανά κλίνη
+συμβάσεις ανά δήμο
+περιφερειακή εξάρτηση από προμηθευτές εκτός περιοχής
+
+Τα metrics αυτά πρέπει να αναφέρουν πάντα:
+
+    έτος πληθυσμού ή παρονομαστή,
+    γεωγραφικό επίπεδο,
+    πηγή,
+    κάλυψη,
+    μεθοδολογία.
+
+23. Pipeline εγγράφων
+
+Τα PDF αποτελούν κρίσιμη πηγή επειδή συχνά περιέχουν περισσότερα στοιχεία από τα API metadata.
+23.1 Ροή
+
+download
+→ MIME validation
+→ SHA-256
+→ antivirus scan
+→ αποθήκευση πρωτοτύπου
+→ text-layer detection
+→ text extraction
+→ OCR μόνο όταν απαιτείται
+→ page segmentation
+→ entity extraction
+→ indexing
+→ evidence references
+
+23.2 Ασφάλεια
+
+    μέγιστο μέγεθος αρχείου,
+    timeout,
+    προστασία από decompression bombs,
+    antivirus scanning,
+    απαγόρευση αυτόματης εκτέλεσης embedded content,
+    isolation των document workers,
+    signed URLs για download.
+
+23.3 Εξαγωγή
+
+Regex και deterministic parsers για:
+
+    ΑΔΑ,
+    ΑΔΑΜ,
+    ΑΦΜ,
+    CPV,
+    MIS/OPS,
+    ποσά,
+    ημερομηνίες,
+    IBAN μόνο όπου επιτρέπεται και είναι απαραίτητο,
+    αριθμούς πρωτοκόλλου,
+    διάρκεια,
+    lot numbers,
+    μονάδες μέτρησης.
+
+23.4 Ελληνικά ποσά
+
+Ο parser πρέπει να κατανοεί:
+
+1.234,56 €
+1 234,56 ευρώ
+€ 1.234,56
+1,234.56 EUR
+
+και να διατηρεί:
+
+raw_value
+normalized_amount
+currency
+vat_inclusion_status
+parser_confidence
+
+23.5 Χρήση LLM
+
+Ένα LLM μπορεί να χρησιμοποιηθεί για:
+
+    περίληψη,
+    ερωταπαντήσεις πάνω σε έγγραφα,
+    προτεινόμενη ταξινόμηση,
+    εξαγωγή υποψηφίων πεδίων,
+    σύγκριση όρων.
+
+Δεν πρέπει να αποτελεί μόνο του authoritative πηγή για:
+
+    ποσά,
+    ημερομηνίες,
+    νομική κατάσταση,
+    αναδόχους,
+    αποδιδόμενες σχέσεις.
+
+Κάθε απάντηση πάνω σε έγγραφο πρέπει να παραπέμπει:
+
+πηγή
+έγγραφο
+σελίδα
+απόσπασμα
+
+24. Field-level provenance
+
+Κάθε κρίσιμο πεδίο πρέπει να μπορεί να εξηγήσει από πού προήλθε.
+
+CREATE TABLE field_provenance (
+    id                  UUID PRIMARY KEY,
+    object_type         TEXT NOT NULL,
+    object_id           UUID NOT NULL,
+    field_name          TEXT NOT NULL,
+    source_record_id    UUID NOT NULL REFERENCES source_records(id),
+    source_path         TEXT,
+    extraction_method   TEXT NOT NULL,
+    confidence          NUMERIC(5,4) NOT NULL,
+    observed_at         TIMESTAMPTZ NOT NULL,
+    value_hash          TEXT
+);
+
+Παράδειγμα:
+
+{
+  "field": "current_contract_value",
+  "value": 125000.00,
+  "source": "KHMDHS",
+  "source_identifier": "26SYMV012345678",
+  "source_path": "$.totalCostWithVAT",
+  "method": "DIRECT_FIELD_MAPPING",
+  "confidence": 1.0,
+  "observed_at": "2026-07-19T10:30:00Z"
+}
+
+25. Entity resolution engine
+25.1 Candidate generation
+
+Δεν συγκρίνονται όλες οι εταιρείες με όλες.
+
+Candidate blocking:
+
+ίδιο ΑΦΜ
+ίδιο ΓΕΜΗ
+ίδιο normalized name prefix
+ίδιο postal code
+ίδιο email domain
+ίδιο τηλέφωνο
+ίδιο municipality
+
+25.2 Features
+
+    exact VAT match,
+    exact GEMI match,
+    normalized name similarity,
+    token overlap,
+    legal form similarity,
+    address similarity,
+    postal code match,
+    municipality match,
+    phone match,
+    domain match,
+    temporal compatibility,
+    source reliability.
+
+25.3 Ενδεικτικό scoring
+
+score =
+  0.55 × name_similarity
++ 0.15 × address_similarity
++ 0.10 × postal_code_match
++ 0.10 × municipality_match
++ 0.10 × domain_or_phone_match
+
+Όταν υπάρχει έγκυρο κοινό ΑΦΜ, δεν χρειάζεται probabilistic scoring.
+
+Όταν υπάρχουν διαφορετικά έγκυρα ΑΦΜ:
+
+score = 0
+
+25.4 Review queue
+
+Ο reviewer πρέπει να βλέπει:
+
+    δύο υποψήφιες οντότητες,
+    όλα τα identifiers,
+    όλες τις ονομασίες,
+    διευθύνσεις,
+    πηγές,
+    συμβάσεις,
+    score breakdown,
+    λόγο δημιουργίας candidate,
+    ενέργειες merge, reject, defer.
+
+Κάθε merge πρέπει να είναι αναστρέψιμο.
+26. Lifecycle engine
+26.1 Κατάσταση διαδικασίας
+
+DISCOVERED
+REQUESTED
+APPROVED
+PUBLISHED
+AWARDED
+CONTRACTED
+IN_EXECUTION
+MODIFIED
+COMPLETED
+CANCELLED
+UNKNOWN
+
+Η κατάσταση δεν υπολογίζεται μόνο από ημερομηνίες. Υπολογίζεται από τις διαθέσιμες πράξεις.
+
+Παράδειγμα:
+
+υπάρχει ενεργή σύμβαση
++ end_date στο μέλλον
+→ IN_EXECUTION
+
+υπάρχει cancellation act μετά τη σύμβαση
+→ CANCELLED ή TERMINATED
+
+υπάρχει payment act
+αλλά δεν υπάρχει contract act
+→ PARTIAL_LIFECYCLE, όχι fabricated contract
+
+26.2 Lots
+
+Μια διαδικασία μπορεί να έχει πολλά τμήματα.
+
+CREATE TABLE procurement_lots (
+    id                  UUID PRIMARY KEY,
+    process_id          UUID NOT NULL REFERENCES procurement_processes(id),
+    source_lot_id       TEXT,
+    title               TEXT,
+    estimated_value     NUMERIC(20,2),
+    awarded_value       NUMERIC(20,2),
+    currency            CHAR(3),
+    status              TEXT
+);
+
+Ανάδοχος, αξία και CPV πρέπει να μπορούν να συνδέονται με συγκεκριμένο lot.
+26.3 Framework agreements
+
+Πρέπει να διαχωρίζονται:
+
+    συμφωνία-πλαίσιο,
+    call-off contract,
+    επιμέρους εκτελεστική σύμβαση,
+    συνολικό ανώτατο ποσό,
+    πραγματικά ανατεθειμένο ποσό.
+
+Η συνολική αξία πλαισίου δεν πρέπει να προσμετράται ως πραγματοποιηθείσα δαπάνη.
+27. Analytics
+27.1 Market size
+
+Για αγορά M και περίοδο T:
+
+MarketValue(M,T) =
+Σ αξίας ενεργών ή υπογεγραμμένων συμβάσεων
+
+Πρέπει να οριστεί σαφώς αν χρησιμοποιείται:
+
+    αρχική αξία,
+    τρέχουσα αξία μετά τις τροποποιήσεις,
+    καθαρή αξία,
+    αξία με ΦΠΑ,
+    κατακυρωθείσα αξία,
+    πληρωθείσα αξία.
+
+Η προτεινόμενη default προβολή είναι:
+
+current_contract_value_net
+
+με δυνατότητα αλλαγής.
+27.2 Supplier market share
+
+SupplierShare =
+SupplierContractValue / TotalMarketContractValue
+
+Εμφάνιση τόσο ως:
+
+    αξία,
+    ποσοστό,
+    αριθμός συμβάσεων,
+    αριθμός αγοραστών.
+
+27.3 HHI συγκέντρωσης
+
+HHI = Σ supplier_share_i²
+
+Αν τα shares εκφράζονται σε ποσοστιαίες μονάδες, το αποτέλεσμα είναι 0–10.000.
+
+Το UI πρέπει να αναφέρει:
+
+    περίοδο,
+    αγορά,
+    αριθμό προμηθευτών,
+    ποσοστό μη ταυτοποιημένων αναδόχων,
+    αν χρησιμοποιείται αξία ή πλήθος.
+
+27.4 Buyer concentration
+
+TopSupplierShare =
+Value awarded by buyer to top supplier
+/
+Total buyer awarded value
+
+Πρόκειται για δείκτη εμπορικής συγκέντρωσης, όχι για απόδειξη εύνοιας.
+27.5 Supplier dependency
+
+SupplierBuyerDependency =
+Supplier value from buyer X
+/
+Supplier total known public-sector value
+
+Παράδειγμα:
+
+    Το 42% της καταγεγραμμένης δημόσιας αξίας συμβάσεων της εταιρείας προέρχεται από τον φορέα Χ.
+
+Η λέξη «καταγεγραμμένης» είναι σημαντική επειδή η πλατφόρμα δεν γνωρίζει τα ιδιωτικά έσοδα της εταιρείας.
+27.6 Incumbent detection
+
+Ένας προμηθευτής χαρακτηρίζεται πιθανός incumbent όταν:
+
+    διαθέτει την πιο πρόσφατη ενεργή σύμβαση,
+    με τον ίδιο φορέα,
+    στην ίδια οικογένεια CPV,
+    για παρόμοιο αντικείμενο,
+    και η σύμβαση δεν έχει ακυρωθεί.
+
+Πρέπει να εμφανίζεται:
+
+Likely incumbent
+confidence: 0.91
+evidence: active contract + same buyer + CPV prefix
+
+και όχι:
+
+Ο σίγουρος προμηθευτής που θα κερδίσει
+
+27.7 Contract modification rate
+
+ModificationRate =
+Contracts with ≥1 amendment
+/
+Total contracts
+
+27.8 Value uplift
+
+ValueUplift =
+(CurrentContractValue - OriginalContractValue)
+/
+OriginalContractValue
+
+Απαιτεί επιβεβαίωση ότι οι πράξεις είναι πραγματικές τροποποιήσεις της ίδιας σύμβασης και όχι ανεξάρτητες συμβάσεις.
+27.9 Procurement cycle time
+
+NoticeToAwardDays
+AwardToContractDays
+ContractToFirstPaymentDays
+RequestToContractDays
+
+Πρέπει να υπολογίζονται μόνο όταν οι αντίστοιχοι κόμβοι συνδέονται με υψηλό confidence.
+27.10 Payment execution
+
+PaymentExecution =
+LinkedPaymentAmount
+/
+CurrentContractValue
+
+Το metric πρέπει να έχει coverage badge:
+
+HIGH COVERAGE
+PARTIAL COVERAGE
+SPECIALIZED SOURCE ONLY
+UNKNOWN
+
+και να διαχωρίζει:
+
+    εντολή πληρωμής,
+    δηλωμένη δαπάνη,
+    πραγματική ταμειακή πληρωμή,
+
+όπου αυτό είναι γνωστό.
+27.11 Renewal window
+
+Αρχική rule-based έκδοση:
+
+contract_end_date - σήμερα
+
+με συνδυασμό:
+
+    προηγούμενης περιοδικότητας,
+    διάρκειας σύμβασης,
+    μέσου χρόνου από notice έως contract,
+    ετήσιας εποχικότητας φορέα.
+
+Παράδειγμα:
+
+σύμβαση λήγει σε 150 ημέρες
+μέσο procurement lead time φορέα: 120 ημέρες
+→ renewal watch window active
+
+27.12 Opportunity score
+
+Προτεινόμενη αρχική φόρμουλα:
+
+OpportunityScore =
+  25% CPV/company fit
++ 20% buyer affinity
++ 15% timing
++ 15% competitive attractiveness
++ 15% contract value fit
++ 10% data confidence
+
+Κάθε υποscore πρέπει να είναι εξηγήσιμο.
+
+Παράδειγμα:
+
+Score: 78/100
+
++ Ισχυρή συνάφεια CPV
++ Ο φορέας έχει αγοράσει παρόμοιες υπηρεσίες 4 φορές
++ Η αξία βρίσκεται στο συνηθισμένο εύρος της εταιρείας
+− Υπάρχει ισχυρός incumbent
+− Σύντομη προθεσμία
+
+Δεν πρέπει να ονομαστεί win probability μέχρι να υπάρχουν αξιόπιστα labels συμμετοχής και αποτελέσματος.
+27.13 Price benchmarking
+
+Το benchmarking τιμών είναι εφικτό μόνο όταν υπάρχουν συγκρίσιμα line items.
+
+Απαιτεί:
+
+    ίδιο ή πολύ κοντινό CPV,
+    ίδια μονάδα μέτρησης,
+    συγκρίσιμες προδιαγραφές,
+    ίδια βάση ΦΠΑ,
+    προσαρμογή χρονικής περιόδου,
+    γεωγραφικό context,
+    ποσότητα.
+
+Δεν συγκρίνουμε απλώς:
+
+σύνολο σύμβασης Α
+με
+σύνολο σύμβασης Β
+
+γιατί μπορεί να έχουν εντελώς διαφορετικό scope.
+28. Risk και anomaly indicators
+
+Το προϊόν μπορεί να προσφέρει procurement indicators, όχι κατηγορίες περί παρανομίας.
+
+Ενδεικτικοί δείκτες:
+
+    υψηλή συγκέντρωση αναθέσεων,
+    επαναλαμβανόμενος ίδιος ανάδοχος,
+    μικρός αριθμός διαφορετικών προμηθευτών,
+    επαναλαμβανόμενες τροποποιήσεις,
+    μεγάλη αύξηση αξίας,
+    μικρή προθεσμία υποβολής,
+    μεγάλες αποκλίσεις από ιστορικό benchmark,
+    συνεχόμενες αναθέσεις κοντά σε συγκεκριμένα όρια,
+    πιθανός κατακερματισμός παρόμοιων αγορών,
+    ασυνήθιστη καθυστέρηση από ανάθεση έως σύμβαση,
+    εταιρεία που εμφανίζεται ανενεργή σε μεταγενέστερο ή σχετικό εταιρικό snapshot,
+    έλλειψη αναμενόμενων συνδεδεμένων πράξεων.
+
+Η γλώσσα του UI πρέπει να είναι:
+
+    «Εντοπίστηκε ασυνήθιστο μοτίβο που απαιτεί περαιτέρω εξέταση.»
+
+Όχι:
+
+    «Εντοπίστηκε διαφθορά.»
+
+Κάθε indicator χρειάζεται:
+
+    μαθηματικό ορισμό,
+    benchmark,
+    ελάχιστο δείγμα,
+    confidence,
+    πηγές,
+    ημερομηνία υπολογισμού,
+    γνωστούς περιορισμούς.
+
+29. Search architecture
+29.1 Search indexes
+
+opportunities
+procurement_processes
+procurement_acts
+organizations
+companies
+funding_projects
+documents
+
+29.2 Search fields
+
+Structured exact fields:
+
+ADAM
+ADA
+AFM
+GEMI
+CPV
+NUTS
+MIS
+TED ID
+AAHT
+
+Full-text fields:
+
+title
+description
+buyer name
+supplier name
+document text
+object description
+
+29.3 Ελληνική αναζήτηση
+
+Χρειάζονται:
+
+    accent folding,
+    lowercase/uppercase normalization,
+    Greek stemming με προσοχή,
+    exact keyword subfields,
+    n-grams για επωνυμίες,
+    synonyms,
+    CPV hierarchy,
+    identifier tokenizer που δεν διασπά ΑΔΑ και ΑΔΑΜ.
+
+Παράδειγμα:
+
+«κυβερνοασφάλεια»
+«ασφάλεια πληροφοριακών συστημάτων»
+«security operations»
+
+μπορούν να ενταχθούν σε curated synonym group.
+29.4 Ranking
+
+Προτεινόμενη προτεραιότητα:
+
+exact identifier match
+> exact title phrase
+> CPV exact
+> buyer/supplier exact
+> title relevance
+> document text relevance
+> semantic similarity
+
+Η semantic αναζήτηση μπορεί να προστεθεί αργότερα. Δεν πρέπει να αντικαταστήσει την ακριβή αναζήτηση αναγνωριστικών.
+30. API προϊόντος
+30.1 Βασικά endpoints
+
+GET /v1/search
+
+GET /v1/opportunities
+GET /v1/opportunities/{id}
+
+GET /v1/processes/{id}
+GET /v1/processes/{id}/timeline
+GET /v1/processes/{id}/documents
+
+GET /v1/contracts/{adam}
+
+GET /v1/companies
+GET /v1/companies/{id}
+GET /v1/companies/by-vat/{country}/{vat}
+GET /v1/companies/{id}/buyers
+GET /v1/companies/{id}/contracts
+
+GET /v1/buyers
+GET /v1/buyers/{id}
+GET /v1/buyers/{id}/suppliers
+GET /v1/buyers/{id}/expiring-contracts
+
+GET /v1/markets/cpv/{cpv}
+GET /v1/markets/cpv/{cpv}/suppliers
+GET /v1/markets/cpv/{cpv}/buyers
+
+GET /v1/funding-projects/{mis}
+
+POST /v1/alerts
+GET  /v1/alerts
+POST /v1/exports
+
+30.2 Filtering
+
+cpv
+cpv_prefix
+buyer_id
+supplier_id
+afm
+nuts
+municipality
+date_from
+date_to
+deadline_from
+deadline_to
+amount_min
+amount_max
+procedure_type
+funding_type
+status
+has_documents
+has_contract
+has_payment
+
+30.3 Pagination
+
+Για μεγάλα datasets πρέπει να χρησιμοποιηθεί cursor pagination:
+
+{
+  "data": [],
+  "pagination": {
+    "next_cursor": "opaque-token",
+    "has_more": true
+  }
+}
+
+και όχι αυθαίρετα πολύ μεγάλο page=9000.
+30.4 Response με provenance
+
+{
+  "id": "proc_01J...",
+  "title": "Παροχή υπηρεσιών...",
+  "status": "CONTRACTED",
+  "identifiers": {
+    "adam": [
+      "26PROC012345678",
+      "26AWRD012456789",
+      "26SYMV012567890"
+    ],
+    "ada": [
+      "Ψ123..."
+    ]
+  },
+  "buyer": {
+    "id": "ent_...",
+    "name": "ΔΗΜΟΣ ...",
+    "vat": "..."
+  },
+  "suppliers": [
+    {
+      "id": "ent_...",
+      "name": "ΕΤΑΙΡΕΙΑ ΑΕ",
+      "vat": "...",
+      "amount": 125000.0
+    }
+  ],
+  "amounts": {
+    "estimated": 150000.0,
+    "awarded": 125000.0,
+    "current_contract": 130000.0,
+    "currency": "EUR"
+  },
+  "data_quality": {
+    "completeness": 0.91,
+    "freshness": "2026-07-19T10:30:00Z",
+    "lifecycle_confidence": 1.0
+  },
+  "provenance": [
+    {
+      "source": "KHMDHS",
+      "identifier": "26SYMV012567890",
+      "retrieved_at": "2026-07-19T10:30:00Z"
+    }
+  ]
+}
+
+30.5 Webhooks
+
+opportunity.created
+opportunity.updated
+contract.created
+contract.modified
+contract.expiring
+payment.detected
+company.status_changed
+buyer.new_procurement
+alert.triggered
+
+Κάθε webhook πρέπει να έχει:
+
+    event ID,
+    idempotency key,
+    timestamp,
+    tenant ID,
+    retry policy,
+    signature.
+
+31. Frontend οθόνες
+31.1 Αρχική οθόνη
+
+    universal search,
+    νέες ευκαιρίες,
+    λήξεις συμβάσεων,
+    watched buyers,
+    watched competitors,
+    market changes,
+    alerts,
+    saved pipeline.
+
+31.2 Opportunity detail
+
+Πάνω μέρος:
+
+    τίτλος,
+    φορέας,
+    deadline,
+    ποσό,
+    CPV,
+    περιοχή,
+    status,
+    opportunity score.
+
+Καρτέλες:
+
+Overview
+Documents
+Buyer history
+Competitors
+Similar contracts
+Lifecycle
+Funding
+Notes
+
+31.3 Buyer profile
+
+    overview,
+    spend trend,
+    CPV distribution,
+    top suppliers,
+    concentration,
+    procurement calendar,
+    contracts expiring,
+    typical values,
+    process duration,
+    recent notices,
+    funding projects,
+    map.
+
+31.4 Supplier profile
+
+    corporate identity,
+    GEMI status,
+    public-sector contract value,
+    buyer concentration,
+    CPV mix,
+    geographic mix,
+    active contracts,
+    recent awards,
+    amendments,
+    related consortia,
+    funding projects,
+    source history.
+
+31.5 Lifecycle page
+
+Κάθε κόμβος:
+
+icon
+act type
+date
+ADAM
+ADA
+title
+amount
+status
+document count
+source
+confidence
+
+31.6 Market page
+
+    total market value,
+    supplier ranking,
+    buyer ranking,
+    HHI,
+    time series,
+    map,
+    procedure type mix,
+    funding mix,
+    upcoming renewals,
+    median contract size.
+
+31.7 Relationship Explorer
+
+Filters:
+
+    relation type,
+    date range,
+    minimum value,
+    CPV,
+    source,
+    confidence,
+    geography.
+
+Πάντα πρέπει να υπάρχει εναλλακτική table view για ακρίβεια και προσβασιμότητα.
+31.8 Data evidence drawer
+
+Σε κάθε metric:
+
+Πώς υπολογίστηκε
+Ποιες εγγραφές χρησιμοποιήθηκαν
+Ποιες αποκλείστηκαν
+Ποιες πηγές χρησιμοποιήθηκαν
+Πότε ενημερώθηκε
+Ποιο είναι το confidence
+
+Αυτό αποτελεί βασικό differentiator.
+32. Alerts engine
+32.1 Rule schema
+
+CREATE TABLE alert_rules (
+    id                  UUID PRIMARY KEY,
+    tenant_id           UUID NOT NULL,
+    user_id             UUID NOT NULL,
+    name                TEXT NOT NULL,
+    event_types         TEXT[] NOT NULL,
+    filters             JSONB NOT NULL,
+    schedule            TEXT NOT NULL,
+    delivery_channels   TEXT[] NOT NULL,
+    is_active           BOOLEAN NOT NULL DEFAULT TRUE,
+    last_evaluated_at   TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+32.2 Deduplication
+
+Το ίδιο γεγονός δεν πρέπει να στέλνεται ξανά επειδή έγινε re-ingestion.
+
+Dedup key:
+
+alert_rule_id
++ canonical_object_id
++ event_type
++ material_change_hash
+
+32.3 Material changes
+
+Alert μόνο όταν αλλάξει ουσιώδες πεδίο:
+
+    deadline,
+    ποσό,
+    status,
+    ανάδοχος,
+    νέα τροποποίηση,
+    νέο έγγραφο,
+    νέα πράξη,
+    νέα σύνδεση πληρωμής.
+
+Όχι όταν αλλάξει απλώς το timestamp ανάκτησης.
+33. Data quality framework
+33.1 Διαστάσεις
+
+Completeness
+Validity
+Uniqueness
+Consistency
+Timeliness
+Traceability
+
+33.2 Ενδεικτικοί έλεγχοι
+ΚΗΜΔΗΣ
+
+    κάθε ΑΔΑΜ μοναδικό ανά act type,
+    κάθε contract έχει buyer ή data quality issue,
+    έγκυρα amounts,
+    end date όχι πριν από start date,
+    valid CPV format,
+    valid AFM ή σχετικό warning.
+
+Lifecycle
+
+    contract δεν μπορεί να είναι parent του ίδιου του,
+    cancellation date δεν προηγείται της δημοσίευσης χωρίς warning,
+    payment link δεν δημιουργείται από AFM μόνο,
+    amendment πρέπει να αναφέρεται σε προγενέστερη πράξη.
+
+Entity resolution
+
+    μία canonical εταιρεία δεν έχει δύο διαφορετικά current valid AFM,
+    ίδιο current AFM δεν ανήκει σε δύο εταιρείες,
+    merge με identifier conflict μπαίνει σε quarantine.
+
+33.3 Quarantine
+
+CREATE TABLE data_quality_issues (
+    id                  UUID PRIMARY KEY,
+    source_record_id    UUID REFERENCES source_records(id),
+    object_type         TEXT,
+    object_id           UUID,
+    issue_code          TEXT NOT NULL,
+    severity            TEXT NOT NULL,
+    details             JSONB,
+    status              TEXT NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at         TIMESTAMPTZ
+);
+
+Severities:
+
+INFO
+WARNING
+ERROR
+BLOCKING
+
+34. Connector framework
+
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, Protocol
+
+
+@dataclass(frozen=True)
+class SourcePartition:
+    resource: str
+    date_from: str | None = None
+    date_to: str | None = None
+    cursor: str | None = None
+
+
+@dataclass(frozen=True)
+class RawEnvelope:
+    source: str
+    resource: str
+    source_native_id: str | None
+    payload: bytes
+    content_type: str
+    fetched_at: str
+    source_updated_at: str | None
+    metadata: dict[str, Any]
+
+
+class SourceConnector(Protocol):
+    source_name: str
+
+    async def healthcheck(self) -> dict[str, Any]:
+        ...
+
+    async def partitions(
+        self,
+        state: dict[str, Any],
+    ) -> AsyncIterator[SourcePartition]:
+        ...
+
+    async def fetch(
+        self,
+        partition: SourcePartition,
+    ) -> AsyncIterator[RawEnvelope]:
+        ...
+
+    async def normalize(
+        self,
+        envelope: RawEnvelope,
+    ) -> list[dict[str, Any]]:
+        ...
+
+Κάθε connector πρέπει να υλοποιεί:
+
+    healthcheck,
+    capabilities,
+    rate limiter,
+    pagination,
+    retries,
+    schema validation,
+    raw persistence,
+    normalized output,
+    metrics,
+    checkpointing.
+
+35. Cursor και watermarks
+
+CREATE TABLE source_cursors (
+    source_system       TEXT NOT NULL,
+    resource_type       TEXT NOT NULL,
+    partition_key       TEXT NOT NULL,
+    cursor_value        JSONB NOT NULL,
+    last_success_at     TIMESTAMPTZ,
+    last_attempt_at     TIMESTAMPTZ,
+    last_error          JSONB,
+    PRIMARY KEY (
+        source_system,
+        resource_type,
+        partition_key
+    )
+);
+
+Ο cursor προχωρά μόνο όταν:
+
+    έχουν ληφθεί όλες οι σελίδες,
+    έχει αποθηκευτεί το raw payload,
+    έχει ολοκληρωθεί το staging,
+    έχουν καταγραφεί τα failures,
+    έχει γίνει commit.
+
+Σε μερική αποτυχία δεν προχωρά.
+36. Retry και resilience
+HTTP 429
+
+    ανάγνωση Retry-After,
+    pause του source limiter,
+    όχι επιθετικά retries.
+
+HTTP 5xx
+
+exponential backoff
++ jitter
++ maximum attempts
++ circuit breaker
+
+Invalid payload
+
+    raw αποθήκευση,
+    quarantine,
+    schema drift alert,
+    καμία απώλεια εγγραφής.
+
+Source outage
+
+    degraded source status,
+    διατήρηση τελευταίων επιτυχημένων δεδομένων,
+    εμφανές freshness timestamp στο UI,
+    επανεκτέλεση από το τελευταίο ασφαλές cursor.
+
+37. Search και analytics refresh
+
+Προτεινόμενη ροή αλλαγής:
+
+source record inserted
+→ canonical object changed
+→ domain event
+→ search index update
+→ metric invalidation
+→ affected marts refresh
+→ alert evaluation
+
+Τα analytics δεν πρέπει να επανυπολογίζονται όλα σε κάθε εγγραφή.
+
+Χρειάζεται dependency mapping:
+
+contract changed
+→ supplier profile
+→ buyer profile
+→ CPV market
+→ NUTS market
+→ funding project
+
+38. Multi-tenancy
+
+Τα δημόσια canonical δεδομένα είναι κοινά.
+
+Tenant-specific είναι:
+
+    χρήστες,
+    saved searches,
+    alerts,
+    notes,
+    opportunity pipeline,
+    tags,
+    private lists,
+    exports,
+    API keys,
+    CRM mappings.
+
+shared public data
++
+isolated tenant workspace
+
+Το tenant isolation εφαρμόζεται με:
+
+    tenant_id,
+    PostgreSQL row-level security,
+    role-based access,
+    audit logs,
+    object-storage prefixes,
+    tenant-scoped encryption όπου απαιτείται.
+
+39. Ρόλοι χρηστών
+
+OWNER
+ADMIN
+ANALYST
+SALES
+BID_MANAGER
+VIEWER
+API_CLIENT
+
+Δικαιώματα:
+
+    δημιουργία alerts,
+    exports,
+    σημειώσεις,
+    διαχείριση ομάδας,
+    API access,
+    billing,
+    admin data review.
+
+Οι internal data reviewers αποτελούν ξεχωριστό operational role και δεν αποκτούν πρόσβαση σε tenant private notes χωρίς ανάγκη.
+40. Ασφάλεια
+40.1 Βασικά μέτρα
+
+    OIDC authentication,
+    MFA για admins,
+    hashed API keys,
+    secrets manager,
+    encryption in transit,
+    encryption at rest,
+    least privilege,
+    audit logs,
+    signed document URLs,
+    dependency scanning,
+    container scanning,
+    rate limiting,
+    WAF όπου απαιτείται,
+    backups,
+    point-in-time recovery.
+
+40.2 API keys
+
+Αποθηκεύεται μόνο hash:
+
+key_prefix
+key_hash
+tenant_id
+scopes
+expires_at
+last_used_at
+
+40.3 Audit
+
+Καταγράφονται:
+
+    login,
+    export,
+    API key creation,
+    alert changes,
+    entity merge/split,
+    manual link confirmation,
+    data correction,
+    administrative access.
+
+41. Νομική και δεοντολογική σχεδίαση
+41.1 Άδειες
+
+Κάθε source record πρέπει να διατηρεί:
+
+license_code
+attribution_text
+source_name
+source_identifier
+retrieved_at
+
+Το ΚΗΜΔΗΣ δηλώνει CC BY 4.0, ενώ το Open Data ΓΕΜΗ εμφανίζει ODC-BY 1.0. Οι υπόλοιπες πηγές πρέπει να καταγράφονται με τη δική τους άδεια και τους όρους επαναχρησιμοποίησης.
+41.2 Προσωπικά δεδομένα
+
+Το γεγονός ότι ένα δεδομένο είναι δημόσια προσβάσιμο δεν σημαίνει ότι παύει να είναι προσωπικό δεδομένο.
+
+Το προϊόν πρέπει να εφαρμόζει:
+
+    data minimization,
+    περιορισμό στα απολύτως αναγκαία στοιχεία υπογραφόντων,
+    απαγόρευση δημιουργίας προσωπικών πολιτικών προφίλ,
+    διαδικασία διόρθωσης,
+    καταγραφή πηγής,
+    retention policy,
+    νομικό έλεγχο GDPR και DPIA όπου απαιτείται.
+
+41.3 Απαγορευμένες αυτόματες ερμηνείες
+
+Το σύστημα δεν πρέπει να υπολογίζει ή να εμφανίζει χωρίς ισχυρή νομική και επιστημονική βάση:
+
+    πολιτική affiliation score,
+    corruption probability,
+    clientelism score,
+    criminality score,
+    προσωπικές σχέσεις,
+    συγγένειες,
+    πρόθεση εύνοιας.
+
+Μπορεί να εμφανίζει:
+
+    συγκέντρωση,
+    επαναληπτικότητα,
+    χρονικές ακολουθίες,
+    τροποποιήσεις,
+    οικονομικά μεγέθη,
+    διαθέσιμες επίσημες σχέσεις.
+
+42. Product packaging
+Starter
+
+    search,
+    βασικά alerts,
+    opportunity feed,
+    περιορισμένα profiles,
+    βασικό export.
+
+Professional
+
+    buyer intelligence,
+    supplier intelligence,
+    lifecycle,
+    competitor monitoring,
+    market analytics,
+    περισσότερα alerts,
+    CRM-style workspace.
+
+Enterprise
+
+    API,
+    webhooks,
+    bulk exports,
+    custom taxonomy,
+    private lists,
+    SSO,
+    audit,
+    custom data marts,
+    SLA.
+
+Data/API
+
+Ξεχωριστό προϊόν:
+
+company public-sector profile API
+buyer spend API
+contract lifecycle API
+market analytics API
+opportunity signal API
+
+43. Προτεινόμενο MVP
+
+Το MVP πρέπει να είναι σαφώς μικρότερο από το συνολικό όραμα.
+Περιλαμβάνει
+
+    Όλους τους βασικούς πόρους ΚΗΜΔΗΣ.
+    Raw αποθήκευση και versioning.
+    Canonical φορείς και εταιρείες βάσει ΑΦΜ.
+    adamChain lifecycle.
+    Άμεση ανάκτηση Διαύγειας για γνωστά ΑΔΑ.
+    Αναζήτηση με:
+        τίτλο,
+        ΑΔΑΜ,
+        ΑΔΑ,
+        ΑΦΜ,
+        CPV,
+        φορέα,
+        ανάδοχο,
+        περιοχή.
+    Opportunity feed.
+    Buyer profile.
+    Supplier profile βάσει δημόσιων συμβάσεων.
+    Contract timeline.
+    Alerts.
+    CSV/XLSX export.
+    Provenance σε κάθε βασική εγγραφή.
+    Admin review για entity matches.
+    Βασικά market metrics:
+
+    αξία,
+    πλήθος,
+    top buyers,
+    top suppliers,
+    CPV trends,
+    συγκέντρωση.
+
+Δεν περιλαμβάνει αρχικά
+
+    πλήρες ευρωπαϊκό benchmarking,
+    όλα τα datasets του data.gov.gr,
+    πλήρες price benchmarking line items,
+    ML win probability,
+    Neo4j,
+    advanced CRM,
+    αυτόματη bid writing,
+    exhaustive OCR όλου του ιστορικού,
+    πλήρες «πραγματικές πληρωμές» metric χωρίς κάλυψη,
+    πολιτικό ή προσωπικό relationship mapping.
+
+44. Σειρά υλοποίησης
+Στάδιο 0 — Source contracts και πρόσβαση
+
+Παραδοτέα:
+
+    αίτημα API key ΓΕΜΗ,
+    καταγραφή αδειών,
+    sample payloads από κάθε source,
+    source capability matrix,
+    data dictionary,
+    fixture repository,
+    schema drift policy.
+
+Στάδιο 1 — Data foundation
+
+Παραδοτέα:
+
+    PostgreSQL/PostGIS,
+    object storage,
+    migrations,
+    source_records,
+    connector framework,
+    run tracking,
+    cursors,
+    observability,
+    quarantine.
+
+Στάδιο 2 — ΚΗΜΔΗΣ
+
+Παραδοτέα:
+
+    connectors για request, notice, auction, contract, payment,
+    incremental jobs,
+    backfill jobs,
+    raw JSON,
+    canonical acts,
+    ADAM identifiers,
+    adamChain,
+    lifecycle.
+
+Στάδιο 3 — Διαύγεια και documents
+
+Παραδοτέα:
+
+    direct ADA fetch,
+    decision metadata,
+    PDF download,
+    document extraction,
+    page indexing,
+    source evidence,
+    version log όπου λειτουργεί.
+
+Στάδιο 4 — Product UI
+
+Παραδοτέα:
+
+    search,
+    opportunities,
+    process detail,
+    buyer profile,
+    supplier profile,
+    alerts,
+    exports.
+
+Στάδιο 5 — ΓΕΜΗ
+
+Παραδοτέα:
+
+    AFM queue,
+    official company profiles,
+    temporal snapshots,
+    legal form και status,
+    ΚΑΔ,
+    review UI.
+
+Στάδιο 6 — ΑΝΑΠΤΥΞΗ
+
+Παραδοτέα:
+
+    project/subproject ingestion,
+    MIS mapping,
+    funding project profiles,
+    budget/contract/payment metrics,
+    match review.
+
+Στάδιο 7 — TED και VIES
+
+Παραδοτέα:
+
+    TED ingestion,
+    version-aware parser,
+    Greek notice linkage,
+    foreign supplier validation,
+    European comparison views.
+
+Στάδιο 8 — data.gov.gr και maps
+
+Παραδοτέα:
+
+    CKAN registry,
+    administrative boundaries,
+    demographic denominators,
+    maps,
+    regional metrics.
+
+Στάδιο 9 — Advanced analytics
+
+Παραδοτέα:
+
+    renewal signals,
+    opportunity score,
+    concentration,
+    dependency,
+    modification analytics,
+    anomaly indicators,
+    model monitoring.
+
+45. Πρώτο implementation backlog
+Βήμα 1
+
+Δημιουργία των παρακάτω tables:
+
+source_records
+connector_runs
+source_cursors
+entities
+entity_identifiers
+entity_names
+procurement_processes
+procurement_acts
+act_identifiers
+act_links
+act_parties
+act_cpv_codes
+documents
+data_quality_issues
+
+Βήμα 2
+
+Υλοποίηση ΚΗΜΔΗΣ connector μόνο για:
+
+contract
+
+με:
+
+    raw storage,
+    pagination,
+    date partitioning,
+    idempotent upsert,
+    content hash,
+    retry.
+
+Βήμα 3
+
+Προσθήκη:
+
+auction
+notice
+request
+payment
+
+στο ίδιο framework.
+Βήμα 4
+
+Υλοποίηση adamChain και process grouping.
+Βήμα 5
+
+Δημιουργία πρώτου API:
+
+GET /v1/contracts/{adam}
+GET /v1/processes/{id}
+GET /v1/search
+
+Βήμα 6
+
+Δημιουργία πρώτου UI:
+
+    search,
+    contract detail,
+    lifecycle timeline.
+
+Βήμα 7
+
+Άμεση Διαύγεια enrichment για ΑΔΑ που έχουν ήδη εντοπιστεί.
+Βήμα 8
+
+Buyer/supplier profiles από ΑΦΜ και συμβάσεις.
+Βήμα 9
+
+Saved searches και email alerts.
+Βήμα 10
+
+Πρώτα analytics ανά CPV, φορέα και ανάδοχο.
+46. Definition of Done
+
+Η πρώτη παραγωγική έκδοση θεωρείται έτοιμη όταν:
+Ingestion
+
+    κάθε raw response αποθηκεύεται,
+    το ingestion είναι idempotent,
+    η επανεκτέλεση δεν δημιουργεί διπλότυπα,
+    τα cursors δεν προχωρούν μετά από partial failure,
+    τα retries και rate limits λειτουργούν,
+    υπάρχει dashboard freshness ανά source.
+
+Data model
+
+    κάθε ΑΔΑΜ είναι μοναδικό,
+    κάθε ΑΔΑ διατηρείται ως identifier,
+    κάθε εταιρεία με έγκυρο ΑΦΜ έχει μία canonical οντότητα,
+    οι συγχωνεύσεις είναι αναστρέψιμες,
+    κάθε lifecycle edge έχει evidence και confidence.
+
+Product
+
+    αναζήτηση ΑΔΑΜ, ΑΔΑ και ΑΦΜ,
+    φίλτρα CPV, φορέα, αναδόχου, ποσού και ημερομηνίας,
+    timeline διαδικασίας,
+    profile αγοραστή,
+    profile προμηθευτή,
+    alerts,
+    export,
+    source attribution.
+
+Performance targets
+
+Προτεινόμενοι στόχοι:
+
+    structured API cached P95 κάτω από 500 ms,
+    search P95 κάτω από 2 s,
+    alert evaluation χωρίς διπλή αποστολή,
+    ingestion success άνω του 99% μετά από retries,
+    deterministic identifier matches με precision σχεδόν 100%,
+    κάθε metric πλήρως traceable στις source εγγραφές.
+
+Quality
+
+    μηδενικές αυτόματες συγχωνεύσεις με διαφορετικά έγκυρα ΑΦΜ,
+    κανένα derived metric χωρίς σαφή μεθοδολογία,
+    εμφανές freshness timestamp,
+    εμφανές coverage για πληρωμές και χρηματοδοτήσεις,
+    κανένα risk indicator χωρίς evidence.
+
+47. Παράδειγμα πλήρους ροής
+
+Έστω ότι εμφανίζεται σύμβαση:
+
+ADAM: 26SYMV012345678
+Buyer AFM: 123456789
+Supplier AFM: 987654321
+CPV: 72000000
+Value: 240.000 €
+
+Η πλατφόρμα εκτελεί:
+
+1. Αποθηκεύει raw contract JSON.
+2. Δημιουργεί CONTRACT act.
+3. Δημιουργεί ή βρίσκει buyer με ΑΦΜ 123456789.
+4. Δημιουργεί ή βρίσκει supplier με ΑΦΜ 987654321.
+5. Καλεί adamChain.
+6. Εντοπίζει:
+   - request ADAM,
+   - notice ADAM,
+   - award ADAM,
+   - payment ADAM.
+7. Δημιουργεί process.
+8. Συνδέει όλες τις πράξεις.
+9. Διαβάζει commitmentNo και decisionRelatedAda.
+10. Ανακτά τις πράξεις από Διαύγεια.
+11. Κατεβάζει τα σχετικά PDF.
+12. Εμπλουτίζει την εταιρεία από ΓΕΜΗ.
+13. Ελέγχει αν υπάρχει MIS/OPS.
+14. Συνδέει το έργο ΑΝΑΠΤΥΞΗ.
+15. Ελέγχει TED notice.
+16. Υπολογίζει:
+    - buyer spend,
+    - supplier share,
+    - incumbent status,
+    - market share,
+    - contract end date,
+    - renewal window,
+    - funding execution.
+17. Ενημερώνει search indexes.
+18. Αξιολογεί alert rules.
+19. Εμφανίζει όλη την αλυσίδα με πηγές.
+
+Το τελικό profile απαντά:
+
+    Ο φορέας αγόρασε υπηρεσίες πληροφορικής αξίας 240.000 ευρώ από την εταιρεία Χ. Η σύμβαση προέκυψε από την προκήρυξη Υ και την ανάθεση Ζ, συνδέεται με τις αποφάσεις Διαύγειας Α και Β, ανήκει στο έργο ΟΠΣ Κ, έχει τροποποιηθεί μία φορά και λήγει στην ημερομηνία Λ.
+
+Κάθε πρόταση συνδέεται με το σχετικό επίσημο τεκμήριο.
+48. Το πραγματικό ανταγωνιστικό πλεονέκτημα
+
+Το πλεονέκτημα δεν είναι:
+
+έχω crawler
+
+Ο crawler αντιγράφεται.
+
+Το πλεονέκτημα είναι:
+
+1. Ιστορικό raw dataset
+2. Canonical εταιρείες και φορείς
+3. Ελληνικό entity resolution
+4. Πλήρης αλυσίδα πράξεων
+5. Temporal εταιρικά snapshots
+6. Σύνδεση συμβάσεων με χρηματοδότηση
+7. Εξηγήσιμα metrics
+8. Data provenance
+9. Alerts και εμπορικό workflow
+10. API προς τρίτους
+
+Το μακροχρόνιο moat θα είναι το canonical procurement graph της ελληνικής δημόσιας αγοράς:
+
+Buyer
+↔ Opportunity
+↔ Procurement process
+↔ Contract
+↔ Supplier
+↔ Decision
+↔ Payment
+↔ Funding project
+↔ Geography
+↔ Market
+
+49. Τελικό positioning
+Κεντρικό μήνυμα
+
+    Η πλατφόρμα market intelligence για την ελληνική δημόσια αγορά.
+
+Αναλυτική περιγραφή
+
+    Η πλατφόρμα συγκεντρώνει και συνδέει προκηρύξεις, αναθέσεις, συμβάσεις, αποφάσεις, πληρωμές, εταιρικά δεδομένα και χρηματοδοτούμενα έργα. Επιτρέπει στις επιχειρήσεις να εντοπίζουν ευκαιρίες, να κατανοούν τη συμπεριφορά των δημόσιων αγοραστών, να αναλύουν τον ανταγωνισμό, να παρακολουθούν συμβάσεις και να λαμβάνουν τεκμηριωμένες εμπορικές αποφάσεις.
+
+Πιο άμεσο εμπορικό μήνυμα
+
+    Δείτε ποιος αγοράζει, τι αγοράζει, από ποιον, σε ποια τιμή και πότε είναι πιθανό να αγοράσει ξανά.
+
+Η υπόσχεση του MVP
+
+    Βρίσκουμε τις καλύτερες επόμενες ευκαιρίες δημοσίων συμβάσεων και παρέχουμε όλο το ιστορικό αγοραστή, αναδόχου, αγοράς και χρηματοδότησης που χρειάζεται μια εταιρεία για να αποφασίσει αν θα συμμετάσχει.
+
+Η σωστή πρώτη υλοποίηση είναι επομένως:
+
+ΚΗΜΔΗΣ ingestion
+→ raw ιστορικό
+→ adamChain lifecycle
+→ canonical ΑΦΜ/φορείς
+→ Διαύγεια evidence
+→ search
+→ buyer/supplier profiles
+→ alerts
+→ market analytics
+
+και μόνο μετά:
+
+ΓΕΜΗ
+→ ΑΝΑΠΤΥΞΗ
+→ TED
+→ πληρωμές
+→ γεωγραφικά δεδομένα
+→ προηγμένα scores
+
+Με αυτή τη σειρά, το προϊόν αποκτά εμπορική χρησιμότητα νωρίς, ενώ η αρχιτεκτονική παραμένει κατάλληλη για τη βαθύτερη πλατφόρμα intelligence που περιγράψαμε.

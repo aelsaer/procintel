@@ -1,0 +1,15 @@
+{
+  "_fixture_note": "SYNTHETIC test data, not a captured real TED Search API response. Same buyer as tests/fixtures/khmdhs/contract_sample.json's first record, but a CPV code that deliberately does NOT overlap it (50700000 vs 90911200/90910000) so Level 3 (buyer+CPV+date) fails and Level 4 (buyer+title+amount+date) is the one that has to match instead. Title/amount are close to, not identical to, the ΚΗΜΔΗΣ act's own.",
+  "noticeId": "2025-TED-000789",
+  "publicationNumber": "789123-2025",
+  "title": "Παροχή υπηρεσιών καθαρισμού δημοσίων κτιρίων - ΕΕ διαγωνισμός",
+  "buyer": {"name": "ΔΗΜΟΣ ΔΟΚΙΜΗΣ", "vatNumber": "094259216", "countryCode": "GR"},
+  "supplier": {"name": "ΑΛΦΑ ΚΑΘΑΡΙΣΜΟΙ ΙΚΕ", "vatNumber": "090000045", "countryCode": "GR"},
+  "cpvCodes": ["50700000"],
+  "estimatedValue": 120000.00,
+  "awardedValue": 122000.00,
+  "procedureType": "OPEN",
+  "countryCode": "GR",
+  "nutsCodes": ["EL301"],
+  "publicationDate": "2025-01-15"
+}

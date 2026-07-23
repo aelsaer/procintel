@@ -1,0 +1,16 @@
+{
+  "_fixture_note": "Synthetic values using the published ΓΕΜΗ Open Data v1 company schema. The AFM matches the procurement fixtures so integration tests can link the entity.",
+  "arGemi": 123456789000,
+  "afm": "090000045",
+  "coNameEl": "ΑΛΦΑ ΚΑΘΑΡΙΣΜΟΙ ΙΔΙΩΤΙΚΗ ΚΕΦΑΛΑΙΟΥΧΙΚΗ ΕΤΑΙΡΕΙΑ",
+  "coTitlesEl": ["ΑΛΦΑ ΚΑΘΑΡΙΣΜΟΙ ΙΚΕ"],
+  "legalType": {"id": 3, "descr": "Ιδιωτική Κεφαλαιουχική Εταιρεία"},
+  "status": {"id": 1, "descr": "ΕΝΕΡΓΗ"},
+  "gemiOffice": {"id": 101, "descr": "ΓΕΜΗ ΑΘΗΝΩΝ"},
+  "incorporationDate": "2015-06-01",
+  "activities": [
+    {"activity": {"id": "81210000", "descr": "Γενικός καθαρισμός κτιρίων", "kadVersion": "2008"}, "type": "PRIMARY"}
+  ],
+  "municipality": {"id": 1, "descr": "ΑΘΗΝΑΙΩΝ"},
+  "prefecture": {"id": 1, "descr": "ΑΤΤΙΚΗΣ"}
+}

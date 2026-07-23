@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "procintel"
+version = "0.1.0"
+description = "Greek Public Procurement Intelligence platform — ingestion, canonical domain, analytics."
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2",
+    "tenacity>=8",
+    "sqlalchemy[asyncio]>=2",
+    "asyncpg>=0.29",
+    "python-dateutil>=2.9",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "geoalchemy2>=0.14",
+    "pypdfium2>=4.30",
+    "pillow>=10",
+    "pyjwt[crypto]>=2.8",
+]
+# No opensearch-py here: the official client pulls in grpcio/protobuf for
+# gRPC support this codebase never uses, and its transport isn't httpx-based
+# (unmockable with respx, unlike everything else this project tests against).
+# services/search_index/client.py is a small, purpose-built httpx REST
+# wrapper over OpenSearch's plain HTTP API instead — index/bulk/search are
+# just JSON-over-HTTP, nothing the official SDK does is actually needed.
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["packages*", "services*", "apps*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]

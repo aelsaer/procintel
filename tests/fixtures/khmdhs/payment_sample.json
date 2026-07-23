@@ -1,0 +1,21 @@
+{
+  "_fixture_note": "SYNTHETIC test data, not a captured real ΚΗΜΔΗΣ response. paymentDate/paymentAmountWithVAT are best-effort guessed field names (see normalize.py module docstring) — fix here and there together if the real schema differs.",
+  "data": [
+    {
+      "referenceNumber": "25PAY000444555",
+      "title": "Πληρωμή σύμβασης προμήθειας γραφικής ύλης",
+      "paymentDate": "2025-02-01",
+      "organizationVatNumber": "094259216",
+      "organizationName": "ΔΗΜΟΣ ΔΟΚΙΜΗΣ",
+      "contractRelatedAda": "7Α1Η465ΦΘΘ-ΘΙΚ",
+      "paymentAmountWithoutVAT": 7800.00,
+      "vatAmount": 1872.00,
+      "paymentAmountWithVAT": 9672.00,
+      "currency": "EUR",
+      "awardees": [
+        {"vatNumber": "090000045", "name": "ΑΛΦΑ ΚΑΘΑΡΙΣΜΟΙ ΙΚΕ"}
+      ]
+    }
+  ],
+  "isLastPage": true
+}

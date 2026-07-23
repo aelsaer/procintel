@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.env
+.env.local
+node_modules/
+.next/
+test-results/
+playwright-report/
+data/
+raw/
+*.log
+.DS_Store

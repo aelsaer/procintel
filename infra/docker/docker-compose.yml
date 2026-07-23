@@ -1,0 +1,109 @@
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-procintel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-procintel}
+      POSTGRES_DB: ${POSTGRES_DB:-procintel}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - procintel_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-procintel} -d ${POSTGRES_DB:-procintel}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  opensearch:
+    image: opensearchproject/opensearch:2
+    environment:
+      discovery.type: single-node
+      # Dev-only: disables the security plugin (TLS/auth) so local
+      # development doesn't need a certificate/admin-password dance.
+      # Never do this in production — use a real OPENSEARCH_URL with
+      # security enabled there instead.
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "${OPENSEARCH_PORT:-9200}:9200"
+    volumes:
+      - procintel_opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ingestion-scheduler:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.scheduler
+    init: true
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    command:
+      - python
+      - -m
+      - services.ingestion.orchestration.cli
+      - run-daily
+      - --at
+      - ${DAILY_INGEST_AT:-02:30}
+      - --timezone
+      - ${DAILY_INGEST_TIMEZONE:-Europe/Athens}
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-procintel}:${POSTGRES_PASSWORD:-procintel}@postgres:5432/${POSTGRES_DB:-procintel}
+      RAW_STORE_ROOT: /var/lib/procintel/raw
+      DOCUMENT_STORE_ROOT: /var/lib/procintel/documents
+      # Container-to-container URL. Kept separate from the host-facing
+      # OPENSEARCH_URL commonly set to localhost:9200 in this directory.
+      OPENSEARCH_URL: ${SCHEDULER_OPENSEARCH_URL:-http://opensearch:9200}
+      DAILY_INGEST_LOOKBACK_DAYS: ${DAILY_INGEST_LOOKBACK_DAYS:-3}
+      DAILY_INGEST_MIN_INTERVAL_HOURS: ${DAILY_INGEST_MIN_INTERVAL_HOURS:-23}
+      DAILY_GEOSPATIAL_MAX_JOBS: ${DAILY_GEOSPATIAL_MAX_JOBS:-500}
+      DAILY_SCORING_LOOKBACK_DAYS: ${DAILY_SCORING_LOOKBACK_DAYS:-120}
+      DAILY_DIAVGEIA_MAX_LOOKUPS: ${DAILY_DIAVGEIA_MAX_LOOKUPS:-1000}
+      DAILY_GEMI_MAX_LOOKUPS: ${DAILY_GEMI_MAX_LOOKUPS:-500}
+      DAILY_MEF_MAX_LOOKUPS: ${DAILY_MEF_MAX_LOOKUPS:-500}
+      DAILY_ANAPTYXI_MAX_LOOKUPS_PER_PERIOD: ${DAILY_ANAPTYXI_MAX_LOOKUPS_PER_PERIOD:-500}
+      DAILY_VIES_MAX_LOOKUPS: ${DAILY_VIES_MAX_LOOKUPS:-500}
+      DAILY_DOCUMENT_MAX_DOWNLOADS: ${DAILY_DOCUMENT_MAX_DOWNLOADS:-100}
+      KHMDHS_API_BASE_URL: ${KHMDHS_API_BASE_URL:-https://cerpp.eprocurement.gov.gr}
+      KHMDHS_RATE_LIMIT_PER_MINUTE: ${KHMDHS_RATE_LIMIT_PER_MINUTE:-180}
+      TED_API_BASE_URL: ${TED_API_BASE_URL:-https://api.ted.europa.eu}
+      TED_RATE_LIMIT_PER_MINUTE: ${TED_RATE_LIMIT_PER_MINUTE:-120}
+      DIAVGEIA_API_BASE_URL: ${DIAVGEIA_API_BASE_URL:-https://diavgeia.gov.gr/opendata}
+      DIAVGEIA_RATE_LIMIT_PER_MINUTE: ${DIAVGEIA_RATE_LIMIT_PER_MINUTE:-60}
+      GEMI_API_BASE_URL: ${GEMI_API_BASE_URL:-https://opendata-api.businessportal.gr/api/opendata/v1}
+      GEMI_API_KEY: ${GEMI_API_KEY:-}
+      GEMI_RATE_LIMIT_PER_MINUTE: ${GEMI_RATE_LIMIT_PER_MINUTE:-60}
+      MEF_API_BASE_URL: ${MEF_API_BASE_URL:-https://mef.diavgeia.gov.gr}
+      MEF_RATE_LIMIT_PER_MINUTE: ${MEF_RATE_LIMIT_PER_MINUTE:-60}
+      CKAN_API_BASE_URL: ${CKAN_API_BASE_URL:-}
+      CKAN_RATE_LIMIT_PER_MINUTE: ${CKAN_RATE_LIMIT_PER_MINUTE:-60}
+      ANAPTYXI_2007_2013_API_BASE_URL: ${ANAPTYXI_2007_2013_API_BASE_URL:-}
+      ANAPTYXI_2014_2020_API_BASE_URL: ${ANAPTYXI_2014_2020_API_BASE_URL:-}
+      ANAPTYXI_2021_2027_API_BASE_URL: ${ANAPTYXI_2021_2027_API_BASE_URL:-}
+      ANAPTYXI_RATE_LIMIT_PER_MINUTE: ${ANAPTYXI_RATE_LIMIT_PER_MINUTE:-60}
+      VIES_API_BASE_URL: ${VIES_API_BASE_URL:-}
+      VIES_RATE_LIMIT_PER_MINUTE: ${VIES_RATE_LIMIT_PER_MINUTE:-60}
+      GEO_GEOCODER_BASE_URL: ${GEO_GEOCODER_BASE_URL:-}
+      GEO_GEOCODER_USER_AGENT: ${GEO_GEOCODER_USER_AGENT:-}
+      GEO_GEOCODER_RATE_LIMIT_PER_MINUTE: ${GEO_GEOCODER_RATE_LIMIT_PER_MINUTE:-60}
+    volumes:
+      - procintel_raw_data:/var/lib/procintel/raw
+      - procintel_document_data:/var/lib/procintel/documents
+
+volumes:
+  procintel_postgres_data:
+  procintel_opensearch_data:
+  procintel_raw_data:
+  procintel_document_data:
+
+# Redis and MinIO are intentionally still not included — this compose file
+# covers the database, search index and persistent daily ingestion runner.

@@ -1,0 +1,20 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+COPY packages ./packages
+COPY services ./services
+COPY apps ./apps
+
+RUN pip install .
+
+CMD ["python", "-m", "services.ingestion.orchestration.cli", "run-daily"]

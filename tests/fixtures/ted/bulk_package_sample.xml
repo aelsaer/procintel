@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC test data, not a captured real TED bulk-XML export — element
+     names are a best-effort guess (see services/ingestion/connectors/ted/normalize.py). -->
+<TedExport>
+  <Notice>
+    <NoticeId>2025-TED-BULK-001</NoticeId>
+    <PublicationNumber>111111-2025</PublicationNumber>
+    <Title>Παροχή υπηρεσιών καθαρισμού δημοσίων κτιρίων</Title>
+    <Buyer>
+      <Name>ΔΗΜΟΣ ΔΟΚΙΜΗΣ</Name>
+      <VatNumber>094259216</VatNumber>
+      <CountryCode>GR</CountryCode>
+    </Buyer>
+    <Supplier>
+      <Name>ΑΛΦΑ ΚΑΘΑΡΙΣΜΟΙ ΙΚΕ</Name>
+      <VatNumber>090000045</VatNumber>
+      <CountryCode>GR</CountryCode>
+    </Supplier>
+    <CpvCodes>
+      <CpvCode>90911200</CpvCode>
+      <CpvCode>90910000</CpvCode>
+    </CpvCodes>
+    <EstimatedValue>100000.00</EstimatedValue>
+    <AwardedValue>124000.00</AwardedValue>
+    <ProcedureType>OPEN</ProcedureType>
+    <CountryCode>GR</CountryCode>
+    <NutsCodes>
+      <NutsCode>EL301</NutsCode>
+    </NutsCodes>
+    <PublicationDate>2025-01-15</PublicationDate>
+  </Notice>
+  <Notice>
+    <NoticeId>2025-TED-BULK-002</NoticeId>
+    <PublicationNumber>222222-2025</PublicationNumber>
+    <Title>Προμήθεια εξοπλισμού πληροφορικής</Title>
+    <Buyer>
+      <Name>ΥΠΟΥΡΓΕΙΟ ΔΟΚΙΜΗΣ</Name>
+      <VatNumber>094111111</VatNumber>
+      <CountryCode>GR</CountryCode>
+    </Buyer>
+    <CpvCodes>
+      <CpvCode>30200000</CpvCode>
+    </CpvCodes>
+    <EstimatedValue>50000.00</EstimatedValue>
+    <ProcedureType>NEGOTIATED</ProcedureType>
+    <CountryCode>GR</CountryCode>
+    <PublicationDate>2025-01-16</PublicationDate>
+  </Notice>
+</TedExport>

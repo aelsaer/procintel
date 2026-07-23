@@ -1,0 +1,16 @@
+{
+  "_fixture_note": "SYNTHETIC test data, not a captured real ΑΝΑΠΤΥΞΗ.gov.gr response — field names are an unconfirmed best-effort guess (see services/ingestion/connectors/anaptyxi/normalize.py). misCode matches contractRelatedAda/publicFundingRefOps='OPS-0001' on the first record in tests/fixtures/khmdhs/contract_sample.json so integration tests can link them.",
+  "misCode": "OPS-0001",
+  "programCode": "ΕΠΑνΕΚ",
+  "title": "Ψηφιακός Μετασχηματισμός Δήμου Δοκιμής",
+  "beneficiary": {
+    "vatNumber": "094259216",
+    "name": "ΔΗΜΟΣ ΔΟΚΙΜΗΣ"
+  },
+  "budget": 500000.00,
+  "contractedAmount": 300000.00,
+  "paidAmount": 100000.00,
+  "startDate": "2023-01-01",
+  "endDate": "2026-12-31",
+  "statusLabel": "ΣΕ ΕΞΕΛΙΞΗ"
+}

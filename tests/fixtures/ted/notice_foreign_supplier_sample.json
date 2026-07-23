@@ -1,0 +1,15 @@
+{
+  "_fixture_note": "SYNTHETIC test data, not a captured real TED Search API response. Foreign (non-GR) supplier, used to exercise the VIES-trigger path.",
+  "noticeId": "2025-TED-000456",
+  "publicationNumber": "654321-2025",
+  "title": "Προμήθεια εξοπλισμού πληροφορικής",
+  "buyer": {"name": "ΔΗΜΟΣ ΔΟΚΙΜΗΣ", "vatNumber": "094259216", "countryCode": "GR"},
+  "supplier": {"name": "EXAMPLE TECH GMBH", "vatNumber": "DE123456789", "countryCode": "DE"},
+  "cpvCodes": ["30200000"],
+  "estimatedValue": 50000.00,
+  "awardedValue": 48000.00,
+  "procedureType": "OPEN",
+  "countryCode": "GR",
+  "nutsCodes": ["EL301"],
+  "publicationDate": "2025-02-01"
+}
