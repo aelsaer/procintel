@@ -38,6 +38,20 @@ async def delete_index(http_client: httpx.AsyncClient, config: OpenSearchConfig)
     await http_client.delete(f"{config.base_url}/{config.index_name}", auth=_auth(config))
 
 
+async def delete_all_documents(
+    http_client: httpx.AsyncClient,
+    config: OpenSearchConfig,
+) -> int:
+    response = await http_client.post(
+        f"{config.base_url}/{config.index_name}/_delete_by_query",
+        params={"conflicts": "proceed", "refresh": "true"},
+        json={"query": {"match_all": {}}},
+        auth=_auth(config),
+    )
+    response.raise_for_status()
+    return int(response.json().get("deleted", 0))
+
+
 async def bulk_index(http_client: httpx.AsyncClient, config: OpenSearchConfig, documents: list[dict]) -> dict:
     """`documents` must each carry an `id` field — used as the OpenSearch
     `_id` so re-indexing the same act is an upsert, not a duplicate."""

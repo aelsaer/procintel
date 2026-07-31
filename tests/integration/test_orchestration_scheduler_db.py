@@ -132,6 +132,114 @@ async def test_a_failing_run_window_records_the_error_without_advancing_the_curs
         await engine.dispose()
 
 
+async def test_partial_core_failure_does_not_advance_cursor_but_preserves_failure_details():
+    async def partial_run_window(conn, date_from, date_to):
+        return {
+            "pages_fetched": 1,
+            "records_fetched": 3,
+            "records_upserted": 2,
+            "records_failed": 1,
+            "record_failures": [
+                {"adam": "BAD-ADAM", "stage": "ingest", "error": "IntegrityError"}
+            ],
+        }
+
+    job = ScheduledJob(
+        source_system="TEST_SOURCE_PARTIAL_CORE",
+        resource_type="ALL",
+        partition_key="GLOBAL",
+        window_days=2,
+        backfill_start_date=date(2026, 7, 28),
+        min_interval=timedelta(hours=1),
+        run_window=partial_run_window,
+    )
+    engine = create_async_engine(_asyncpg_url())
+    try:
+        async with engine.connect() as conn:
+            await _cleanup(conn, job.source_system)
+            try:
+                outcomes = await run_due_jobs(
+                    conn,
+                    [job],
+                    now=datetime(2026, 7, 29, tzinfo=timezone.utc),
+                )
+                assert outcomes[0].ran is True
+                cursor_row = (
+                    await conn.execute(
+                        select(source_cursors).where(
+                            source_cursors.c.source_system == job.source_system
+                        )
+                    )
+                ).one()
+                assert cursor_row.cursor_value == {}
+                assert cursor_row.last_success_at is None
+                assert cursor_row.last_error["core_failures"] == 1
+
+                run_row = (
+                    await conn.execute(
+                        select(connector_runs).where(
+                            connector_runs.c.source_system == job.source_system
+                        )
+                    )
+                ).one()
+                assert run_row.status == "PARTIAL"
+                assert run_row.error["failures"][0]["adam"] == "BAD-ADAM"
+            finally:
+                await _cleanup(conn, job.source_system)
+    finally:
+        await engine.dispose()
+
+
+async def test_enrichment_only_partial_advances_primary_source_cursor():
+    async def enrichment_partial_run_window(conn, date_from, date_to):
+        return {
+            "pages_fetched": 1,
+            "records_fetched": 2,
+            "records_upserted": 2,
+            "records_failed": 0,
+            "enrichment_failed": 1,
+            "enrichment_failures": [
+                {"provider": "MEF", "adam": "A1", "error": "ReadTimeout"}
+            ],
+        }
+
+    job = ScheduledJob(
+        source_system="TEST_SOURCE_PARTIAL_ENRICHMENT",
+        resource_type="ALL",
+        partition_key="GLOBAL",
+        window_days=2,
+        backfill_start_date=date(2026, 7, 28),
+        min_interval=timedelta(hours=1),
+        run_window=enrichment_partial_run_window,
+    )
+    engine = create_async_engine(_asyncpg_url())
+    try:
+        async with engine.connect() as conn:
+            await _cleanup(conn, job.source_system)
+            try:
+                await run_due_jobs(
+                    conn,
+                    [job],
+                    now=datetime(2026, 7, 29, tzinfo=timezone.utc),
+                )
+                cursor_row = (
+                    await conn.execute(
+                        select(source_cursors).where(
+                            source_cursors.c.source_system == job.source_system
+                        )
+                    )
+                ).one()
+                assert cursor_row.cursor_value == {
+                    "last_ingested_date": "2026-07-29"
+                }
+                assert cursor_row.last_success_at is not None
+                assert cursor_row.last_error["enrichment_failures"] == 1
+            finally:
+                await _cleanup(conn, job.source_system)
+    finally:
+        await engine.dispose()
+
+
 async def test_concurrent_schedulers_do_not_double_run_the_same_partition():
     """Two connections racing for the same (source, resource, partition):
     the second must see the advisory lock held and skip, not run

@@ -69,13 +69,13 @@ back out. Confidence tiers reference the hierarchy in `description.txt` §8.
 | Raw field | Canonical target | Notes |
 |---|---|---|
 | κωδικός ΟΠΣ/MIS | `funding_projects.mis_ops_code` | join hierarchy: exact MIS (only if field semantics confirmed) → ΑΦΜ+title+period → ΑΔΑ/ΑΔΑΜ in metadata → fuzzy+review (§19.2) |
-| Πράξη / Υποέργο | `funding_projects` row (title distinguishes project vs. subproject) | **Known simplification**: subprojects are not a separate table in v1; add `funding_subprojects` if per-υποέργο granularity becomes necessary |
+| Πράξη / Υποέργο | `funding_projects` / `funding_subprojects` | Full project detail is hydrated before persistence |
 | δικαιούχος | `funding_projects.beneficiary_id` → `entities` | |
 | προϋπολογισμός | `funding_projects.budget` | |
 | συμβάσεις | `funding_links` → `procurement_acts` | |
-| πληρωμές | `funding_projects.paid_amount` (aggregate) | **Known simplification**: per-payment ΑΝΑΠΤΥΞΗ records collapse into the aggregate; add a `funding_payments` table if per-payment detail is needed |
-| ανάδοχοι | `act_parties` on the linked `procurement_acts` (same `entities` as ΚΗΜΔΗΣ contractor) | entity resolution creates a new entity if not already seen via ΚΗΜΔΗΣ |
-| περιφέρειες | via linked `act_locations` or beneficiary `entity_addresses` | no separate region column on `funding_projects` |
+| πληρωμές | `funding_projects.paid_amount`, `funding_subprojects.paid_amount`, `funding_payment_snapshots` | Aggregate project/subproject execution snapshots, not bank transactions |
+| ανάδοχοι | `funding_project_bodies`, `funding_project_participations` | Exact AFM query proves project participation; ambiguous free-text body names remain unresolved |
+| περιφέρειες | `funding_geographic_allocations` | Region, prefecture, municipality, amount and percentage where exposed |
 | ημερομηνίες, κατάσταση/πρόοδος | `funding_projects.{start_date,end_date,status}` | separate adapters per period (`program_period`), one schema (§19.3) |
 
 ## Μητρώο Επιχορηγούμενων Φορέων / ΜΕΦ (spec §3.5, §20)

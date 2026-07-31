@@ -3,12 +3,10 @@ denominator parsing (§22.2's "πληθυσμός ανά δήμο ή NUTS" and "
 οικονομικοί δείκτες" datasets — both feed `geo_denominators`, §22.3's
 per-capita/per-indicator metrics).
 
-This is one of several planned per-dataset adapters (administrative
-boundaries/schools/hospitals are the others — see `boundaries.py` and
-`facilities.py`) — each needs its own field mapping the same way this one
-does. Column names below are a best-effort guess — no sample file from
-data.gov.gr was available at build time; fix here once one is confirmed
-(docs/source-contracts/ckan-datagov.md).
+Administrative-boundary and facility adapters live in `boundaries.py` and
+`facilities.py`. Every configured CSV is live-schema-validated before this
+normalizer runs; custom metric value columns are retained in the dataset
+registry so scheduled refreshes use the same mapping.
 
 `normalize_metric_csv()` is the generic entry point: population and
 regional-indicator files share the exact same shape (a geography code column

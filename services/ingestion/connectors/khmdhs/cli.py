@@ -210,6 +210,7 @@ async def _run_backfill(
                 resource=resource,
                 adam=result.adam_normalized,
                 act_id=result.act_upsert.act_id,
+                rate_limiter=client.request_rate_limiter,
             )
             if attachment is not None:
                 print(
@@ -258,67 +259,72 @@ async def _run_backfill(
                     )
                     if search_act_id is not None:
                         print(f"  linked Διαύγεια decision via search -> act {result.act_upsert.act_id}")
-        if (
-            gemi_provider is not None
-            and result.act_upsert is not None
-            and result.act_upsert.contractor_entity_id is not None
-        ):
-            snapshot_result = await resolve_company_snapshot(
-                conn,
-                provider=gemi_provider,
-                raw_store=raw_store,
-                afm_normalized=result.act_upsert.contractor_afm_normalized,
-                entity_id=result.act_upsert.contractor_entity_id,
-            )
-            if snapshot_result.wrote_new_snapshot:
-                print(f"  refreshed ΓΕΜΗ snapshot for {result.act_upsert.contractor_afm_normalized}")
-                status_fired = await evaluate_company_status_change_and_fire(
+        contractor_entities = (
+            result.act_upsert.contractor_entities
+            if result.act_upsert is not None
+            else []
+        )
+        if gemi_provider is not None:
+            for contractor_entity_id, contractor_afm in contractor_entities:
+                if not contractor_afm:
+                    continue
+                snapshot_result = await resolve_company_snapshot(
                     conn,
-                    entity_id=result.act_upsert.contractor_entity_id,
-                    old_status=snapshot_result.old_status,
-                    new_status=snapshot_result.new_status,
-                    delivery_channel=delivery_channel,
+                    provider=gemi_provider,
+                    raw_store=raw_store,
+                    afm_normalized=contractor_afm,
+                    entity_id=contractor_entity_id,
                 )
-                if status_fired:
-                    print(
-                        f"  fired {status_fired} company.status_changed alert(s) "
-                        f"({snapshot_result.old_status} -> {snapshot_result.new_status})"
+                if snapshot_result.wrote_new_snapshot:
+                    print(f"  refreshed ΓΕΜΗ snapshot for {contractor_afm}")
+                    status_fired = await evaluate_company_status_change_and_fire(
+                        conn,
+                        entity_id=contractor_entity_id,
+                        old_status=snapshot_result.old_status,
+                        new_status=snapshot_result.new_status,
+                        delivery_channel=delivery_channel,
                     )
+                    if status_fired:
+                        print(
+                            f"  fired {status_fired} company.status_changed alert(s) "
+                            f"({snapshot_result.old_status} -> {snapshot_result.new_status})"
+                        )
         if anaptyxi_client is not None and result.act_upsert is not None and (
-            result.act_upsert.funding_ref_candidates or result.act_upsert.contractor_afm_normalized
+            result.act_upsert.funding_ref_candidates
+            or any(afm for _, afm in contractor_entities)
         ):
             act_details = await _fetch_act_details_for_anaptyxi(conn, result.act_upsert.act_id)
-            funding_project_id = await resolve_funding_link_for_act(
-                conn,
-                client=anaptyxi_client,
-                raw_store=raw_store,
-                act_id=result.act_upsert.act_id,
-                mis_candidates=result.act_upsert.funding_ref_candidates,
-                beneficiary_afm=act_details["buyer_afm"],
-                contractor_afm=result.act_upsert.contractor_afm_normalized,
-                act_title=act_details["title"],
-                act_date=act_details["date"],
-                related_ada_candidates=result.act_upsert.related_ada,
-                act_amount=act_details["amount"],
-                act_region=act_details["region"],
-            )
-            if funding_project_id is not None:
-                print(f"  linked ΑΝΑΠΤΥΞΗ funding project -> act {result.act_upsert.act_id}")
-        if (
-            mef_client is not None
-            and result.act_upsert is not None
-            and result.act_upsert.contractor_entity_id is not None
-            and result.act_upsert.contractor_afm_normalized
-        ):
-            ingested = await resolve_expenses_for_contractor(
-                conn,
-                client=mef_client,
-                raw_store=raw_store,
-                contractor_entity_id=result.act_upsert.contractor_entity_id,
-                afm_normalized=result.act_upsert.contractor_afm_normalized,
-            )
-            if ingested:
-                print(f"  ingested {ingested} ΜΕΦ expense(s) for {result.act_upsert.contractor_afm_normalized}")
+            contractor_afms = [afm for _, afm in contractor_entities if afm] or [None]
+            for contractor_afm in contractor_afms:
+                funding_project_id = await resolve_funding_link_for_act(
+                    conn,
+                    client=anaptyxi_client,
+                    raw_store=raw_store,
+                    act_id=result.act_upsert.act_id,
+                    mis_candidates=result.act_upsert.funding_ref_candidates,
+                    beneficiary_afm=act_details["buyer_afm"],
+                    contractor_afm=contractor_afm,
+                    act_title=act_details["title"],
+                    act_date=act_details["date"],
+                    related_ada_candidates=result.act_upsert.related_ada,
+                    act_amount=act_details["amount"],
+                    act_region=act_details["region"],
+                )
+                if funding_project_id is not None:
+                    print(f"  linked ΑΝΑΠΤΥΞΗ funding project -> act {result.act_upsert.act_id}")
+        if mef_client is not None:
+            for contractor_entity_id, contractor_afm in contractor_entities:
+                if not contractor_afm:
+                    continue
+                ingested = await resolve_expenses_for_contractor(
+                    conn,
+                    client=mef_client,
+                    raw_store=raw_store,
+                    contractor_entity_id=contractor_entity_id,
+                    afm_normalized=contractor_afm,
+                )
+                if ingested:
+                    print(f"  ingested {ingested} ΜΕΦ expense(s) for {contractor_afm}")
         if opensearch_http_client is not None and opensearch_config is not None and result.act_upsert is not None:
             try:
                 await index_single_act(conn, opensearch_http_client, opensearch_config, result.act_upsert.act_id)

@@ -9,11 +9,17 @@ derived metric must show coverage and last-updated date. See
 
 ## Status: implemented
 
-- `MefClient` calls the published `/api/spendings` endpoint with
-  `searchTerm`, `limit`, and `offset`, then exact-filters `issuer_afm`.
+- `MefClient` calls the published `/api/spendings` endpoint with mandatory
+  `year`, `searchTerm`, `limit`, and `offset`, then exact-filters
+  `issuer_afm`. `MEF_LOOKUP_YEARS` can provide a comma-separated historical
+  recovery scope; the safe daily default is the current UTC year.
 - The normalizer handles the API's dotted organization fields, Greek
   `DD/MM/YYYY` dates, and Greek-formatted decimal amounts.
 - Contractor lookups are rate limited, paginated, and cached per ΑΦΜ for
   one day before tiered linkage is attempted.
 - `MEF_API_BASE_URL` is only an override; the public production base is the
   default.
+- The provider's populated 2025 partition currently reports 351,753 rows,
+  while non-zero offsets and year+AFM searches can time out. Such partitions
+  remain retryable and visible in coverage; the worker never falls back to
+  an unbounded all-years query.

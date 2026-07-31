@@ -84,7 +84,10 @@ async def _seed_origin_act(conn) -> uuid.UUID:
 
 @respx.mock
 async def test_search_match_links_with_search_confidence_not_exact_ada(tmp_path):
-    respx.get(f"{DIAVGEIA_BASE_URL}/decisions/search").mock(
+    respx.get(
+        f"{DIAVGEIA_BASE_URL}/search",
+        params={"org": BUYER_NAME, "subject": ORIGIN_TITLE},
+    ).mock(
         return_value=httpx.Response(200, json={"results": [SEARCH_MATCH_BODY | {"ada": SEARCH_MATCH_ADA}]})
     )
     respx.get(f"{DIAVGEIA_BASE_URL}/decisions/{SEARCH_MATCH_ADA}").mock(
@@ -134,7 +137,10 @@ async def test_search_match_links_with_search_confidence_not_exact_ada(tmp_path)
 @respx.mock
 async def test_weak_organization_match_does_not_link(tmp_path):
     mismatched_body = SEARCH_MATCH_BODY | {"organizationLabel": "ΤΕΛΕΙΩΣ ΑΣΧΕΤΟΣ ΦΟΡΕΑΣ", "ada": SEARCH_MATCH_ADA}
-    respx.get(f"{DIAVGEIA_BASE_URL}/decisions/search").mock(
+    respx.get(
+        f"{DIAVGEIA_BASE_URL}/search",
+        params={"org": BUYER_NAME, "subject": ORIGIN_TITLE},
+    ).mock(
         return_value=httpx.Response(200, json={"results": [mismatched_body]})
     )
 
@@ -162,20 +168,25 @@ async def test_weak_organization_match_does_not_link(tmp_path):
 @respx.mock
 async def test_advanced_search_disambiguates_when_protocol_number_given(tmp_path):
     second_candidate = SEARCH_MATCH_BODY | {"ada": "8Y8Y888888-YYY", "protocolNumber": "88888/2025"}
-    respx.get(f"{DIAVGEIA_BASE_URL}/decisions/search").mock(
+    # Register the narrower matcher first: respx query-parameter matching is
+    # subset-based, so the generic route would otherwise consume both calls.
+    respx.get(
+        f"{DIAVGEIA_BASE_URL}/search",
+        params={
+            "org": BUYER_NAME,
+            "subject": ORIGIN_TITLE,
+            "protocol": SEARCH_MATCH_BODY["protocolNumber"],
+        },
+    ).mock(return_value=httpx.Response(200, json={"results": [SEARCH_MATCH_BODY | {"ada": SEARCH_MATCH_ADA}]}))
+    respx.get(
+        f"{DIAVGEIA_BASE_URL}/search",
+        params={"org": BUYER_NAME, "subject": ORIGIN_TITLE},
+    ).mock(
         return_value=httpx.Response(
             200,
             json={"results": [SEARCH_MATCH_BODY | {"ada": SEARCH_MATCH_ADA}, second_candidate]},
         )
     )
-    respx.get(
-        f"{DIAVGEIA_BASE_URL}/decisions/search/advanced",
-        params={
-            "organization": BUYER_NAME,
-            "q": ORIGIN_TITLE,
-            "protocolNumber": SEARCH_MATCH_BODY["protocolNumber"],
-        },
-    ).mock(return_value=httpx.Response(200, json={"results": [SEARCH_MATCH_BODY | {"ada": SEARCH_MATCH_ADA}]}))
     respx.get(f"{DIAVGEIA_BASE_URL}/decisions/{SEARCH_MATCH_ADA}").mock(
         return_value=httpx.Response(200, json=SEARCH_MATCH_BODY)
     )
@@ -214,7 +225,10 @@ async def test_advanced_search_disambiguates_when_protocol_number_given(tmp_path
 @respx.mock
 async def test_multiple_plausible_candidates_is_left_unlinked(tmp_path):
     second_candidate = SEARCH_MATCH_BODY | {"ada": "8Y8Y888888-YYY"}
-    respx.get(f"{DIAVGEIA_BASE_URL}/decisions/search").mock(
+    respx.get(
+        f"{DIAVGEIA_BASE_URL}/search",
+        params={"org": BUYER_NAME, "subject": ORIGIN_TITLE},
+    ).mock(
         return_value=httpx.Response(
             200,
             json={

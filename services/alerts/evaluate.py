@@ -172,6 +172,33 @@ async def _fire_event(
 
 
 def rule_matches(filters: dict[str, Any], context: dict[str, Any]) -> bool:
+    excluded_cpv_prefixes = [
+        str(v)
+        for v in (
+            _as_list(filters.get("excluded_cpv_prefix"))
+            + _as_list(filters.get("excluded_cpv_prefixes"))
+        )
+        if str(v).strip()
+    ]
+    if excluded_cpv_prefixes and any(
+        str(code).startswith(prefix)
+        for code in context.get("cpv_codes", [])
+        for prefix in excluded_cpv_prefixes
+    ):
+        return False
+
+    title = _normalize_text(context.get("title"))
+    excluded_keywords = [
+        _normalize_text(str(v))
+        for v in (
+            _as_list(filters.get("excluded_keyword"))
+            + _as_list(filters.get("excluded_keywords"))
+        )
+        if str(v).strip()
+    ]
+    if any(_keyword_matches(keyword, title) for keyword in excluded_keywords):
+        return False
+
     cpv_prefixes = [str(v) for v in (_as_list(filters.get("cpv_prefix")) + _as_list(filters.get("cpv_prefixes")))]
     cpv_matches = bool(cpv_prefixes) and any(
         str(c).startswith(prefix) for c in context.get("cpv_codes", []) for prefix in cpv_prefixes
@@ -191,7 +218,6 @@ def rule_matches(filters: dict[str, Any], context: dict[str, Any]) -> bool:
         return False
 
     keywords = [_normalize_text(str(v)) for v in (_as_list(filters.get("keyword")) + _as_list(filters.get("keywords")))]
-    title = _normalize_text(context.get("title"))
     keyword_matches = bool(keywords) and any(_keyword_matches(keyword, title) for keyword in keywords)
     taxonomy_mode = str(filters.get("taxonomy_match_mode") or "").upper()
     if taxonomy_mode == "KEYWORD_REQUIRED":

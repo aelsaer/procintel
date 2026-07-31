@@ -8,7 +8,13 @@ import httpx
 import pytest
 import respx
 
-from services.search_index.client import bulk_index, create_index, index_exists, search
+from services.search_index.client import (
+    bulk_index,
+    create_index,
+    delete_all_documents,
+    index_exists,
+    search,
+)
 from services.search_index.config import OpenSearchConfig
 
 BASE_URL = "https://opensearch.example.test"
@@ -46,6 +52,20 @@ async def test_create_index_raises_on_failure():
     with pytest.raises(RuntimeError):
         async with httpx.AsyncClient() as client:
             await create_index(client, _config(), {})
+
+
+@respx.mock
+async def test_delete_all_documents_uses_match_all_and_refreshes():
+    route = respx.post(
+        f"{BASE_URL}/procurement_acts/_delete_by_query",
+        params={"conflicts": "proceed", "refresh": "true"},
+    ).mock(return_value=httpx.Response(200, json={"deleted": 7}))
+    async with httpx.AsyncClient() as client:
+        deleted = await delete_all_documents(client, _config())
+    assert deleted == 7
+    assert json.loads(route.calls[0].request.content) == {
+        "query": {"match_all": {}}
+    }
 
 
 @respx.mock

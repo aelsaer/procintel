@@ -85,6 +85,7 @@ class CompetitorBreakdownResponse(BaseModel):
 
 
 class CompetitorActivityResponse(BaseModel):
+    activity_id: str
     process_id: str
     public_id: str
     title: str | None = None
@@ -641,27 +642,56 @@ async def get_competitor_profile(
         await conn.execute(
             sa.text(
                 """
-                WITH activity AS (
-                    SELECT DISTINCT p.id AS process_id, p.public_id, p.title, 'WINNER'::TEXT AS role,
+                WITH winner_activity AS (
+                    SELECT a.id AS activity_id, p.id AS process_id, p.public_id, p.title,
+                           'WINNER'::TEXT AS role,
                            'OFFICIAL_SOURCE'::TEXT AS evidence_level,
                            COALESCE(a.decision_date, a.publication_date, a.submission_date) AS event_date,
                            COALESCE(ap.amount, a.amount_gross, a.amount_net) AS value,
-                           buyer.canonical_name AS buyer_name
+                           buyer.canonical_name AS buyer_name,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY p.id
+                               ORDER BY
+                                   COALESCE(a.decision_date, a.publication_date, a.submission_date) DESC NULLS LAST,
+                                   COALESCE(ap.amount, a.amount_gross, a.amount_net) DESC NULLS LAST,
+                                   a.id DESC
+                           ) AS activity_rank
                     FROM act_parties ap JOIN procurement_acts a ON a.id = ap.act_id
                     JOIN procurement_processes p ON p.id = a.process_id
                     LEFT JOIN entities buyer ON buyer.id = p.buyer_entity_id
                     WHERE ap.entity_id = :cid AND ap.party_role IN ('SUPPLIER', 'CONTRACTOR')
-                    UNION ALL
-                    SELECT p.id, p.public_id, p.title, pp.participation_role, pp.evidence_type,
-                           COALESCE(a.decision_date, a.publication_date, a.submission_date),
-                           COALESCE(a.amount_gross, a.amount_net), buyer.canonical_name
+                ), participation_activity AS (
+                    SELECT pp.id AS activity_id, p.id AS process_id, p.public_id, p.title,
+                           pp.participation_role AS role, pp.evidence_type AS evidence_level,
+                           COALESCE(a.decision_date, a.publication_date, a.submission_date) AS event_date,
+                           COALESCE(a.amount_gross, a.amount_net) AS value,
+                           buyer.canonical_name AS buyer_name,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY p.id, pp.participation_role
+                               ORDER BY
+                                   COALESCE(a.decision_date, a.publication_date, a.submission_date) DESC NULLS LAST,
+                                   pp.observed_at DESC,
+                                   pp.id DESC
+                           ) AS activity_rank
                     FROM process_participations pp
                     JOIN procurement_processes p ON p.id = pp.process_id
                     LEFT JOIN procurement_acts a ON a.id = pp.act_id
                     LEFT JOIN entities buyer ON buyer.id = p.buyer_entity_id
                     WHERE pp.entity_id = :cid AND pp.participation_role <> 'WINNER'
+                ), activity AS (
+                    SELECT activity_id, process_id, public_id, title, role, evidence_level,
+                           event_date, value, buyer_name
+                    FROM winner_activity
+                    WHERE activity_rank = 1
+                    UNION ALL
+                    SELECT activity_id, process_id, public_id, title, role, evidence_level,
+                           event_date, value, buyer_name
+                    FROM participation_activity
+                    WHERE activity_rank = 1
                 )
-                SELECT * FROM activity ORDER BY event_date DESC NULLS LAST LIMIT 12
+                SELECT * FROM activity
+                ORDER BY event_date DESC NULLS LAST, process_id, role
+                LIMIT 12
                 """
             ),
             {"cid": cid},
@@ -687,6 +717,7 @@ async def get_competitor_profile(
         regions=await load_breakdown(breakdown_sql["regions"]),
         recent_activity=[
             CompetitorActivityResponse(
+                activity_id=str(row.activity_id),
                 process_id=str(row.process_id),
                 public_id=row.public_id,
                 title=row.title,

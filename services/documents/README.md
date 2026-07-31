@@ -4,12 +4,11 @@ Document pipeline (spec §23/§24): download → MIME validation → SHA-256 →
 antivirus scan → original storage → text-layer detection → extraction →
 OCR only when required → page segmentation → entity/field extraction →
 indexing → evidence references (`field_provenance`, the data behind the
-§30.4 "evidence drawer"). LLM use is limited to summarization/QA/
-classification suggestions — never the sole authoritative source for
-amounts, dates, legal status or awarded parties (§23.5); **no LLM
-integration exists in this codebase yet** — deliberately not started
-without a real provider/cost decision, and none of the extraction targets
-below need one to be useful.
+§30.4 evidence drawer). LLM use is limited to grounded summarization/QA/
+classification suggestions and never becomes the sole authoritative source
+for amounts, dates, legal status or awarded parties (§23.5). The optional
+Responses-compatible provider is isolated in `services/intelligence/llm.py`;
+without credentials, the endpoints use deterministic extractive fallbacks.
 
 ## Status: full pipeline implemented and wired to ingestion
 
@@ -18,8 +17,8 @@ below need one to be useful.
 | `config.py` | `DocumentPipelineConfig` — every numeric guard from §23.2 (max file size, download timeout, decompression-bomb pixel cap, max pages, OCR language/PSM/OEM/timeout) |
 | `download.py` | Streamed download with the size cap enforced *while streaming*, not after buffering the whole response |
 | `mime.py` | Magic-byte MIME sniffing — never trusts a `Content-Type` header or URL extension |
-| `antivirus.py` | `AntivirusScanner` Protocol + `NoOpAntivirusScanner` (mirrors the `DeliveryChannel`/`RawStore` pattern) |
-| `clamav.py` | `ClamdAntivirusScanner` — a real scanner, the `clamd` daemon's INSTREAM wire protocol over `CLAMD_HOST`/`CLAMD_PORT` or `CLAMD_SOCKET_PATH`. Not the default (no daemon reachable in this sandbox); a pipeline caller opts in explicitly |
+| `antivirus.py` | `AntivirusScanner` Protocol + environment-aware factory. Production fails closed unless ClamAV is configured; local/test environments may explicitly use the no-op scanner |
+| `clamav.py` | `ClamdAntivirusScanner` — the `clamd` daemon's INSTREAM wire protocol over `CLAMD_HOST`/`CLAMD_PORT` or `CLAMD_SOCKET_PATH` |
 | `storage.py` | `DocumentBlobStore` Protocol + `LocalFilesystemDocumentBlobStore` — content-addressed by SHA-256, separate from `packages/source_clients/raw_store.py` (that one lays out dated JSON ingestion partitions, not binary blobs) |
 | `pdf_text.py` | `pypdfium2`-based text-layer detection/extraction and page rasterization for OCR fallback |
 | `ocr.py` | Tesseract OCR via `subprocess` (the system `tesseract` CLI, not the `pytesseract`/`tesserocr` bindings) — see module docstring for why |
@@ -38,19 +37,15 @@ below need one to be useful.
   `scripts/backfill_documents.py`; `khmdhs/cli.py backfill
   --with-documents` processes both ΚΗΜΔΗΣ attachments and linked Διαύγεια
   PDFs.
-- No `clamd` daemon is actually reachable in this sandbox to run
-  `ClamdAntivirusScanner` against (not installed, no passwordless `sudo`
-  to install one) — the real protocol client exists and is tested (a fake
-  in-process server for the wire protocol, a `CLAMD_HOST`-gated
-  integration test for the real thing), but `process_document()` still
-  defaults to `NoOpAntivirusScanner` unless a caller passes the real one.
-- Tender summaries are deterministic and evidence-bound: canonical fields,
-  curated provider fields and available document text are used by
-  `services/intelligence/tender_brief.py`. An optional generative
-  summarization provider is still intentionally unconfigured.
-- `document_pages.text_search` (generated `tsvector` column, `13_document_pages.sql`)
-  has no API endpoint querying it yet — the storage/indexing side is done,
-  nothing in `apps/api` surfaces full-text document search.
+- The production Compose stack includes ClamAV and configures the scheduler
+  with `CLAMD_HOST=clamav`. The protocol client is also covered by a fake
+  in-process server and an optional live-daemon integration test.
+- Tender summaries remain deterministic and evidence-bound through
+  `services/intelligence/tender_brief.py`.
+- `GET /v1/document-intelligence/processes/{process_id}/search` queries the
+  page-level PostgreSQL GIN index. The adjacent `ask` endpoint returns cited
+  answers, and `extract-requirements` writes evidence-linked requirements
+  into the bid workspace.
 
 ## Greek OCR
 

@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncConnection
+from services.data_quality.completeness import collect_source_completeness
 from services.search_index.lexical import query_concept_pattern
 
 from ..db import get_conn
@@ -136,9 +137,45 @@ class ConnectorRunCoverage(BaseModel):
     status: str
     records_fetched: int
     records_upserted: int
+    records_unchanged: int = 0
+    records_failed: int = 0
+    enrichment_succeeded: int = 0
+    enrichment_failed: int = 0
+    enrichment_deferred: int = 0
     started_at: datetime
     finished_at: datetime | None = None
     error: dict | None = None
+
+
+class DatasetValidationCoverage(BaseModel):
+    dataset_name: str
+    adapter_name: str
+    resource_url: str
+    detected_format: str | None = None
+    columns: list[str]
+    status: str
+    errors: list
+    validated_at: datetime
+
+
+class SourceCompletenessResponse(BaseModel):
+    source_system: str
+    status: str
+    score: float
+    claim_level: str
+    expected_basis: str
+    observed_records: int
+    expected_records: int | None = None
+    canonical_records: int
+    records_with_documents: int
+    records_with_parties: int
+    records_with_locations: int
+    failed_records: int
+    pending_enrichments: int
+    freshness_seconds: int | None = None
+    freshness_target_seconds: int
+    dimensions: dict[str, float | None]
+    findings: list[dict]
 
 
 class DataCoverageResponse(BaseModel):
@@ -147,6 +184,8 @@ class DataCoverageResponse(BaseModel):
     sources: list[SourceCoverage]
     connections: list[DataConnectionCoverage]
     recent_runs: list[ConnectorRunCoverage]
+    dataset_validations: list[DatasetValidationCoverage]
+    assessments: list[SourceCompletenessResponse]
 
 
 GREEK_NUTS_2_NAMES = {
@@ -295,8 +334,20 @@ async def data_coverage(conn: AsyncConnection = Depends(get_conn)) -> DataCovera
           (SELECT COUNT(*) FROM act_links) AS act_links,
           (SELECT COUNT(*) FROM documents) AS documents,
           (SELECT COUNT(*) FROM field_provenance) AS field_references,
+          (SELECT COUNT(*) FROM external_dataset_validations) AS dataset_validations,
           (SELECT COUNT(*) FROM act_locations WHERE geom IS NOT NULL) AS precise_locations,
           (SELECT COUNT(*) FROM opportunity_scores) AS opportunity_scores
+          ,(SELECT COUNT(*) FROM enrichment_jobs
+              WHERE status IN ('QUEUED', 'FAILED', 'BLOCKED_CONFIG')) AS pending_enrichments
+          ,(SELECT COUNT(*) FROM enrichment_jobs
+              WHERE status='BLOCKED_CONFIG') AS blocked_enrichments
+          ,(SELECT COUNT(*) FROM data_quality_issues
+              WHERE status IN ('OPEN', 'ACKNOWLEDGED')) AS open_data_quality_issues
+          ,(SELECT COUNT(*) FROM nuts_areas
+              WHERE classification_version='NUTS-2024') AS nuts_areas
+          ,(SELECT COUNT(DISTINCT postal_code) FROM postal_code_nuts
+              WHERE country_code='GR'
+                AND classification_version='NUTS-2024') AS postal_codes
         """
     ))).mappings().one()
     totals = {key: int(value or 0) for key, value in totals_row.items()}
@@ -315,6 +366,17 @@ async def data_coverage(conn: AsyncConnection = Depends(get_conn)) -> DataCovera
           (SELECT COUNT(*) FROM mef_expenses WHERE linked_act_id IS NOT NULL) AS mef_links,
           (SELECT COUNT(*) FROM documents WHERE act_id IS NOT NULL) AS document_links,
           (SELECT COUNT(*) FROM act_locations WHERE geom IS NOT NULL) AS geocoding_links
+          ,(SELECT COUNT(*) FROM administrative_boundaries) AS ckan_boundaries
+          ,(SELECT COUNT(*) FROM nuts_areas
+              WHERE classification_version='NUTS-2024') AS inspire_nuts
+          ,(SELECT COUNT(*) FROM postal_code_nuts
+              WHERE country_code='GR'
+                AND classification_version='NUTS-2024') AS inspire_postal_nuts
+          ,(SELECT COUNT(*) FROM spatial_service_capabilities
+              WHERE catalog_source='KTIMATOLOGIO_INSPIRE'
+                AND status='AVAILABLE') AS ktimatologio_services
+          ,(SELECT COUNT(*) FROM spatial_service_capabilities
+              WHERE catalog_source='KTIMATOLOGIO_INSPIRE') AS ktimatologio_checks
         """
     ))).mappings().one()
 
@@ -335,22 +397,65 @@ async def data_coverage(conn: AsyncConnection = Depends(get_conn)) -> DataCovera
         connection("MEF", "KHMDHS", "EXPENSE_FOR", links["mef_links"], source_counts.get("MEF", 0)),
         connection("DOCUMENTS", "ACTS", "EVIDENCES", links["document_links"], source_counts.get("DOCUMENTS", 0)),
         connection("GEOCODING", "ACTS", "LOCATES", links["geocoding_links"], totals["acts"]),
+        connection("CKAN", "GEOCODING", "PROVIDES_BOUNDARIES", links["ckan_boundaries"], source_counts.get("CKAN", 0)),
+        connection("INSPIRE_GISCO", "GEOCODING", "NUTS_HIERARCHY", links["inspire_nuts"], source_counts.get("INSPIRE", 0)),
+        connection("INSPIRE_GISCO", "GEOCODING", "POSTAL_TO_NUTS", links["inspire_postal_nuts"], source_counts.get("INSPIRE", 0)),
+        DataConnectionCoverage(
+            source="KTIMATOLOGIO_INSPIRE",
+            target="GEOCODING",
+            relation="OGC_CAPABILITIES",
+            available_records=links["ktimatologio_checks"],
+            linked_records=links["ktimatologio_services"],
+            status=(
+                "CONNECTED"
+                if links["ktimatologio_services"]
+                else "BLOCKED_UPSTREAM"
+                if links["ktimatologio_checks"]
+                else "NOT_LOADED"
+            ),
+        ),
     ]
 
     run_rows = (await conn.execute(sa.text(
         """
         SELECT source_system, resource_type, partition_key, status,
-               records_fetched, records_upserted, started_at, finished_at, error
+               records_fetched, records_upserted, records_unchanged,
+               records_failed, enrichment_succeeded, enrichment_failed,
+               enrichment_deferred, started_at, finished_at, error
         FROM connector_runs
         ORDER BY started_at DESC
         LIMIT 30
         """
     ))).mappings().all()
+    validation_rows = (await conn.execute(sa.text(
+        """
+        SELECT dataset.title AS dataset_name,validation.adapter_name,
+               validation.resource_url,validation.detected_format,
+               validation.columns,validation.status,validation.errors,
+               validation.validated_at
+        FROM external_dataset_validations validation
+        JOIN external_datasets dataset ON dataset.id=validation.external_dataset_id
+        ORDER BY validation.validated_at DESC LIMIT 50
+        """
+    ))).mappings().all()
     generated_at = (await conn.execute(sa.text("SELECT now()"))).scalar_one()
+    completeness = await collect_source_completeness(conn)
     return DataCoverageResponse(
         generated_at=generated_at, totals=totals, sources=sources,
         connections=connections,
         recent_runs=[ConnectorRunCoverage(**dict(row)) for row in run_rows],
+        dataset_validations=[
+            DatasetValidationCoverage(**dict(row)) for row in validation_rows
+        ],
+        assessments=[
+            SourceCompletenessResponse(
+                **{
+                    **assessment.__dict__,
+                    "findings": list(assessment.findings),
+                }
+            )
+            for assessment in completeness
+        ],
     )
 
 

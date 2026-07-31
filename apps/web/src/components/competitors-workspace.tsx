@@ -217,8 +217,8 @@ export function CompetitorsWorkspace({
         </div>
         <div className="view-heading-actions">
           <div className="segmented-control" aria-label="Χρονικό scope ανταγωνισμού">
-            <button type="button" className={scopeMode === "period" ? "is-active" : ""} onClick={() => { setScopeMode("period"); setSelectedId(null); }}>Διάστημα</button>
-            <button type="button" className={scopeMode === "history" ? "is-active" : ""} onClick={() => { setScopeMode("history"); setSelectedId(null); }}>Ιστορικό</button>
+            <button type="button" className={scopeMode === "history" ? "is-active" : ""} onClick={() => { setScopeMode("history"); setSelectedId(null); }}>Ανάδοχοι market</button>
+            <button type="button" className={scopeMode === "period" ? "is-active" : ""} onClick={() => { setScopeMode("period"); setSelectedId(null); }}>Τρέχον διάστημα</button>
             <button type="button" className={scopeMode === "global" ? "is-active" : ""} onClick={() => { setScopeMode("global"); setSelectedId(null); }}>Όλη η βάση</button>
           </div>
           <button
@@ -245,9 +245,9 @@ export function CompetitorsWorkspace({
         <span>{scopeMode === "global"
           ? "Ρητή διερεύνηση ολόκληρης της φορτωμένης βάσης, χωρίς φίλτρα προφίλ."
           : scopeMode === "history"
-            ? `Ιστορικό cohort · ${data?.scope.cpv_prefixes.length || "Όλα"} CPV · ${data?.scope.keywords.join(", ") || "όλα τα αντικείμενα"}`
+            ? `Ιστορικοί ανάδοχοι και συμμετέχοντες σε αντίστοιχο CPV ή τίτλο · ${data?.scope.cpv_prefixes.length || "Όλα"} CPV · ${data?.scope.keywords.join(", ") || "όλα τα αντικείμενα"}`
             : scopeLabel}</span>
-        <Badge tone={scopeMode === "period" ? "blue" : "amber"}>{scopeMode === "global" ? "Συνολική βάση" : scopeMode === "history" ? "Ιστορικό προφίλ" : "Ενεργό προφίλ"}</Badge>
+        <Badge tone={scopeMode === "history" ? "blue" : "amber"}>{scopeMode === "global" ? "Συνολική βάση" : scopeMode === "history" ? "Ανάδοχοι market" : "Τρέχον διάστημα"}</Badge>
       </div>
 
       {failed && <ErrorState title="Δεν είναι διαθέσιμη η ανάλυση ανταγωνισμού" error={activeDiscovery.query.error} />}
@@ -256,7 +256,7 @@ export function CompetitorsWorkspace({
         <EmptyState
           title={`Δεν βρέθηκαν εταιρείες στο ${scopeMode === "global" ? "φορτωμένο αρχείο" : scopeMode === "history" ? "ιστορικό" : "επιλεγμένο διάστημα"}`}
           detail={scopeMode === "period"
-            ? "Επίλεξε Ιστορικό για το ίδιο CPV/keyword/γεωγραφικό προφίλ χωρίς ημερομηνίες. Δεν προβάλλουμε άσχετη συνολική αγορά."
+            ? "Επίλεξε Ανάδοχοι market για το ίδιο CPV/keyword/γεωγραφικό προφίλ χωρίς ημερομηνίες. Δεν προβάλλουμε άσχετη συνολική αγορά."
             : scopeMode === "history"
               ? "Διεύρυνε CPV, λέξεις-κλειδιά ή περιοχή στο Προφίλ, ή επίλεξε ρητά Όλη η βάση."
               : "Δεν υπάρχουν ακόμη επιβεβαιωμένοι ανάδοχοι ή συμμετέχοντες στο φορτωμένο αρχείο."}
@@ -307,7 +307,7 @@ export function CompetitorsWorkspace({
                 <section className="competitor-activity">
                   <h3><CalendarClock size={15} aria-hidden="true" /> Πρόσφατη δραστηριότητα</h3>
                   {profile.recent_activity.slice(0, 5).map((activity) => (
-                    <Link href={`/processes/${activity.process_id}`} key={`${activity.process_id}-${activity.role}`}>
+                    <Link href={`/processes/${activity.process_id}`} key={activity.activity_id}>
                       <span className={`activity-role role-${activity.role.toLowerCase()}`}>{activity.role === "WINNER" ? <Trophy size={14} /> : <ShieldCheck size={14} />}</span>
                       <span><strong>{activity.title ?? activity.public_id}</strong><small>{activity.buyer_name ?? "Άγνωστος φορέας"} · {formatDate(activity.event_date)}</small></span>
                       <span className="activity-value">{compactCurrency(activity.value)}</span>

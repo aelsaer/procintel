@@ -18,6 +18,8 @@ from packages.auth.jwt_verifier import JwtVerificationError, JwtVerifier
 ISSUER = "https://idp.example.test/"
 AUDIENCE = "procintel-api"
 JWKS_URL = "https://idp.example.test/.well-known/jwks.json"
+DISCOVERY_URL = "https://idp.example.test/.well-known/openid-configuration"
+DISCOVERED_JWKS_URL = "https://idp.example.test/protocol/openid-connect/certs"
 KID = "test-key-1"
 
 
@@ -79,6 +81,53 @@ async def test_verify_a_valid_token_returns_authenticated_user(rsa_keypair, jwks
     assert user.email == "analyst@example.test"
     assert user.role == "ANALYST"
     assert user.tenant_id == "11111111-1111-1111-1111-111111111111"
+
+
+@respx.mock
+async def test_discovers_provider_jwks_uri_when_no_override_is_configured(rsa_keypair, jwks_body):
+    respx.get(DISCOVERY_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"issuer": ISSUER, "jwks_uri": DISCOVERED_JWKS_URL},
+        )
+    )
+    respx.get(DISCOVERED_JWKS_URL).mock(return_value=httpx.Response(200, json=jwks_body))
+    verifier = JwtVerifier(OidcConfig(issuer=ISSUER, audience=AUDIENCE))
+    try:
+        user = await verifier.verify(_make_token(rsa_keypair))
+    finally:
+        await verifier.aclose()
+    assert user.subject == "user-123"
+
+
+@respx.mock
+async def test_extracts_keycloak_realm_role_when_generic_claim_is_absent(rsa_keypair, jwks_body):
+    respx.get(JWKS_URL).mock(return_value=httpx.Response(200, json=jwks_body))
+    token = _make_token(
+        rsa_keypair,
+        claims_override={"role": None, "realm_access": {"roles": ["default-roles-procintel", "ANALYST"]}},
+    )
+    verifier = JwtVerifier(_config())
+    try:
+        user = await verifier.verify(token)
+    finally:
+        await verifier.aclose()
+    assert user.role == "ANALYST"
+
+
+@respx.mock
+async def test_selects_highest_recognized_role_from_keycloak_role_list(rsa_keypair, jwks_body):
+    respx.get(JWKS_URL).mock(return_value=httpx.Response(200, json=jwks_body))
+    token = _make_token(
+        rsa_keypair,
+        claims_override={"role": ["VIEWER", "SALES", "ANALYST"]},
+    )
+    verifier = JwtVerifier(_config())
+    try:
+        user = await verifier.verify(token)
+    finally:
+        await verifier.aclose()
+    assert user.role == "ANALYST"
 
 
 @respx.mock
@@ -164,3 +213,30 @@ async def test_verify_rejects_an_unknown_key_id(rsa_keypair, jwks_body):
             await verifier.verify(token)
     finally:
         await verifier.aclose()
+
+
+@respx.mock
+async def test_privileged_role_requires_mfa_claim(rsa_keypair, jwks_body):
+    respx.get(JWKS_URL).mock(return_value=httpx.Response(200, json=jwks_body))
+    token = _make_token(rsa_keypair, claims_override={"role": "OWNER"})
+    verifier = JwtVerifier(_config())
+    try:
+        with pytest.raises(JwtVerificationError, match="MFA is required"):
+            await verifier.verify(token)
+    finally:
+        await verifier.aclose()
+
+
+@respx.mock
+async def test_privileged_role_accepts_verified_mfa_method(rsa_keypair, jwks_body):
+    respx.get(JWKS_URL).mock(return_value=httpx.Response(200, json=jwks_body))
+    token = _make_token(
+        rsa_keypair,
+        claims_override={"role": "ADMIN", "amr": ["pwd", "webauthn"]},
+    )
+    verifier = JwtVerifier(_config())
+    try:
+        user = await verifier.verify(token)
+    finally:
+        await verifier.aclose()
+    assert user.mfa_verified is True

@@ -1,11 +1,4 @@
-"""Connector configuration.
-
-`base_url` has no default — description.txt (§3.6, §22) confirms
-data.gov.gr is CKAN-based with a generic Action API (`package_search`,
-`package_show`, `resource_search`) but explicitly says the exact paths and
-limits must be confirmed against the live deployment, same discipline as
-every other connector.
-"""
+"""Connector configuration for the live-validated data.gov.gr CKAN API."""
 
 from __future__ import annotations
 
@@ -35,13 +28,7 @@ class CkanConnectorConfig:
 
     @classmethod
     def from_env(cls) -> "CkanConnectorConfig":
-        base_url = os.environ.get("CKAN_API_BASE_URL")
-        if not base_url:
-            raise RuntimeError(
-                "CKAN_API_BASE_URL is not set. See docs/source-contracts/ckan-datagov.md — "
-                "confirm the base hostname against the live data.gov.gr deployment before "
-                "setting this."
-            )
+        base_url = os.environ.get("CKAN_API_BASE_URL") or "https://data.gov.gr"
         return cls(
             base_url=base_url,
             rate_limit_per_minute=_positive_float_env(

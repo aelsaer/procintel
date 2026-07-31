@@ -8,8 +8,8 @@ async function expectNoHorizontalOverflow(page: import("@playwright/test").Page)
 test("company radar is the primary workspace", async ({ page }, testInfo) => {
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "Τι θέλεις να παρακολουθεί το Procintel;" })).toBeVisible();
-  await expect(page.getByRole("navigation").getByRole("button")).toHaveCount(6);
+  await expect(page.getByRole("heading", { name: "Δραστηριότητα και μόνιμη στόχευση" })).toBeVisible();
+  await expect(page.getByRole("navigation").getByRole("button")).toHaveCount(7);
   await expect(page.getByText("Radar ενεργό")).toBeVisible();
   await expect(page.getByLabel("Προτεινόμενες κατηγορίες CPV").getByRole("button").first()).toBeVisible();
   await expectNoHorizontalOverflow(page);
@@ -18,6 +18,12 @@ test("company radar is the primary workspace", async ({ page }, testInfo) => {
 });
 
 test("competitor intelligence distinguishes evidence from market inference", async ({ page }, testInfo) => {
+  const duplicateKeyErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error" && message.text().includes("same key")) {
+      duplicateKeyErrors.push(message.text());
+    }
+  });
   await page.goto("/");
   await page.getByRole("button", { name: "Ανταγωνισμός" }).click();
 
@@ -25,6 +31,7 @@ test("competitor intelligence distinguishes evidence from market inference", asy
   await expect(page.getByLabel("Σύνοψη ανταγωνισμού")).toBeVisible();
   await expect(page.getByText(/Οι συμμετοχές\/ανάδοχοι είναι τεκμηριωμένα facts/)).toBeVisible();
   await expect(page.getByText(/market competitors είναι εκτίμηση/)).toBeVisible();
+  await expect.poll(() => duplicateKeyErrors).toEqual([]);
   await expectNoHorizontalOverflow(page);
 
   await page.screenshot({ path: testInfo.outputPath("competitors.png"), fullPage: true });
@@ -40,7 +47,13 @@ test("Leaflet NUTS map, region ranking, and copilot stay synchronized", async ({
   await expect(map.locator("xpath=..")).toHaveAttribute("data-map-status", "ready");
   await expect(map.locator("[data-nuts-code]")).toHaveCount(13);
 
+  const regionRequest = page.waitForRequest((request) => {
+    if (!request.url().includes("/api/v1/analytics/region-activity")) return false;
+    return new URL(request.url()).searchParams.get("nuts_code") === "EL43";
+  });
   await map.locator('[data-nuts-code="EL43"]').click({ force: true });
+  const regionParams = new URL((await regionRequest).url()).searchParams;
+  expect(regionParams.get("municipality")).toBeNull();
   await expect(page.locator(".region-ranking button.is-active")).toContainText("Κρήτη");
   await expect(page.locator("#region-activity-title")).toContainText("Κρήτη");
 

@@ -24,7 +24,14 @@ import respx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from packages.domain.tables import act_links, act_parties, entity_vies_checks, procurement_acts, process_members
+from packages.domain.tables import (
+    act_links,
+    act_parties,
+    entity_vies_checks,
+    procurement_acts,
+    process_members,
+    ted_notice_details,
+)
 from packages.source_clients.raw_store import LocalFilesystemRawStore
 from services.ingestion.connectors.khmdhs.db_writer import ingest_khmdhs_record
 from services.ingestion.connectors.ted.client import TedClient
@@ -150,6 +157,28 @@ async def test_matching_notice_links_and_foreign_supplier_triggers_vies(tmp_path
                 fetched_at=datetime.now(timezone.utc),
             )
             await conn.commit()
+            ted_act = (
+                await conn.execute(
+                    select(
+                        procurement_acts.c.amount_net,
+                        procurement_acts.c.amount_gross,
+                        procurement_acts.c.vat_amount,
+                    ).where(procurement_acts.c.id == matching_result.notice.act_id)
+                )
+            ).one()
+            ted_financials = (
+                await conn.execute(
+                    select(
+                        ted_notice_details.c.estimated_value,
+                        ted_notice_details.c.awarded_value,
+                    ).where(ted_notice_details.c.act_id == matching_result.notice.act_id)
+                )
+            ).one()
+            assert ted_act.amount_net == TED_NOTICE["result-value-notice"][0]
+            assert ted_act.amount_gross is None
+            assert ted_act.vat_amount is None
+            assert ted_financials.estimated_value == TED_NOTICE["estimated-value-proc"][0]
+            assert ted_financials.awarded_value == TED_NOTICE["result-value-notice"][0]
             matched_process_id = await resolve_notice_process_link(
                 conn,
                 ted_act_id=matching_result.notice.act_id,

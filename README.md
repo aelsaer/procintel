@@ -131,9 +131,9 @@ docker compose logs -f ingestion-scheduler
 ```
 
 The default schedule is `02:30 Europe/Athens`. Provider keys, endpoint
-overrides and quota settings are listed in `.env.scheduler.example`. ΓΕΜΗ,
-ΑΝΑΠΤΥΞΗ and VIES remain explicitly inactive until their required values are
-configured.
+overrides and quota settings are listed in `.env.scheduler.example`. ΓΕΜΗ
+requires its personal API key and ΑΝΑΠΤΥΞΗ periods require verified endpoint
+configuration. VIES uses the official European Commission endpoint by default.
 
 For a manual run of the same cycle:
 

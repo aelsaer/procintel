@@ -7,11 +7,8 @@ description.txt §16.2's dedup key is `source + resource + ADAM +
 content_hash`, and the ADAM is folded into `source_native_id` alongside the
 hash check.
 
-Entity name normalization here is a simple uppercase placeholder, not the
-full Greek legal-form-aware normalization from §9 — that belongs to a
-dedicated normalization module once more than one connector needs it.
-Entity identity resolution itself lives in
-`services/entity_resolution/resolve.py`, shared with every other connector.
+Entity identity and normalized-name resolution lives in
+`services/entity_resolution/resolve.py`, shared with every connector.
 
 A PAYMENT (or any other) act arriving before its CONTRACT counterpart is
 expected, not an error — §26.1's PARTIAL_LIFECYCLE state, not a fabricated
@@ -41,7 +38,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -83,6 +80,7 @@ class ActUpsertResult:
     related_ada: list[str] = field(default_factory=list)  # trigger list for Διαύγεια resolution, see module docstring
     contractor_entity_id: uuid.UUID | None = None  # trigger for ΓΕΜΗ enrichment, see connectors/gemi/resolve.py
     contractor_afm_normalized: str | None = None
+    contractor_entities: list[tuple[uuid.UUID, str | None]] = field(default_factory=list)
     funding_ref_candidates: list[tuple[str, str]] = field(default_factory=list)
     # [(field_name, value), ...] trigger list for ΑΝΑΠΤΥΞΗ resolution — both
     # public_funding_ref_ops and espa_fund_program_ref, neither assumed to be
@@ -131,16 +129,30 @@ async def load_existing_act_context(
     if act_id is None:
         return IngestResult(source_record_id=None, adam_normalized=adam_normalized, act_upsert=None)
 
-    contractor_entity_id = (
+    contractor_entity_ids = list(
         await conn.execute(
             select(act_parties.c.entity_id)
             .where(
                 act_parties.c.act_id == act_id,
                 act_parties.c.party_role.in_(("SUPPLIER", "CONTRACTOR")),
             )
-            .limit(1)
         )
-    ).scalar()
+    )
+    contractor_entities: list[tuple[uuid.UUID, str | None]] = []
+    for row in contractor_entity_ids:
+        afm = (
+            await conn.execute(
+                select(entity_identifiers.c.value_normalized)
+                .where(
+                    entity_identifiers.c.entity_id == row.entity_id,
+                    entity_identifiers.c.scheme == "AFM",
+                    entity_identifiers.c.is_current.is_(True),
+                )
+                .limit(1)
+            )
+        ).scalar()
+        contractor_entities.append((row.entity_id, afm))
+    contractor_entity_id = contractor_entities[0][0] if contractor_entities else None
     funding_ref_candidates = [
         (field_name, value)
         for field_name, value in (
@@ -158,7 +170,8 @@ async def load_existing_act_context(
             is_new=False,
             related_ada=normalized.related_ada,
             contractor_entity_id=contractor_entity_id,
-            contractor_afm_normalized=normalized.contractor.afm_normalized if normalized.contractor else None,
+            contractor_afm_normalized=contractor_entities[0][1] if contractor_entities else None,
+            contractor_entities=contractor_entities,
             funding_ref_candidates=funding_ref_candidates,
         ),
     )
@@ -256,19 +269,21 @@ async def upsert_act(
 
     prev_act = None
     prev_supplier_entity_id: uuid.UUID | None = None
+    prev_supplier_entity_ids: set[uuid.UUID] = set()
     if not is_new:
         prev_act = (
             await conn.execute(select(procurement_acts).where(procurement_acts.c.id == act_id))
         ).first()
-        prev_supplier = (
+        prev_suppliers = list(
             await conn.execute(
                 select(act_parties.c.entity_id).where(
                     act_parties.c.act_id == act_id,
                     act_parties.c.party_role.in_(("SUPPLIER", "CONTRACTOR")),
                 )
             )
-        ).first()
-        prev_supplier_entity_id = prev_supplier.entity_id if prev_supplier is not None else None
+        )
+        prev_supplier_entity_ids = {supplier.entity_id for supplier in prev_suppliers}
+        prev_supplier_entity_id = prev_suppliers[0].entity_id if prev_suppliers else None
 
     act_values: dict[str, Any] = dict(
         act_type=normalized.act_type,
@@ -286,7 +301,7 @@ async def upsert_act(
         procedure_type=normalized.procedure_type,
         source_details=normalized.source_details,
         source_record_id=source_record_id,
-        updated_at=datetime.utcnow(),
+                updated_at=datetime.now(timezone.utc),
     )
 
     changed_fields: dict[str, tuple[Any, Any]] = {}
@@ -420,26 +435,52 @@ async def upsert_act(
                 source_record_id=source_record_id,
             )
         )
-    contractor_entity_id: uuid.UUID | None = None
-    if normalized.contractor is not None:
-        contractor_entity_id = await find_or_create_entity_by_afm(
-            conn,
-            party=normalized.contractor,
-            entity_type="COMPANY",
-            source_record_id=source_record_id,
-        )
+    contractor_entities: list[tuple[uuid.UUID, str | None]] = []
+    seen_contractor_entities: set[uuid.UUID] = set()
+    normalized_contractors = normalized.contractors or (
+        [normalized.contractor] if normalized.contractor is not None else []
+    )
+    for contractor in normalized_contractors:
+        if contractor.afm_normalized:
+            contractor_entity_id = await find_or_create_entity_by_afm(
+                conn,
+                party=contractor,
+                entity_type="COMPANY",
+                source_record_id=source_record_id,
+            )
+        elif contractor.source_native_id:
+            contractor_entity_id = await find_or_create_entity_by_source_native(
+                conn,
+                source_system="KHMDHS_CONTRACTOR",
+                source_native_id=contractor.source_native_id,
+                name=contractor.name,
+                entity_type="COMPANY",
+                source_record_id=source_record_id,
+            )
+        else:
+            continue
+        if contractor_entity_id in seen_contractor_entities:
+            continue
+        seen_contractor_entities.add(contractor_entity_id)
+        contractor_entities.append((contractor_entity_id, contractor.afm_normalized))
         await conn.execute(
             act_parties.insert().values(
                 id=uuid.uuid4(),
                 act_id=act_id,
                 entity_id=contractor_entity_id,
                 party_role="SUPPLIER",
-                amount=normalized.contractor.amount,
+                amount=contractor.amount,
                 source_record_id=source_record_id,
             )
         )
-        if not is_new and prev_supplier_entity_id != contractor_entity_id:
-            changed_fields["contractor_entity_id"] = (prev_supplier_entity_id, contractor_entity_id)
+    contractor_entity_id = contractor_entities[0][0] if contractor_entities else None
+    if not is_new and prev_supplier_entity_id != contractor_entity_id:
+        changed_fields["contractor_entity_id"] = (prev_supplier_entity_id, contractor_entity_id)
+    elif not is_new and prev_supplier_entity_ids != seen_contractor_entities:
+        changed_fields["contractor_entity_ids"] = (
+            sorted(str(value) for value in prev_supplier_entity_ids),
+            sorted(str(value) for value in seen_contractor_entities),
+        )
 
     funding_ref_candidates: list[tuple[str, str]] = [
         (field_name, value)
@@ -457,7 +498,8 @@ async def upsert_act(
         changed_fields=changed_fields,
         related_ada=normalized.related_ada,
         contractor_entity_id=contractor_entity_id,
-        contractor_afm_normalized=normalized.contractor.afm_normalized if normalized.contractor else None,
+        contractor_afm_normalized=contractor_entities[0][1] if contractor_entities else None,
+        contractor_entities=contractor_entities,
         funding_ref_candidates=funding_ref_candidates,
     )
 

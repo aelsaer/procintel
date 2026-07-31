@@ -6,7 +6,7 @@ import hashlib
 import json
 import socket
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -22,6 +22,7 @@ from packages.domain.tables import (
     documents,
     geocoding_cache,
     geospatial_enrichment_jobs,
+    postal_code_nuts,
     procurement_acts,
     source_records,
 )
@@ -243,6 +244,45 @@ async def _resolve_candidate(
     return result
 
 
+async def _attach_postal_nuts(
+    conn: AsyncConnection,
+    candidates: Sequence[LocationCandidate],
+) -> list[LocationCandidate]:
+    postal_codes = sorted(
+        {candidate.postal_code for candidate in candidates if candidate.postal_code}
+    )
+    if not postal_codes:
+        return list(candidates)
+    rows = (
+        await conn.execute(
+            sa.select(
+                postal_code_nuts.c.postal_code,
+                postal_code_nuts.c.nuts_code,
+            ).where(
+                postal_code_nuts.c.country_code == "GR",
+                postal_code_nuts.c.postal_code.in_(postal_codes),
+            )
+        )
+    ).all()
+    by_postal: dict[str, list[str]] = {}
+    for row in rows:
+        by_postal.setdefault(row.postal_code, []).append(row.nuts_code)
+    return [
+        replace(
+            candidate,
+            nuts_codes=tuple(
+                dict.fromkeys(
+                    (
+                        *candidate.nuts_codes,
+                        *by_postal.get(candidate.postal_code or "", []),
+                    )
+                )
+            ),
+        )
+        for candidate in candidates
+    ]
+
+
 def _location_names(candidate: LocationCandidate, result: GeocodeResult | None) -> tuple[str | None, str | None, str | None]:
     if result:
         return result.municipality_name, result.regional_unit_name, result.region_name
@@ -371,6 +411,7 @@ async def process_job(
     candidates = extract_location_candidates(raw, document_texts=texts, admin_units=admin_units)
     if not candidates:
         return JobResult(job.id, "NO_LOCATION", 0, 0, 0)
+    candidates = await _attach_postal_nuts(conn, candidates)
 
     resolved = [
         await _resolve_candidate(

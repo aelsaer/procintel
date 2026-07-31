@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from packages.auth.jwt_verifier import AuthenticatedUser
 from packages.domain.tables import audit_log, export_jobs
 from services.exports.generate import process_export_job_by_id
+from services.product.entitlements import EntitlementLimitExceeded, consume_entitlement
 
 from ..auth import get_current_user, require_role
 from ..db import get_tenant_scoped_conn
@@ -79,6 +80,22 @@ async def create_export(
     conn: AsyncConnection = Depends(get_tenant_scoped_conn),
     user: AuthenticatedUser = Depends(require_role(*_EXPORT_ROLES)),
 ) -> ExportJobResponse:
+    try:
+        await consume_entitlement(
+            conn,
+            tenant_id=tenant_uuid(user),
+            metric_code="exports_month",
+        )
+    except EntitlementLimitExceeded as exc:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "ENTITLEMENT_LIMIT",
+                "metric": exc.metric_code,
+                "limit": exc.limit,
+                "usage": exc.usage,
+            },
+        ) from exc
     user_id = await ensure_workspace_user(conn, user)
     job_id = uuid.uuid4()
     await conn.execute(export_jobs.insert().values(

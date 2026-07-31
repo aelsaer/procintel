@@ -5,13 +5,10 @@ procurement value per bed"). One `facility_type` (SCHOOL/HOSPITAL) +
 mirroring `geo_denominators.metric_name`'s pattern in the other CKAN
 adapters.
 
-Column names are a best-effort guess — no sample school/hospital file from
-data.gov.gr was available at build time; fix here once one is confirmed
-(docs/source-contracts/ckan-datagov.md). A plain CSV with optional
-`lat`/`lon` columns is assumed (simpler than GeoJSON for point facilities,
-and standard-JSON/CSV is what data.gov.gr's own announcement lists as bulk
-formats) — a facility with no coordinates still gets a row (name/capacity
-alone already support the per-capita metrics above), just no `geom`.
+The school mapping includes the live data.gov.gr
+`minedu_students_school` schema (`school_name` plus male/female registered
+student columns). Generic aliases remain available for other onboarded
+school and hospital CSV resources.
 """
 
 from __future__ import annotations
@@ -23,6 +20,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 DEFAULT_CAPACITY_FIELD_CANDIDATES = ("capacity", "students", "beds", "capacity_value")
+STUDENT_COMPONENT_FIELDS = ("registered_students_boys", "registered_students_girls")
 
 
 @dataclass(frozen=True)
@@ -66,16 +64,25 @@ def normalize_facilities_csv(
     rows: list[NormalizedFacility] = []
     for raw_row in reader:
         code = _first(raw_row, "code", "facility_code", "school_code", "hospital_code")
-        name = _first(raw_row, "name", "facility_name")
+        name = _first(raw_row, "name", "facility_name", "school_name", "hospital_name")
         if code is None and name is None:
             continue
+        capacity_value = _to_decimal(_first(raw_row, *capacity_field_candidates))
+        if capacity_value is None:
+            component_values = [
+                value
+                for field in STUDENT_COMPONENT_FIELDS
+                if (value := _to_decimal(_first(raw_row, field))) is not None
+            ]
+            if component_values:
+                capacity_value = sum(component_values, Decimal("0"))
         rows.append(
             NormalizedFacility(
                 code=code,
                 name=name,
                 nuts_code=_first(raw_row, "nuts_code", "nuts3", "nuts"),
                 municipality_code=_first(raw_row, "kallikratis_code", "municipality_code", "dimos_code"),
-                capacity_value=_to_decimal(_first(raw_row, *capacity_field_candidates)),
+                capacity_value=capacity_value,
                 latitude=_to_decimal(_first(raw_row, "lat", "latitude")),
                 longitude=_to_decimal(_first(raw_row, "lon", "lng", "longitude")),
             )

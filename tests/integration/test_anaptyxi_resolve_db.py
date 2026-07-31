@@ -56,9 +56,15 @@ def _asyncpg_url() -> str:
 
 @respx.mock
 async def test_funding_link_resolved_with_beneficiary_and_is_idempotent(tmp_path):
-    route = respx.get(f"{BASE_URL}/projects", params={"misCode": MIS}).mock(
-        return_value=httpx.Response(200, json=PROJECT_BODY)
-    )
+    route = respx.get(
+        f"{BASE_URL}/GetData.ashx",
+        params={
+            "queryType": "projectDetails",
+            "queryArgument": MIS,
+            "projectDetails": "all",
+            "outputFormat": "json",
+        },
+    ).mock(return_value=httpx.Response(200, json=PROJECT_BODY))
 
     client = AnaptyxiClient(AnaptyxiConnectorConfig(base_url=BASE_URL, rate_limit_per_minute=6000))
     raw_store = LocalFilesystemRawStore(tmp_path / "raw")
@@ -134,7 +140,13 @@ async def test_funding_link_resolved_with_beneficiary_and_is_idempotent(tmp_path
             )
             assert funding_project_id_again == funding_project_id
             all_links = (
-                await conn.execute(select(funding_links).where(funding_links.c.act_id == act_id))
+                await conn.execute(
+                    select(funding_links).where(
+                        funding_links.c.act_id == act_id,
+                        funding_links.c.funding_project_id
+                        == funding_project_id,
+                    )
+                )
             ).all()
             assert len(all_links) == 1
     finally:

@@ -39,6 +39,16 @@ def _filter_values(value: Any) -> list[str]:
     return [str(item).strip() for item in values if str(item).strip()]
 
 
+def _safe_export_path(storage_path: str, root: Path) -> Path | None:
+    """Return a resolved export path only when it is contained by EXPORT_ROOT."""
+    candidate = Path(storage_path).resolve()
+    try:
+        candidate.relative_to(root.resolve())
+    except ValueError:
+        return None
+    return candidate
+
+
 def _scope_params(filters: dict[str, Any]) -> dict[str, Any]:
     cpv_values = _filter_values(filters.get("cpv_prefix")) + _filter_values(filters.get("cpv_prefixes"))
     keyword_values = _filter_values(filters.get("keyword")) + _filter_values(filters.get("keywords"))
@@ -257,3 +267,37 @@ async def process_export_job_by_id(job_id: uuid.UUID) -> None:
             await process_export_job(conn, job_id)
     finally:
         await engine.dispose()
+
+
+async def cleanup_expired_exports(
+    conn: AsyncConnection,
+    *,
+    now: datetime | None = None,
+    export_root: Path | None = None,
+) -> int:
+    """Expire completed jobs and remove only files contained by EXPORT_ROOT."""
+    cutoff = now or datetime.now(timezone.utc)
+    root = (export_root or Path(os.environ.get("EXPORT_ROOT", "raw/exports"))).resolve()
+    rows = (
+        await conn.execute(
+            sa.select(export_jobs.c.id, export_jobs.c.storage_path)
+            .where(
+                export_jobs.c.status == "SUCCEEDED",
+                export_jobs.c.expires_at.is_not(None),
+                export_jobs.c.expires_at <= cutoff,
+            )
+            .with_for_update(skip_locked=True)
+        )
+    ).all()
+    for row in rows:
+        if row.storage_path:
+            path = _safe_export_path(row.storage_path, root)
+            if path is not None:
+                path.unlink(missing_ok=True)
+        await conn.execute(
+            export_jobs.update()
+            .where(export_jobs.c.id == row.id)
+            .values(status="EXPIRED", storage_path=None)
+        )
+    await conn.commit()
+    return len(rows)

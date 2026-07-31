@@ -31,8 +31,21 @@ class NormalizedCompany(BaseModel):
     gemi_office: str | None = None
     gemi_registration_date: date | None = None
     kad_codes: list[str] = []
+    kad_details: list[dict[str, Any]] = []
     municipality: str | None = None
     region: str | None = None
+    city: str | None = None
+    address_line: str | None = None
+    postal_code: str | None = None
+    email: str | None = None
+    website: str | None = None
+    objective: str | None = None
+    last_status_change: date | None = None
+    is_branch: bool | None = None
+    auto_registered: bool | None = None
+    persons: list[dict[str, Any]] = []
+    capital: dict[str, Any] | None = None
+    source_documents: list[dict[str, Any]] = []
 
 
 def _to_date(value: Any) -> date | None:
@@ -73,6 +86,37 @@ def _activity_codes(raw: dict[str, Any]) -> list[str]:
     return codes
 
 
+def _activity_details(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    details: list[dict[str, Any]] = []
+    for entry in raw.get("activities") or []:
+        if not isinstance(entry, dict):
+            continue
+        activity = entry.get("activity") if isinstance(entry.get("activity"), dict) else {}
+        details.append(
+            {
+                "code": str(activity.get("id")) if activity.get("id") is not None else None,
+                "description": activity.get("descr"),
+                "kad_version": activity.get("kadVersion"),
+                "type": entry.get("type"),
+                "valid_from": entry.get("dtFrom"),
+                "valid_to": entry.get("dtTo"),
+            }
+        )
+    return details
+
+
+def _documents(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    value = raw.get("publicDocuments") or []
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        for key in ("companyDocuments", "documents", "searchResults"):
+            entries = value.get(key)
+            if isinstance(entries, list):
+                return [item for item in entries if isinstance(item, dict)]
+    return []
+
+
 def normalize_company_record(raw: dict[str, Any], *, afm: str) -> NormalizedCompany:
     raw_afm = str(raw.get("afm") or afm)
     afm_digits = "".join(ch for ch in raw_afm if ch.isdigit())
@@ -80,6 +124,9 @@ def normalize_company_record(raw: dict[str, Any], *, afm: str) -> NormalizedComp
     legal_form = _description(raw.get("legalType")) or raw.get("legalFormLabel") or raw.get("legalForm")
     status = _description(raw.get("status")) or raw.get("statusLabel")
     gemi_office = _description(raw.get("gemiOffice")) or raw.get("competentGemiOffice")
+    street = str(raw.get("street") or "").strip()
+    street_number = str(raw.get("streetNumber") or "").strip()
+    address_line = " ".join(value for value in (street, street_number) if value) or None
     return NormalizedCompany(
         afm_raw=raw_afm,
         afm_normalized=afm_digits,
@@ -92,6 +139,19 @@ def normalize_company_record(raw: dict[str, Any], *, afm: str) -> NormalizedComp
         gemi_office=gemi_office,
         gemi_registration_date=_to_date(raw.get("incorporationDate") or raw.get("registrationDate") or raw.get("gemiRegistrationDate")),
         kad_codes=_activity_codes(raw) or _as_list(raw.get("kadCodes") or raw.get("activityCodes")),
+        kad_details=_activity_details(raw),
         municipality=_description(raw.get("municipality")) or raw.get("municipalityLabel"),
         region=_description(raw.get("prefecture")) or raw.get("regionLabel"),
+        city=raw.get("city"),
+        address_line=address_line,
+        postal_code=str(raw.get("zipCode")) if raw.get("zipCode") else None,
+        email=raw.get("email"),
+        website=raw.get("url"),
+        objective=raw.get("objective"),
+        last_status_change=_to_date(raw.get("lastStatusChange")),
+        is_branch=raw.get("isBranch"),
+        auto_registered=raw.get("autoRegistered"),
+        persons=[item for item in raw.get("persons") or [] if isinstance(item, dict)],
+        capital=raw.get("capital") if isinstance(raw.get("capital"), dict) else None,
+        source_documents=_documents(raw),
     )

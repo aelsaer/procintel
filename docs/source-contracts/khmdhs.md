@@ -72,6 +72,11 @@ amounts, VAT, dates, procedure type, amendment details, related ΑΔΑΜ/ΑΔΑ.
   per-record verification — store both `publicFundingRefOps` and
   `espaFundProgramRef` and confirm which one actually maps to the ΟΠΣ/MIS
   code (§19.4).
+- Live resource validation confirms that auction/contract consortium
+  members are under
+  `contractingDataDetails.contractingMembersDataList`, payment payees are
+  in `objectDetails`, and contract signing uses `contractSignedDate`.
+  Legacy aliases are still accepted for replaying archived payloads.
 
 See `docs/data-dictionary/source-mapping.md` for the full field-to-canonical
 mapping.

@@ -4,11 +4,16 @@
 period (`ANAPTYXI_2007_2013`, `ANAPTYXI_2014_2020`, `ANAPTYXI_2021_2027`)
 converging on the same canonical `funding_projects` schema.
 
-## Status: implemented (all 3 periods, join hierarchy Levels 1-4)
+## Status
+
+The 2007–2013 and 2014–2020 project APIs and all four linkage levels are
+implemented and live-validated. The 2021–2027 adapter is implemented but
+reports `BLOCKED_UPSTREAM`: the public deployment has not exposed the
+validated project-detail contract required for trustworthy ingestion.
 
 | Module | Purpose |
 |---|---|
-| `config.py` | `AnaptyxiConnectorConfig` — one base-URL env var **per programming period** (`ANAPTYXI_2007_2013_API_BASE_URL`/`ANAPTYXI_2014_2020_API_BASE_URL`/`ANAPTYXI_2021_2027_API_BASE_URL`, §19.3 — each is very likely a separate deployment, not a query parameter on one system), no defaults; `ANAPTYXI_API_BASE_URL` (unsuffixed) is a backward-compatible alias for 2014-2020 |
+| `config.py` | One deployment per period. 2007–2013 and 2014–2020 use live-validated public defaults; 2021–2027 requires an explicitly validated project API override |
 | `client.py` | `AnaptyxiClient.find_project_by_mis()` (Level 1) / `find_projects_by_beneficiary_afm()` (Levels 2-4's shared candidate search) — rate limiting, retry/backoff, circuit breaker |
 | `normalize.py` | Raw record → `NormalizedFundingProject` |
 | `db_writer.py` | Idempotent upsert into `funding_projects` (application-level find-by-`(mis_ops_code, program_period)`, since there's no DB-level unique constraint on it — looser than ΚΗΜΔΗΣ's ΑΔΑΜ or Διαύγεια's ΑΔΑ). Resolves the beneficiary entity by exact ΑΦΜ via `services/entity_resolution` |
@@ -47,20 +52,18 @@ because the source itself states the relationship).
    `find_projects_by_beneficiary_afm()`, matches by title similarity
    (`services/entity_resolution/text_similarity.py`, ≥0.5) and period
    overlap (±60 days slack) on a single unambiguous candidate.
-3. **ΑΔΑ/ΑΔΑΜ found in metadata** (`ADA_ADAM_IN_METADATA`, confidence 0.90)
+3. **ΑΔΑ/ΑΔΑΜ found in source metadata** (`ADA_ADAM_IN_METADATA`, confidence 0.90)
    — same candidate set as Level 2, matched instead by scanning each
    candidate's raw metadata for containment of one of the act's own
-   referenced ΑΔΑ values (`ActUpsertResult.related_ada`). "...or documents"
-   half of §19.2's wording isn't reachable — needs the documents pipeline,
-   still out of scope generally.
+   referenced ΑΔΑ values (`ActUpsertResult.related_ada`), including source
+   file metadata returned with the project.
 4. **Normalized title + similar amount + same region + same beneficiary,
    with mandatory review** (`FUZZY_TITLE_AMOUNT_REGION`, confidence 0.60)
    — same candidate set again, looser title threshold (≥0.35), ±15%
    amount tolerance, region checked only when both sides carry a NUTS
    code (never required — ΑΝΑΠΤΥΞΗ's API isn't known to expose a general
-   region search). Left with `funding_links.reviewed_by IS NULL` — the
-   review-queue signal (mirrors `act_links.reviewed_by`'s existing
-   convention; no separate review-queue table was built for this).
+   region search). Left with `review_status='PENDING_REVIEW'` until an
+   analyst accepts or rejects the match.
 
 Levels 2-4 share **one** beneficiary/contractor-ΑΦΜ-scoped search call
 (`find_projects_by_beneficiary_afm`) rather than three separate ones — a
@@ -70,10 +73,20 @@ a general full-text/region search endpoint independent of ΑΦΜ.
 A ΚΗΜΔΗΣ act whose funding-reference fields don't resolve at *any* level is
 left unlinked rather than guessed at — deferred, not silently dropped.
 
-## Not yet implemented
+## Project detail and review
 
-Per-payment detail (only aggregate `contracted_amount`/`paid_amount`, per
-the source-mapping doc's known simplification), subproject-level records,
-a dedicated review-queue UI/workflow beyond the `reviewed_by IS NULL`
-marker (querying `funding_links WHERE confidence < 0.85 AND reviewed_by IS
-NULL` today doubles as the review queue).
+Project refreshes persist subprojects, implementation bodies and official
+project/subproject payment snapshots. `GET
+/v1/intelligence/funding-links/review` and its review mutation provide the
+audited accept/reject workflow surfaced in the source-operations UI.
+Payment values preserve the source's aggregate granularity and are not
+presented as bank-transaction evidence.
+
+An exact contractor-AFM query can prove that a company participates in a
+project without proving which of several free-text contractor names belongs
+to it. That fact is stored in `funding_project_participations` with
+`ANAPTYXI_AFM_QUERY`, confidence `1.0`, evidence and source record. It is
+not written into every `funding_project_bodies.entity_id`, and it never
+creates a procurement `funding_link` unless one of Levels 1–4 independently
+matches the act. Supplier intelligence combines these direct provider facts
+with reviewed procurement links.

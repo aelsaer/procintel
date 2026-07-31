@@ -3,11 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useLogin } from "@refinedev/core";
+import { CheckCircle2, LoaderCircle, ShieldAlert } from "lucide-react";
 import { completeLoginCallback } from "@/lib/oidc";
+import { apiFetch } from "@/lib/api";
 
 export default function CallbackPage() {
   const searchParams = useSearchParams();
-  const { mutate: login } = useLogin();
+  const { mutateAsync: login } = useLogin();
   const [error, setError] = useState<string | null>(null);
   const ranOnce = useRef(false);
 
@@ -16,8 +18,16 @@ export default function CallbackPage() {
     ranOnce.current = true;
     (async () => {
       try {
-        const token = await completeLoginCallback(searchParams);
-        login({ token });
+        const result = await completeLoginCallback(searchParams);
+        await apiFetch("/v1/commercial/provision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ organization_name: result.organizationName ?? null }),
+        });
+        const loginResult = await login({ token: result.accessToken, redirectTo: result.returnTo });
+        if (!loginResult.success) {
+          throw loginResult.error ?? new Error("Το workspace δεν αποδέχτηκε τη σύνδεση.");
+        }
       } catch (err) {
         setError((err as Error).message);
       }
@@ -26,9 +36,14 @@ export default function CallbackPage() {
 
   return (
     <div className="auth-screen">
-      <div className="auth-card">
+      <div className="auth-callback">
+        <div className="auth-brand">
+          <span className="auth-brand-mark" aria-hidden="true">P</span>
+          <span>Procintel<small>Procurement intelligence</small></span>
+        </div>
         {error ? (
           <>
+            <span className="auth-callback-icon auth-callback-error" aria-hidden="true"><ShieldAlert size={24} /></span>
             <h1>Αποτυχία σύνδεσης</h1>
             <p role="alert" className="auth-error">
               {error}
@@ -38,7 +53,14 @@ export default function CallbackPage() {
             </a>
           </>
         ) : (
-          <p>Ολοκλήρωση σύνδεσης…</p>
+          <>
+            <span className="auth-callback-icon" aria-hidden="true">
+              <LoaderCircle className="auth-spinner" size={24} />
+            </span>
+            <h1>Ολοκλήρωση σύνδεσης</h1>
+            <p role="status">Επιβεβαιώνουμε την ταυτότητα και ανοίγουμε το workspace.</p>
+            <span className="auth-callback-proof"><CheckCircle2 size={14} aria-hidden="true" /> Ασφαλής ανταλλαγή PKCE</span>
+          </>
         )}
       </div>
     </div>

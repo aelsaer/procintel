@@ -37,7 +37,11 @@ def get_engine() -> AsyncEngine:
     loop_key = id(asyncio.get_running_loop())
     key = (loop_key, database_url)
     if key not in _engines:
-        _engines[key] = create_async_engine(_to_asyncpg_url(database_url))
+        _engines[key] = create_async_engine(
+            _to_asyncpg_url(database_url),
+            pool_pre_ping=True,
+            pool_recycle=1800,
+        )
     return _engines[key]
 
 
@@ -87,6 +91,25 @@ async def get_tenant_scoped_conn(
                         INSERT INTO tenants (id, name, plan)
                         VALUES (CAST(:tenant_id AS uuid), 'Procintel Local Workspace', 'PROFESSIONAL')
                         ON CONFLICT (id) DO NOTHING
+                        """
+                    ),
+                    {"tenant_id": user.tenant_id},
+                )
+                await conn.execute(
+                    sa.text(
+                        """
+                        INSERT INTO tenant_subscriptions (
+                            id, tenant_id, plan_code, status, billing_provider,
+                            current_period_start, current_period_end
+                        )
+                        SELECT
+                            gen_random_uuid(), CAST(:tenant_id AS uuid),
+                            'PROFESSIONAL', 'ACTIVE', 'MANUAL', now(),
+                            now() + interval '100 years'
+                        WHERE EXISTS (
+                            SELECT 1 FROM saas_plans WHERE code = 'PROFESSIONAL'
+                        )
+                        ON CONFLICT (tenant_id) DO NOTHING
                         """
                     ),
                     {"tenant_id": user.tenant_id},

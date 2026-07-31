@@ -89,7 +89,7 @@ def _resolve_provider_flags(args: argparse.Namespace) -> dict[str, bool]:
         ),
         "mef": not args.no_mef,
         "ted": not args.no_ted,
-        "vies": args.with_vies and _has_env("VIES_API_BASE_URL"),
+        "vies": args.with_vies,
         "opensearch": False if args.no_opensearch else _has_env("OPENSEARCH_URL"),
     }
     required = {

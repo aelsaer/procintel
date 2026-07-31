@@ -20,7 +20,12 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from packages.domain.tables import alert_rules, business_profiles, opportunity_scores
+from packages.domain.tables import (
+    alert_rules,
+    business_profiles,
+    opportunity_relevance_feedback,
+    opportunity_scores,
+)
 from services.alerts.evaluate import rule_matches
 from services.search_index.lexical import lexical_query_matches
 
@@ -166,7 +171,10 @@ def _score_candidate(
     }
 
 
-async def _load_opportunity_rules(conn: AsyncConnection, tenant_id: uuid.UUID) -> list[Any]:
+async def _load_opportunity_rules(
+    conn: AsyncConnection,
+    tenant_id: uuid.UUID,
+) -> tuple[list[Any], int]:
     profile = (
         await conn.execute(
             sa.select(business_profiles).where(business_profiles.c.tenant_id == tenant_id)
@@ -176,13 +184,18 @@ async def _load_opportunity_rules(conn: AsyncConnection, tenant_id: uuid.UUID) -
         filters: dict[str, Any] = {
             "cpv_prefixes": profile.cpv_prefixes or [],
             "keywords": profile.keywords or [],
+            "excluded_cpv_prefixes": profile.excluded_cpv_prefixes or [],
+            "excluded_keywords": profile.excluded_keywords or [],
             "taxonomy_match_mode": "KEYWORD_REQUIRED",
             "nuts_codes": profile.nuts_codes or [],
             "municipality": profile.municipality,
             "amount_min": profile.amount_min,
             "amount_max": profile.amount_max,
         }
-        return [SimpleNamespace(name=profile.company_name or "Business profile", filters=filters)]
+        return (
+            [SimpleNamespace(name=profile.company_name or "Business profile", filters=filters)],
+            int(profile.classification_version),
+        )
 
     rows = (
         await conn.execute(
@@ -196,7 +209,7 @@ async def _load_opportunity_rules(conn: AsyncConnection, tenant_id: uuid.UUID) -
             )
         )
     ).all()
-    return rows
+    return rows, int(profile.classification_version) if profile is not None else 1
 
 
 async def _load_candidates(
@@ -276,13 +289,21 @@ async def score_opportunities_for_tenant(
     as_of = as_of or datetime.now(timezone.utc).date()
     clear_existing = limit is None if clear_existing is None else clear_existing
 
-    rules = await _load_opportunity_rules(conn, tenant_id)
+    rules, profile_version = await _load_opportunity_rules(conn, tenant_id)
     if not rules:
-        return OpportunityScoreRun(tenant_id=tenant_id, rules_considered=0, candidates_seen=0, scores_written=0)
-
-    if clear_existing:
-        await conn.execute(opportunity_scores.delete().where(opportunity_scores.c.tenant_id == tenant_id))
-        await conn.commit()
+        if clear_existing:
+            await conn.execute(
+                opportunity_scores.delete().where(
+                    opportunity_scores.c.tenant_id == tenant_id
+                )
+            )
+            await conn.commit()
+        return OpportunityScoreRun(
+            tenant_id=tenant_id,
+            rules_considered=0,
+            candidates_seen=0,
+            scores_written=0,
+        )
 
     candidates = await _load_candidates(
         conn,
@@ -291,10 +312,24 @@ async def score_opportunities_for_tenant(
         include_contracted=include_contracted,
         limit=limit,
     )
+    feedback_rows = (
+        await conn.execute(
+            sa.select(
+                opportunity_relevance_feedback.c.process_id,
+                opportunity_relevance_feedback.c.label,
+            ).where(opportunity_relevance_feedback.c.tenant_id == tenant_id)
+            .where(opportunity_relevance_feedback.c.profile_version == profile_version)
+        )
+    ).all()
+    feedback_by_process = {row.process_id: row.label for row in feedback_rows}
 
     written = 0
+    written_process_ids: list[uuid.UUID] = []
     now = datetime.now(timezone.utc)
     for candidate in candidates:
+        feedback_label = feedback_by_process.get(candidate.process_id)
+        if feedback_label == "IRRELEVANT":
+            continue
         context = {
             "title": candidate.title,
             "buyer_id": str(candidate.buyer_entity_id) if candidate.buyer_entity_id else None,
@@ -321,8 +356,31 @@ async def score_opportunities_for_tenant(
             if best_score is None or score["total_score"] > best_score["total_score"]:
                 best_score = score
 
+        if best_score is None and feedback_label == "RELEVANT":
+            first_rule = rules[0]
+            best_score = _score_candidate(
+                rule_name=first_rule.name,
+                filters=first_rule.filters or {},
+                context=context,
+                latest_act_date=candidate.latest_act_date,
+                supplier_count=candidate.supplier_count or 0,
+                as_of=as_of,
+            )
         if best_score is None:
             continue
+        if feedback_label == "RELEVANT":
+            best_score["total_score"] = min(
+                best_score["total_score"] + Decimal("5.00"),
+                Decimal("100.00"),
+            )
+            best_score["evidence"] = [
+                *best_score["evidence"],
+                {
+                    "signal": "tenant_relevance_feedback",
+                    "value": "RELEVANT",
+                    "effect": "+5 score and retained in radar",
+                },
+            ]
 
         score_id = uuid.uuid4()
         insert_stmt = (
@@ -331,16 +389,32 @@ async def score_opportunities_for_tenant(
                 id=score_id,
                 process_id=candidate.process_id,
                 tenant_id=tenant_id,
+                profile_version=profile_version,
                 computed_at=now,
                 **best_score,
             )
             .on_conflict_do_update(
                 index_elements=["process_id", "tenant_id"],
-                set_={**best_score, "computed_at": now},
+                set_={
+                    **best_score,
+                    "profile_version": profile_version,
+                    "computed_at": now,
+                },
             )
         )
         await conn.execute(insert_stmt)
         written += 1
+        written_process_ids.append(candidate.process_id)
+
+    if clear_existing:
+        delete_stale = opportunity_scores.delete().where(
+            opportunity_scores.c.tenant_id == tenant_id,
+        )
+        if written_process_ids:
+            delete_stale = delete_stale.where(
+                opportunity_scores.c.process_id.not_in(written_process_ids)
+            )
+        await conn.execute(delete_stale)
 
     await conn.commit()
     return OpportunityScoreRun(

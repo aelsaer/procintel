@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from apps.api.queries import load_identifiers, load_parties
 from packages.domain.tables import act_cpv_codes, act_locations, procurement_acts
 
+from .catalog import reindex_catalogs
 from .client import bulk_index
 from .config import OpenSearchConfig
 from .document import ActForIndexing, build_act_document
@@ -30,6 +31,7 @@ DEFAULT_BATCH_SIZE = 500
 @dataclass(frozen=True)
 class ReindexResult:
     acts_indexed: int
+    catalogs: dict[str, int] | None = None
 
 
 async def _load_act_for_indexing(conn: AsyncConnection, act_row) -> ActForIndexing:
@@ -105,4 +107,12 @@ async def reindex_all_acts(
         if len(rows) < batch_size:
             break
 
-    return ReindexResult(acts_indexed=acts_indexed)
+    catalog_result = await reindex_catalogs(
+        conn,
+        http_client,
+        config,
+    )
+    return ReindexResult(
+        acts_indexed=acts_indexed,
+        catalogs=catalog_result.counts,
+    )

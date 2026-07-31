@@ -1,0 +1,160 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_OWNER_USER:?set POSTGRES_OWNER_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_OWNER_PASSWORD:?set POSTGRES_OWNER_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-procintel}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks: [private]
+
+  migrate:
+    image: postgis/postgis:16-3.4
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_OWNER_USER:?set POSTGRES_OWNER_USER}:${POSTGRES_OWNER_PASSWORD:?set POSTGRES_OWNER_PASSWORD}@postgres:5432/${POSTGRES_DB:-procintel}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD}
+    volumes:
+      - ../../db:/db:ro
+    command:
+      - bash
+      - -ec
+      - |
+        /db/run_migrations_tracked.sh
+        printf "ALTER ROLE procintel_app WITH PASSWORD :'app_password';\n" |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -v app_password="$APP_DB_PASSWORD"
+    networks: [private]
+    restart: "no"
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      clamav:
+        condition: service_started
+    env_file:
+      - path: .env.production
+        required: false
+    environment:
+      DATABASE_URL: postgresql://procintel_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-procintel}
+      PROCINTEL_ENV: production
+      PROCINTEL_DEV_AUTH: "false"
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:?set OIDC_ISSUER_URL}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:?set OIDC_AUDIENCE}
+      CORS_ORIGINS: https://${PROCINTEL_HOSTNAME:?set PROCINTEL_HOSTNAME}
+      TRUSTED_HOSTS: ${PROCINTEL_HOSTNAME}
+      OPENSEARCH_URL: ${OPENSEARCH_URL:-}
+      OPENSEARCH_USERNAME: ${OPENSEARCH_USERNAME:-}
+      OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD:-}
+      PROCINTEL_LLM_ENDPOINT: ${PROCINTEL_LLM_ENDPOINT:-}
+      PROCINTEL_LLM_MODEL: ${PROCINTEL_LLM_MODEL:-}
+      PROCINTEL_LLM_API_KEY: ${PROCINTEL_LLM_API_KEY:-}
+      CLAMD_HOST: clamav
+      RAW_STORE_ROOT: /var/lib/procintel/raw
+      DOCUMENT_STORE_ROOT: /var/lib/procintel/documents
+      EXPORT_ROOT: /var/lib/procintel/exports
+    volumes:
+      - raw_data:/var/lib/procintel/raw
+      - document_data:/var/lib/procintel/documents
+      - export_data:/var/lib/procintel/exports
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks: [private]
+
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_BASE_URL: http://api:8000
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:?set OIDC_ISSUER_URL}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?set OIDC_CLIENT_ID}
+      OIDC_REDIRECT_URI: https://${PROCINTEL_HOSTNAME:?set PROCINTEL_HOSTNAME}/callback
+    networks: [private]
+
+  scheduler:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.scheduler
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      clamav:
+        condition: service_started
+    command: ["python", "-m", "services.ingestion.orchestration.cli", "run-daily", "--at", "${DAILY_INGEST_AT:-02:30}", "--timezone", "Europe/Athens"]
+    env_file:
+      - path: .env.production
+        required: false
+    environment:
+      DATABASE_URL: postgresql://procintel_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-procintel}
+      PROCINTEL_ENV: production
+      CLAMD_HOST: clamav
+      RAW_STORE_ROOT: /var/lib/procintel/raw
+      DOCUMENT_STORE_ROOT: /var/lib/procintel/documents
+      EXPORT_ROOT: /var/lib/procintel/exports
+    volumes:
+      - raw_data:/var/lib/procintel/raw
+      - document_data:/var/lib/procintel/documents
+      - export_data:/var/lib/procintel/exports
+    networks: [private]
+
+  clamav:
+    image: clamav/clamav:1.4
+    restart: unless-stopped
+    networks: [private]
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    depends_on: [web]
+    environment:
+      PROCINTEL_HOSTNAME: ${PROCINTEL_HOSTNAME:?set PROCINTEL_HOSTNAME}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [private]
+
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=30d"]
+    volumes:
+      - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    networks: [private]
+
+networks:
+  private:
+
+volumes:
+  postgres_data:
+  raw_data:
+  document_data:
+  export_data:
+  caddy_data:
+  caddy_config:
+  prometheus_data:

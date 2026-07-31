@@ -49,7 +49,10 @@ Every adapter is a whole-dataset snapshot (one file = the entire current
 state for that dataset scope), not a stream of individually-identifiable
 records, so a changed file (different content hash) replaces every row for
 that scope (`external_dataset_id` + `reference_year`/`boundary_type`/
-`facility_type`) wholesale rather than upserting row by row.
+`facility_type`) wholesale rather than upserting row by row. Unchanged-file
+deduplication is scoped by `external_dataset_id`, adapter resource type and
+content hash; two distinct catalog datasets may legitimately publish the
+same bytes without causing the second dataset to be skipped.
 
 Standalone CLI (like TED's — nothing on the ΚΗΜΔΗΣ side triggers a catalog
 sync):
@@ -70,6 +73,17 @@ python -m services.ingestion.connectors.ckan.cli sync-facilities \
     --capacity-metric STUDENTS [--capacity-field students]
 ```
 
+Every adapter records a live schema fingerprint and sample in
+`external_dataset_validations` before canonical writes. Missing required
+columns, unsupported geometry and schema drift are rejected with an
+actionable validation record instead of producing an empty dataset.
+
+The maintained default manifest currently includes two production
+data.gov.gr datasets: Greek municipal-unit boundaries and
+`minedu_students_school` (27,703 school rows at the latest live validation).
+The school adapter maps `school_name` and sums the official male/female
+registered-student columns.
+
 Onboarding (the commands above) is a one-time operator action, but keeping
 a dataset fresh afterward isn't manual: `scheduled.py::refresh_due_ckan_datasets`
 scans every `ONBOARDED` row and re-syncs whichever have gone stale
@@ -82,10 +96,10 @@ mechanism rather than a `ScheduledJob` — see
 `services/ingestion/orchestration/README.md` for why whole-dataset
 refreshes don't fit that date-windowed abstraction.
 
-**Not yet implemented**: the Κτηματολόγιο INSPIRE Geoportal (also covered
-by `docs/source-contracts/ckan-datagov.md`) is a separate API entirely, not
-this generic CKAN client. `nuts_areas` reference data isn't loaded by
-anything yet either — every adapter's `nuts_code` columns stay NULL unless
-the source dataset's own properties happen to carry one.
+The Κτηματολόγιο INSPIRE Geoportal is a separate API and cadastral parcels
+are explicitly outside product scope (§3.7), not an unimplemented CKAN
+adapter. Dataset-provided NUTS and municipality identifiers are preserved;
+the procurement geocoder independently resolves locality text when a
+source omits them.
 
 See `docs/source-contracts/ckan-datagov.md`.

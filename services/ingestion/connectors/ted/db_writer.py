@@ -18,16 +18,18 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.domain.tables import (
     act_cpv_codes,
     act_identifiers,
+    act_links,
     act_locations,
     act_parties,
     entities,
@@ -70,11 +72,17 @@ async def load_existing_notice_context(
 ) -> TedIngestResult:
     """Rebuilds process-matching/VIES context for an unchanged TED notice."""
     normalized = normalize_ted_notice(raw_body, ted_notice_id=ted_notice_id)
+    identity_scheme = "TED_NOTICE_VERSION" if normalized.notice_version else "TED_NOTICE_ID"
+    identity_value = (
+        f"{ted_notice_id}:{normalized.notice_version}"
+        if normalized.notice_version
+        else ted_notice_id
+    )
     act_id = (
         await conn.execute(
             select(act_identifiers.c.act_id).where(
-                act_identifiers.c.scheme == "TED_NOTICE_ID",
-                act_identifiers.c.value_normalized == ted_notice_id,
+                act_identifiers.c.scheme == identity_scheme,
+                act_identifiers.c.value_normalized == identity_value,
             )
         )
     ).scalar()
@@ -181,27 +189,36 @@ async def upsert_ted_notice(
     raw_format: str,
     source_record_id: uuid.UUID,
 ) -> TedNoticeUpsertResult:
+    identity_scheme = "TED_NOTICE_VERSION" if normalized.notice_version else "TED_NOTICE_ID"
+    identity_value = (
+        f"{normalized.ted_notice_id}:{normalized.notice_version}"
+        if normalized.notice_version
+        else normalized.ted_notice_id
+    )
     existing = (
         await conn.execute(
             select(act_identifiers.c.act_id).where(
-                act_identifiers.c.scheme == "TED_NOTICE_ID",
-                act_identifiers.c.value_normalized == normalized.ted_notice_id,
+                act_identifiers.c.scheme == identity_scheme,
+                act_identifiers.c.value_normalized == identity_value,
             )
         )
     ).first()
     is_new = existing is None
     act_id = existing.act_id if existing is not None else uuid.uuid4()
 
+    canonical_value = normalized.awarded_value or normalized.estimated_value
     act_values: dict[str, Any] = dict(
         act_type="TED_NOTICE",
         title=normalized.title,
         normalized_title=normalized.title.upper() if normalized.title else None,
         publication_date=normalized.publication_date,
-        amount_net=normalized.estimated_value,
-        amount_gross=normalized.awarded_value,
+        submission_deadline=normalized.submission_deadline,
+        amount_net=canonical_value,
+        amount_gross=None,
+        vat_amount=None,
         procedure_type=normalized.procedure_type,
         source_record_id=source_record_id,
-        updated_at=datetime.utcnow(),
+        updated_at=datetime.now(timezone.utc),
     )
 
     if is_new:
@@ -210,9 +227,9 @@ async def upsert_ted_notice(
             act_identifiers.insert().values(
                 id=uuid.uuid4(),
                 act_id=act_id,
-                scheme="TED_NOTICE_ID",
-                value_raw=normalized.ted_notice_id,
-                value_normalized=normalized.ted_notice_id,
+                scheme=identity_scheme,
+                value_raw=identity_value,
+                value_normalized=identity_value,
                 source_record_id=source_record_id,
             )
         )
@@ -270,6 +287,76 @@ async def upsert_ted_notice(
             )
         )
 
+    previous_latest = (
+        await conn.execute(
+            select(ted_notice_details.c.act_id).where(
+                ted_notice_details.c.ted_notice_id == normalized.ted_notice_id,
+                ted_notice_details.c.is_latest_version.is_(True),
+                ted_notice_details.c.act_id != act_id,
+            )
+        )
+    ).first()
+    if previous_latest is not None:
+        await conn.execute(
+            ted_notice_details.update()
+            .where(ted_notice_details.c.act_id == previous_latest.act_id)
+            .values(is_latest_version=False)
+        )
+
+    base_identifier = (
+        await conn.execute(
+            select(act_identifiers.c.id, act_identifiers.c.act_id).where(
+                act_identifiers.c.scheme == "TED_NOTICE_ID",
+                act_identifiers.c.value_normalized == normalized.ted_notice_id,
+            )
+        )
+    ).first()
+    if base_identifier is None:
+        if identity_scheme != "TED_NOTICE_ID":
+            await conn.execute(
+                act_identifiers.insert().values(
+                    id=uuid.uuid4(),
+                    act_id=act_id,
+                    scheme="TED_NOTICE_ID",
+                    value_raw=normalized.ted_notice_id,
+                    value_normalized=normalized.ted_notice_id,
+                    source_record_id=source_record_id,
+                )
+            )
+    elif base_identifier.act_id != act_id:
+        await conn.execute(
+            act_identifiers.update()
+            .where(act_identifiers.c.id == base_identifier.id)
+            .values(act_id=act_id, source_record_id=source_record_id)
+        )
+
+    async def attach_identifier(scheme: str, value: str | None) -> None:
+        if not value:
+            return
+        value_normalized = str(value).strip().upper()
+        existing_identifier = (
+            await conn.execute(
+                select(act_identifiers.c.id).where(
+                    act_identifiers.c.scheme == scheme,
+                    act_identifiers.c.value_normalized == value_normalized,
+                )
+            )
+        ).first()
+        if existing_identifier is None:
+            await conn.execute(
+                act_identifiers.insert().values(
+                    id=uuid.uuid4(),
+                    act_id=act_id,
+                    scheme=scheme,
+                    value_raw=str(value),
+                    value_normalized=value_normalized,
+                    source_record_id=source_record_id,
+                )
+            )
+
+    await attach_identifier("TED_PUBLICATION_NUMBER", normalized.publication_number)
+    await attach_identifier("TED_PROCEDURE_ID", normalized.procedure_identifier)
+
     existing_details = (
         await conn.execute(select(ted_notice_details.c.id).where(ted_notice_details.c.act_id == act_id))
     ).first()
@@ -286,6 +373,15 @@ async def upsert_ted_notice(
         country_code=normalized.country_code,
         nuts_codes=normalized.nuts_codes,
         related_notice_ids=normalized.related_notice_ids,
+        procedure_identifier=normalized.procedure_identifier,
+        notice_version=normalized.notice_version,
+        sdk_customization_id=normalized.sdk_customization_id,
+        previous_notice_ids=normalized.previous_notice_ids,
+        change_notice_version_identifier=normalized.change_notice_version_identifier,
+        is_latest_version=True,
+        estimated_value=normalized.estimated_value,
+        awarded_value=normalized.awarded_value,
+        currency="EUR",
         source_record_id=source_record_id,
     )
     if existing_details is not None:
@@ -296,6 +392,91 @@ async def upsert_ted_notice(
         )
     else:
         await conn.execute(ted_notice_details.insert().values(id=uuid.uuid4(), act_id=act_id, **detail_values))
+
+    async def ensure_link(
+        other_act_id: uuid.UUID,
+        *,
+        link_type: str,
+        method: str,
+        evidence: dict[str, Any],
+    ) -> None:
+        if other_act_id == act_id:
+            return
+        exists = (
+            await conn.execute(
+                select(act_links.c.id).where(
+                    act_links.c.from_act_id == act_id,
+                    act_links.c.to_act_id == other_act_id,
+                    act_links.c.link_type == link_type,
+                )
+            )
+        ).first()
+        if exists is None:
+            await conn.execute(
+                act_links.insert().values(
+                    id=uuid.uuid4(),
+                    from_act_id=act_id,
+                    to_act_id=other_act_id,
+                    link_type=link_type,
+                    link_method=method,
+                    confidence=1,
+                    evidence=evidence,
+                    created_by="services.ingestion.connectors.ted.db_writer",
+                )
+            )
+
+    if previous_latest is not None:
+        await ensure_link(
+            previous_latest.act_id,
+            link_type="SUPERSEDES",
+            method="TED_NOTICE_VERSION",
+            evidence={
+                "notice_id": normalized.ted_notice_id,
+                "notice_version": normalized.notice_version,
+            },
+        )
+
+    for previous_identifier in normalized.previous_notice_ids:
+        previous_act_id = (
+            await conn.execute(
+                select(ted_notice_details.c.act_id)
+                .where(
+                    sa.or_(
+                        ted_notice_details.c.ted_notice_id == previous_identifier,
+                        ted_notice_details.c.publication_number == previous_identifier,
+                        ted_notice_details.c.change_notice_version_identifier
+                        == previous_identifier,
+                    )
+                )
+                .order_by(ted_notice_details.c.is_latest_version.desc())
+                .limit(1)
+            )
+        ).scalar()
+        if previous_act_id:
+            await ensure_link(
+                previous_act_id,
+                link_type="SUPERSEDES",
+                method="TED_EXACT_REFERENCE",
+                evidence={"reference": previous_identifier},
+            )
+
+    if normalized.procedure_identifier:
+        exact_targets = (
+            await conn.execute(
+                select(act_identifiers.c.act_id).where(
+                    act_identifiers.c.value_normalized
+                    == normalized.procedure_identifier.strip().upper(),
+                    act_identifiers.c.act_id != act_id,
+                )
+            )
+        ).scalars().all()
+        for target_act_id in exact_targets:
+            await ensure_link(
+                target_act_id,
+                link_type="PUBLISHED_AS",
+                method="TED_EXACT_PROCEDURE_ID",
+                evidence={"procedure_identifier": normalized.procedure_identifier},
+            )
 
     return TedNoticeUpsertResult(
         act_id=act_id,
@@ -346,7 +527,7 @@ async def ingest_notice_record(
             payload_uri=payload_uri,
             fetched_at=fetched_at,
             http_status=http_status,
-            license_code="CC-BY-4.0",  # TODO(confirm): TED's exact reuse terms
+            license_code="UNCONFIRMED",
             parse_status="PARSED",
         )
     )

@@ -3,7 +3,7 @@ regional-indicator `geo_denominators` rows, administrative-boundary `geom`
 rows, and school/hospital `facilities` rows.
 
 One CKAN resource download = one `source_records` row (dedup on
-content_sha256, same shape as every other connector). Unlike the
+external dataset + resource type + content hash). Unlike the
 per-record upsert pattern elsewhere, every one of these is a whole-dataset
 snapshot with no natural per-row identifier to upsert on — a *changed*
 file (different content hash) replaces every row for that dataset (scoped
@@ -19,10 +19,17 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from geoalchemy2 import WKTElement
+import sqlalchemy as sa
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from packages.domain.tables import administrative_boundaries, facilities, geo_denominators, source_records
+from packages.domain.tables import (
+    administrative_boundaries,
+    external_datasets,
+    facilities,
+    geo_denominators,
+    source_records,
+)
 
 from .boundaries import normalize_boundaries_geojson
 from .facilities import DEFAULT_CAPACITY_FIELD_CANDIDATES, normalize_facilities_csv
@@ -36,6 +43,16 @@ BOUNDARIES_SRID = 4326
 class PopulationIngestResult:
     source_record_id: uuid.UUID | None  # None if deduped (no-op)
     rows_written: int
+
+
+async def _dataset_license(conn: AsyncConnection, external_dataset_id: uuid.UUID) -> str | None:
+    return (
+        await conn.execute(
+            select(external_datasets.c.license_code).where(
+                external_datasets.c.id == external_dataset_id
+            )
+        )
+    ).scalar() or "UNCONFIRMED"
 
 
 async def ingest_metric_dataset(
@@ -64,6 +81,8 @@ async def ingest_metric_dataset(
             select(source_records.c.id).where(
                 source_records.c.source_system == "CKAN",
                 source_records.c.resource_type == resource_type,
+                source_records.c.source_native_id
+                == str(external_dataset_id),
                 source_records.c.content_sha256 == content_sha256,
             )
         )
@@ -84,7 +103,7 @@ async def ingest_metric_dataset(
             payload_uri=payload_uri,
             fetched_at=fetched_at,
             http_status=http_status,
-            license_code="CC-BY-4.0",  # TODO(confirm): data.gov.gr's exact per-dataset license
+            license_code=await _dataset_license(conn, external_dataset_id),
             parse_status="PARSED",
         )
     )
@@ -173,6 +192,8 @@ async def ingest_boundaries_dataset(
             select(source_records.c.id).where(
                 source_records.c.source_system == "CKAN",
                 source_records.c.resource_type == "administrative_boundary",
+                source_records.c.source_native_id
+                == str(external_dataset_id),
                 source_records.c.content_sha256 == content_sha256,
             )
         )
@@ -193,7 +214,7 @@ async def ingest_boundaries_dataset(
             payload_uri=payload_uri,
             fetched_at=fetched_at,
             http_status=http_status,
-            license_code="CC-BY-4.0",  # TODO(confirm): data.gov.gr's exact per-dataset license
+            license_code=await _dataset_license(conn, external_dataset_id),
             parse_status="PARSED",
         )
     )
@@ -205,22 +226,24 @@ async def ingest_boundaries_dataset(
         )
     )
 
-    if normalized_boundaries:
+    for boundary in normalized_boundaries:
+        source_geometry = WKTElement(boundary.wkt, srid=boundary.source_srid)
+        geometry = (
+            source_geometry
+            if boundary.source_srid == BOUNDARIES_SRID
+            else sa.func.ST_Transform(source_geometry, BOUNDARIES_SRID)
+        )
         await conn.execute(
-            administrative_boundaries.insert(),
-            [
-                dict(
-                    id=uuid.uuid4(),
-                    boundary_type=boundary_type,
-                    external_dataset_id=external_dataset_id,
-                    code=boundary.code,
-                    name=boundary.name,
-                    nuts_code=boundary.nuts_code,
-                    geom=WKTElement(boundary.wkt, srid=BOUNDARIES_SRID),
-                    source_record_id=source_record_id,
-                )
-                for boundary in normalized_boundaries
-            ],
+            administrative_boundaries.insert().values(
+                id=uuid.uuid4(),
+                boundary_type=boundary_type,
+                external_dataset_id=external_dataset_id,
+                code=boundary.code,
+                name=boundary.name,
+                nuts_code=boundary.nuts_code,
+                geom=geometry,
+                source_record_id=source_record_id,
+            )
         )
 
     return BoundaryIngestResult(source_record_id=source_record_id, rows_written=len(normalized_boundaries))
@@ -256,6 +279,8 @@ async def ingest_facilities_dataset(
             select(source_records.c.id).where(
                 source_records.c.source_system == "CKAN",
                 source_records.c.resource_type == resource_type,
+                source_records.c.source_native_id
+                == str(external_dataset_id),
                 source_records.c.content_sha256 == content_sha256,
             )
         )
@@ -276,7 +301,7 @@ async def ingest_facilities_dataset(
             payload_uri=payload_uri,
             fetched_at=fetched_at,
             http_status=http_status,
-            license_code="CC-BY-4.0",  # TODO(confirm): data.gov.gr's exact per-dataset license
+            license_code=await _dataset_license(conn, external_dataset_id),
             parse_status="PARSED",
         )
     )

@@ -94,8 +94,8 @@ TED is ingested standalone — nothing on the ΚΗΜΔΗΣ side triggers it (see
 ```bash
 python -m services.ingestion.connectors.ted.cli backfill \
     --date-from 2025-01-01 --date-to 2025-01-30
-    # --country defaults to GR; add --with-vies (needs VIES_API_BASE_URL
-    # too) to validate foreign suppliers found in matched notices
+    # --country defaults to GR; add --with-vies to validate foreign
+    # suppliers through the official VIES service
 ```
 
 The connector defaults to the official public Search API v3 at
@@ -213,19 +213,30 @@ also sent immediately.
 
 ## 11. Auth (OIDC) and Postgres row-level security
 
+Start the bundled Keycloak service and its PostgreSQL store:
+
 ```bash
-export OIDC_ISSUER_URL=<your IdP's issuer URL>       # e.g. a self-hosted Keycloak realm
-export OIDC_AUDIENCE=<the API's expected audience>
-# optional: OIDC_JWKS_URL (defaults to <issuer>/.well-known/jwks.json),
-# OIDC_ROLE_CLAIM (default "role"), OIDC_TENANT_CLAIM (default "tenant_id")
+cd infra/docker
+docker compose up -d postgres keycloak-postgres keycloak
+
+export OIDC_ISSUER_URL=http://localhost:8080/realms/procintel
+export OIDC_AUDIENCE=procintel-api
+export OIDC_CLIENT_ID=procintel-web
+export OIDC_REDIRECT_URI=http://localhost:3000/callback
+export PROCINTEL_DEV_AUTH=false
 ```
 
-No specific OIDC provider is deployed by this repo yet. `packages/auth/` is a
-generic resource server that verifies bearer JWTs against the configured
-issuer. For local development only, `PROCINTEL_DEV_AUTH=true` supplies a
-deterministic owner and tenant. Business profiles, workspace records, alerts,
-opportunity scores, exports and entity-review actions are authenticated; shared
-procurement source data remains public by design.
+The realm import enables self-registration, a branded Greek/English login
+theme, Authorization Code + PKCE, the `procintel-api` audience, workspace
+roles and the deterministic local tenant. The seeded analyst account is
+`demo@procintel.local` / `ProcintelDemo!2026`; change or remove it outside
+local development. The Keycloak admin console is at `http://localhost:8080/admin`
+and uses `KEYCLOAK_ADMIN_USERNAME` / `KEYCLOAK_ADMIN_PASSWORD` from
+`infra/docker/.env`.
+
+`OIDC_JWKS_URL` is optional. When omitted, the API reads `jwks_uri` from the
+issuer's standard discovery document. `PROCINTEL_DEV_AUTH=true` remains an
+explicit test-only fallback when Keycloak is intentionally not running.
 
 `db/migrations/16_row_level_security.sql` creates a restricted
 `procintel_app` Postgres role with a placeholder password

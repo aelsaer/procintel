@@ -40,10 +40,18 @@ import uuid
 from datetime import date, timedelta
 from decimal import Decimal
 
+import sqlalchemy as sa
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from packages.domain.tables import act_cpv_codes, act_links, procurement_acts, process_members, procurement_processes
+from packages.domain.tables import (
+    act_cpv_codes,
+    act_links,
+    act_parties,
+    procurement_acts,
+    process_members,
+    procurement_processes,
+)
 from services.entity_resolution.text_similarity import normalized_similarity
 
 DATE_PROXIMITY_WINDOW_DAYS = 180
@@ -51,6 +59,26 @@ MATCH_CONFIDENCE = 0.85  # multi-attribute match (§8 level 3), not a source-ass
 LEVEL4_MATCH_CONFIDENCE = 0.65  # weaker than Level 3 — no CPV requirement, needs review
 LEVEL4_TITLE_SIMILARITY_THRESHOLD = 0.5
 LEVEL4_AMOUNT_TOLERANCE = 0.15  # +/-15%
+
+
+def _buyer_match_clause(buyer_entity_id: uuid.UUID):
+    """Use the process summary when present, with canonical act parties as fallback."""
+    buyer_act = procurement_acts.alias("buyer_match_act")
+    buyer_party = act_parties.alias("buyer_match_party")
+    process_has_buyer_party = (
+        select(sa.literal(1))
+        .select_from(buyer_act.join(buyer_party, buyer_party.c.act_id == buyer_act.c.id))
+        .where(
+            buyer_act.c.process_id == procurement_processes.c.id,
+            buyer_party.c.entity_id == buyer_entity_id,
+            buyer_party.c.party_role.in_(("BUYER", "CONTRACTING_AUTHORITY")),
+        )
+        .exists()
+    )
+    return sa.or_(
+        procurement_processes.c.buyer_entity_id == buyer_entity_id,
+        process_has_buyer_party,
+    )
 
 
 async def _find_candidate_process(
@@ -81,7 +109,7 @@ async def _find_candidate_process(
                 ).join(act_cpv_codes, act_cpv_codes.c.act_id == procurement_acts.c.id)
             )
             .where(
-                procurement_processes.c.buyer_entity_id == buyer_entity_id,
+                _buyer_match_clause(buyer_entity_id),
                 procurement_processes.c.record_status == "ACTIVE",
                 act_cpv_codes.c.cpv_code.in_(cpv_codes),
                 act_date.is_not(None),
@@ -127,7 +155,7 @@ async def _find_candidate_process_by_title_amount(
                 )
             )
             .where(
-                procurement_processes.c.buyer_entity_id == buyer_entity_id,
+                _buyer_match_clause(buyer_entity_id),
                 procurement_processes.c.record_status == "ACTIVE",
                 act_date.is_not(None),
                 act_date >= window_start,

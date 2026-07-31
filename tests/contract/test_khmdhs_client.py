@@ -1,7 +1,4 @@
-"""Connector-level tests against mocked HTTP (respx) — no live ΚΗΜΔΗΣ access
-required or attempted. Response envelope field names (`data`/`isLastPage`)
-match the client's current TODO-marked guess; update both together if the
-real API turns out to differ (docs/source-contracts/khmdhs.md)."""
+"""Connector-level tests against the documented ΚΗΜΔΗΣ wire contract."""
 
 import json
 from datetime import date
@@ -68,7 +65,10 @@ async def test_fetch_resource_page_works_for_non_contract_resources():
         )
     )
     respx.post(f"{BASE_URL}/khmdhs-opendata/payment", params={"page": 0}).mock(
-        return_value=httpx.Response(200, json=payment_fixture)
+        return_value=httpx.Response(
+            200,
+            json={"content": payment_fixture["data"], "last": payment_fixture["isLastPage"]},
+        )
     )
 
     client = KhmdhsClient(_config())
@@ -101,7 +101,7 @@ async def test_429_with_retry_after_is_retried_and_eventually_succeeds():
     route = respx.post(f"{BASE_URL}/khmdhs-opendata/contract", params={"page": 0})
     route.side_effect = [
         httpx.Response(429, headers={"Retry-After": "0"}),
-        httpx.Response(200, json=SAMPLE_BODY),
+        httpx.Response(200, json={"content": SAMPLE_BODY["data"], "last": True}),
     ]
 
     client = KhmdhsClient(_config())
@@ -119,7 +119,7 @@ async def test_5xx_is_retried_with_backoff_and_eventually_succeeds():
     route = respx.post(f"{BASE_URL}/khmdhs-opendata/contract", params={"page": 0})
     route.side_effect = [
         httpx.Response(503),
-        httpx.Response(200, json=SAMPLE_BODY),
+        httpx.Response(200, json={"content": SAMPLE_BODY["data"], "last": True}),
     ]
 
     client = KhmdhsClient(_config())

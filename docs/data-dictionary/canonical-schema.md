@@ -53,6 +53,7 @@ disagrees with the SQL, the SQL wins — update this file to match.
 |---|---|---|
 | `funding_projects` | ΑΝΑΠΤΥΞΗ project/υποέργο, one schema across 2007-2013/2014-2020/2021-2027 adapters. | `mis_ops_code`, `program_period`, `budget`, `contracted_amount`, `paid_amount` |
 | `funding_links` | Contract ↔ funding project, with join-hierarchy method (§19.2). | `link_method`, `confidence`, `evidence` |
+| `funding_project_participations` | Provider-confirmed company ↔ funded-project participation without forcing an ambiguous body-name match. | `entity_id`, `role`, `link_method`, `confidence`, `evidence` |
 | `ted_notice_details` | 1:1 supplement to a TED_NOTICE act; version-aware (eForms A/B/legacy). | `eforms_version`, `parser_version`, `parse_confidence` |
 | `mef_organizations` | ΜΕΦ-side organization record, resolved to `entities` where possible. | `entity_id`, `afm_raw` |
 | `mef_expenses` | ΜΕΦ declared expense/payment order — a *signal*, never asserted as "the contract was paid" without full proof. | `linked_act_id`, `link_method`, `confidence` (tiers per §20.2) |

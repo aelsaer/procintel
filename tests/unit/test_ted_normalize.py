@@ -35,6 +35,25 @@ def test_normalizes_foreign_supplier_notice():
     assert normalized.supplier.vat == "DE123456789"
 
 
+def test_normalizes_portuguese_country_nuts_and_earliest_lot_deadline():
+    normalized = normalize_ted_notice(
+        {
+            "publication-number": "123-2026",
+            "buyer-country": ["PRT"],
+            "buyer-name": {"eng": ["Lisbon Municipality"]},
+            "place-of-performance": ["PT170", "Lisboa"],
+            "deadline-receipt-tender-date-lot": ["2026-09-20", "2026-09-15"],
+            "deadline-receipt-tender-time-lot": ["17:00:00", "12:30:00"],
+        },
+        ted_notice_id="PT-2026-123",
+    )
+
+    assert normalized.country_code == "PT"
+    assert normalized.buyer.country_code == "PT"
+    assert normalized.nuts_codes == ["PT170"]
+    assert normalized.submission_deadline.isoformat() == "2026-09-15T12:30:00+00:00"
+
+
 def test_legacy_form_marker_yields_no_eforms_version_high_confidence():
     normalized = normalize_ted_notice({"legacyFormType": "F03"}, ted_notice_id="LEGACY-1")
     assert normalized.eforms_version is None

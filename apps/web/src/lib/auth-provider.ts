@@ -1,17 +1,18 @@
 import type { AccessControlProvider, AuthProvider } from "@refinedev/core";
 import { ApiError, api } from "@/lib/api";
+import { clearOidcSession, startLogoutRedirect } from "@/lib/oidc";
 
 export const ACCESS_TOKEN_KEY = "procintel_access_token";
 export const LOCAL_SESSION_KEY = "procintel_local_session";
 
 function clearClientSession() {
   if (typeof window === "undefined") return;
-  window.localStorage.removeItem(ACCESS_TOKEN_KEY);
+  clearOidcSession();
   window.localStorage.removeItem(LOCAL_SESSION_KEY);
 }
 
 export const procurementAuthProvider: AuthProvider = {
-  login: async ({ token, mode }: { token?: string; mode?: "local" }) => {
+  login: async ({ token, mode, redirectTo }: { token?: string; mode?: "local"; redirectTo?: string }) => {
     if (token && typeof window !== "undefined") window.localStorage.setItem(ACCESS_TOKEN_KEY, token);
     try {
       await api.getMe();
@@ -25,15 +26,16 @@ export const procurementAuthProvider: AuthProvider = {
       } catch {
         // best-effort
       }
-      return { success: true, redirectTo: "/" };
+      return { success: true, redirectTo: redirectTo ?? "/" };
     } catch (error) {
       if (token) clearClientSession();
       return { success: false, error: error as Error };
     }
   },
   logout: async () => {
-    clearClientSession();
-    return { success: true, redirectTo: "/login" };
+    const oidcRedirectStarted = startLogoutRedirect();
+    if (!oidcRedirectStarted) clearClientSession();
+    return { success: true, redirectTo: oidcRedirectStarted ? undefined : "/login" };
   },
   check: async () => {
     if (typeof window !== "undefined") {

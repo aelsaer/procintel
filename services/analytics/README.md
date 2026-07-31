@@ -30,25 +30,22 @@ of corruption or a tenant fit score as a win probability.
 
 ## Risk and anomaly indicators (§28)
 
-`risk_indicators.py` implements seven of the twelve indicator types §28 names,
-each backed by data this platform actually has: `HIGH_BUYER_CONCENTRATION`,
-`REPEAT_SAME_CONTRACTOR`, `FEW_DISTINCT_SUPPLIERS`, `REPEATED_MODIFICATIONS`,
+`risk_indicators.py` implements all twelve indicator types §28 names:
+`HIGH_BUYER_CONCENTRATION`, `REPEAT_SAME_CONTRACTOR`,
+`FEW_DISTINCT_SUPPLIERS`, `REPEATED_MODIFICATIONS`,
 `LARGE_VALUE_INCREASE`, `UNUSUAL_AWARD_TO_CONTRACT_DELAY`,
-`COMPANY_INACTIVE_IN_LATER_SNAPSHOT`. §28 is explicit that this is a
+`COMPANY_INACTIVE_IN_LATER_SNAPSHOT`, `SHORT_SUBMISSION_DEADLINE`,
+`HISTORICAL_BENCHMARK_DEVIATION`, `AWARDS_NEAR_THRESHOLD`,
+`PROCUREMENT_FRAGMENTATION` and `MISSING_EXPECTED_LINKED_ACTS`. §28 is
+explicit that this is a
 *procurement pattern* product, not an accusation engine — every instance
 carries the mandated non-accusatory UI copy ("Εντοπίστηκε ασυνήθιστο μοτίβο
 που απαιτεί περαιτέρω εξέταση", never "corruption detected") plus its
 mathematical definition, benchmark, minimum sample size, confidence,
 sources and known limitations, per §28's explicit per-indicator disclosure
-requirement.
-
-The other five §28 indicator types are deliberately not attempted yet:
-short submission deadlines and consecutive awards near statutory thresholds
-need data fields/reference tables this platform doesn't confirm having;
-general historical-benchmark deviation and possible-fragmentation clustering
-need an analysis method (time-series baselining, similarity clustering)
-beyond a first pass; "missing expected linked acts" wasn't scoped in this
-pass. Not guessed — see the module's own docstring.
+requirement. Statutory-threshold screening uses the explicit
+`PROCINTEL_PROCUREMENT_THRESHOLDS_EUR` configuration, and every result
+states that the configured benchmark is not a legal conclusion.
 
 Migration 22 makes market marts use the source-native event-date fallback and a
 deterministic CPV when the provider did not mark one primary. It also aggregates

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 class OpenSearchConfig:
     base_url: str
     index_name: str = "procurement_acts"
+    index_prefix: str = "procintel"
     username: str | None = None
     password: str | None = None
     request_timeout_seconds: float = 10.0
@@ -26,6 +27,15 @@ class OpenSearchConfig:
         return cls(
             base_url=base_url.rstrip("/"),
             index_name=os.environ.get("OPENSEARCH_INDEX_NAME", "procurement_acts"),
+            index_prefix=os.environ.get(
+                "OPENSEARCH_INDEX_PREFIX",
+                "procintel",
+            ).strip("_"),
             username=os.environ.get("OPENSEARCH_USERNAME"),
             password=os.environ.get("OPENSEARCH_PASSWORD"),
         )
+
+    def catalog_index_name(self, catalog: str) -> str:
+        if catalog == "procurement_acts":
+            return self.index_name
+        return f"{self.index_prefix}_{catalog}"

@@ -1,14 +1,11 @@
-"""Connector configuration.
-
-`base_url` has no default — description.txt confirms VIES exposes a WSDL
-`checkVat` operation (§3.9) but this repo doesn't assert the real endpoint
-without the spec stating it, same discipline as every other connector.
-"""
+"""Connector configuration for the European Commission VIES SOAP service."""
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+
+DEFAULT_BASE_URL = "https://ec.europa.eu/taxation_customs/vies/services"
 
 
 def _float_env(name: str, default: float) -> float:
@@ -33,13 +30,7 @@ class ViesConnectorConfig:
 
     @classmethod
     def from_env(cls) -> "ViesConnectorConfig":
-        base_url = os.environ.get("VIES_API_BASE_URL")
-        if not base_url:
-            raise RuntimeError(
-                "VIES_API_BASE_URL is not set. See docs/source-contracts/vies.md — "
-                "confirm the checkVat SOAP endpoint against the live WSDL before setting this."
-            )
         return cls(
-            base_url=base_url,
+            base_url=(os.environ.get("VIES_API_BASE_URL") or DEFAULT_BASE_URL).rstrip("/"),
             rate_limit_per_minute=_float_env("VIES_RATE_LIMIT_PER_MINUTE", cls.rate_limit_per_minute),
         )

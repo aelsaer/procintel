@@ -23,6 +23,11 @@ async def ensure_workspace_user(conn: AsyncConnection, user: AuthenticatedUser) 
     existing = (await conn.execute(sa.select(users.c.id).where(users.c.email == email))).first()
     if existing is not None:
         user_id = existing.id
+        await conn.execute(
+            users.update()
+            .where(users.c.id == user_id)
+            .values(mfa_enabled=user.mfa_verified)
+        )
     else:
         user_id = uuid.uuid4()
         await conn.execute(
@@ -30,6 +35,7 @@ async def ensure_workspace_user(conn: AsyncConnection, user: AuthenticatedUser) 
                 id=user_id,
                 email=email,
                 display_name=email.split("@", 1)[0],
+                mfa_enabled=user.mfa_verified,
             )
         )
 

@@ -22,17 +22,12 @@ answers "how does a confirmed participation fact get into
 its entity extractor (`services/documents/entities.py`) finds in a page —
 this is how a bidder named only in a PDF (never in `act_parties`) becomes
 a `CONFIRMED_PARTICIPANT` fact instead of staying invisible. Run
-`scripts/backfill_competition.py` once per environment (after the
-`act_parties`/documents backfills it depends on) to seed
-`process_participations` from data ingested before this package existed;
-it is not on the orchestration scheduler, since it's a one-time catch-up,
-not a recurring job.
+`scripts/backfill_competition.py` can seed an existing environment after the
+act/document backfills. The daily orchestration cycle also reconciles award
+facts idempotently so newly ingested suppliers become visible without an
+operator command.
 
-## Not yet implemented
-
-- No participation fact from ΤΕΔ/ΓΕΜΗ/ΜΕΦ signals yet — only official
-  `act_parties` awards and document-extracted mentions feed this table.
-- `discover_competitors()`'s scoring/classification logic living directly
-  in the router (not here) is a known layering wart worth revisiting if
-  it grows more scoring dimensions — not attempted in this pass since it
-  works correctly as-is and moving it is a pure refactor, not a gap.
+TED award parties are included by the same reconciliation because they are
+canonical `act_parties`. ΓΕΜΗ company profiles and ΜΕΦ expense signals are
+not treated as proof that a company submitted a tender, which prevents
+enrichment data from becoming false participation evidence.

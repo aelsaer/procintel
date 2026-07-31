@@ -83,7 +83,7 @@ async def test_freshly_onboarded_dataset_is_not_due(tmp_path):
 
 
 @respx.mock
-async def test_stale_dataset_is_refreshed_and_watermark_advances(tmp_path):
+async def test_stale_dataset_is_refreshed_and_watermark_advances(tmp_path, monkeypatch):
     from services.ingestion.connectors.ckan.client import CkanClient
     from services.ingestion.connectors.ckan.config import CkanConnectorConfig
 
@@ -93,6 +93,7 @@ async def test_stale_dataset_is_refreshed_and_watermark_advances(tmp_path):
     respx.get(RESOURCE_URL).mock(return_value=httpx.Response(200, content=CSV_BYTES))
 
     client = CkanClient(CkanConnectorConfig(base_url=BASE_URL, rate_limit_per_minute=6000))
+    monkeypatch.setenv("CKAN_API_BASE_URL", BASE_URL)
     engine = create_async_engine(_asyncpg_url())
     try:
         async with engine.connect() as conn:

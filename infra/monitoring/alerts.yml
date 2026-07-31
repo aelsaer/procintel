@@ -1,0 +1,32 @@
+groups:
+  - name: procintel
+    rules:
+      - alert: ProcintelApiDown
+        expr: up{job="procintel-api"} == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: Procintel API is unavailable
+      - alert: ProcintelDatabaseUnavailable
+        expr: procintel_database_available == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: Procintel cannot reach PostgreSQL
+      - alert: ProcurementSourceStale
+        expr: procintel_source_freshness_seconds > 172800
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Source {{ $labels.source }} has not produced data for 48 hours"
+      - alert: EntityReviewQueueGrowing
+        expr: procintel_entity_review_queue_depth > 500
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: Entity resolution review queue exceeds 500 candidates
+      - alert: ApiServerErrors
+        expr: increase(procintel_api_errors_total[10m]) > 10
+        labels: { severity: warning }
+        annotations:
+          summary: More than 10 API server errors in 10 minutes

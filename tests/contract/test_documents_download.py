@@ -6,6 +6,7 @@ import httpx
 import pytest
 import respx
 
+from packages.source_clients.rate_limit import TokenBucket
 from services.documents.config import DocumentPipelineConfig
 from services.documents.download import DocumentTooLargeError, download_document
 
@@ -32,3 +33,22 @@ async def test_raises_on_non_2xx_status():
     respx.get(URL).mock(return_value=httpx.Response(404))
     with pytest.raises(httpx.HTTPStatusError):
         await download_document(URL, config=DocumentPipelineConfig())
+
+
+@respx.mock
+async def test_retries_rate_limited_download_with_shared_provider_quota():
+    route = respx.get(URL)
+    route.side_effect = [
+        httpx.Response(429, headers={"Retry-After": "0"}),
+        httpx.Response(200, content=b"%PDF-1.4 retried"),
+    ]
+    limiter = TokenBucket(rate_per_minute=6000, burst=2)
+
+    result = await download_document(
+        URL,
+        config=DocumentPipelineConfig(max_download_attempts=2),
+        rate_limiter=limiter,
+    )
+
+    assert result.payload == b"%PDF-1.4 retried"
+    assert route.call_count == 2

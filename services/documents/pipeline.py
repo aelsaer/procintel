@@ -11,19 +11,27 @@ references).
 from __future__ import annotations
 
 import hashlib
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from packages.domain.tables import documents, source_records
+from packages.domain.tables import (
+    document_compliance_fields,
+    documents,
+    procurement_acts,
+    source_records,
+)
+from packages.source_clients.rate_limit import TokenBucket
 from services.competitors.participation import record_document_participant
 
 from .amounts import ExtractedAmount, extract_amounts
-from .antivirus import AntivirusScanner, NoOpAntivirusScanner
+from .antivirus import AntivirusScanner, configured_antivirus_scanner
 from .config import DocumentPipelineConfig
 from .db_writer import PageWrite, write_document_pages, write_field_provenance, upsert_document, update_document_extraction_status
 from .download import download_document
@@ -42,6 +50,7 @@ from .entities import (
     extract_unit_quantities,
 )
 from .mime import sniff_mime_type
+from .intelligence import PARSER_VERSION, extract_compliance_fields
 from .ocr import run_ocr
 from .pdf_text import extract_text_layer, open_pdf, rasterize_page
 from .storage import DocumentBlobStore, LocalFilesystemDocumentBlobStore
@@ -113,14 +122,22 @@ async def process_document(
     title: str | None = None,
     config: DocumentPipelineConfig | None = None,
     http_client: httpx.AsyncClient | None = None,
+    download_rate_limiter: TokenBucket | None = None,
     blob_store: DocumentBlobStore | None = None,
     av_scanner: AntivirusScanner | None = None,
 ) -> ProcessDocumentResult:
     config = config or DocumentPipelineConfig()
-    blob_store = blob_store or LocalFilesystemDocumentBlobStore(root="./data/documents")
-    av_scanner = av_scanner or NoOpAntivirusScanner()
+    blob_store = blob_store or LocalFilesystemDocumentBlobStore(
+        root=os.environ.get("DOCUMENT_STORE_ROOT", "./data/documents")
+    )
+    av_scanner = av_scanner or configured_antivirus_scanner()
 
-    downloaded = await download_document(url, config=config, http_client=http_client)
+    downloaded = await download_document(
+        url,
+        config=config,
+        http_client=http_client,
+        rate_limiter=download_rate_limiter,
+    )
     sha256 = hashlib.sha256(downloaded.payload).hexdigest()
 
     sniffed = sniff_mime_type(downloaded.payload)
@@ -276,6 +293,43 @@ async def process_document(
                 )
 
     await write_document_pages(conn, document_id=upsert_result.document_id, pages=page_writes)
+    if act_id is not None:
+        process_id = (
+            await conn.execute(
+                select(procurement_acts.c.process_id).where(
+                    procurement_acts.c.id == act_id
+                )
+            )
+        ).scalar()
+        if process_id is not None:
+            structured_fields = extract_compliance_fields(
+                [
+                    {
+                        "document_id": upsert_result.document_id,
+                        "page_number": page.page_number,
+                        "text": page.text,
+                    }
+                    for page in page_writes
+                ]
+            )
+            for field in structured_fields:
+                await conn.execute(
+                    pg_insert(document_compliance_fields)
+                    .values(
+                        id=uuid.uuid4(),
+                        process_id=process_id,
+                        document_id=field.document_id,
+                        page_number=field.page_number,
+                        category=field.category,
+                        field_name=field.field_name,
+                        value=field.value,
+                        source_excerpt=field.source_excerpt,
+                        extraction_method=field.extraction_method,
+                        parser_version=PARSER_VERSION,
+                        confidence=field.confidence,
+                    )
+                    .on_conflict_do_nothing()
+                )
     await update_document_extraction_status(
         conn,
         document_id=upsert_result.document_id,

@@ -1,6 +1,9 @@
 import pytest
 
-from services.ingestion.connectors.anaptyxi.config import AnaptyxiConnectorConfig
+from services.ingestion.connectors.anaptyxi.config import (
+    AnaptyxiConnectorConfig,
+    AnaptyxiUpstreamContractError,
+)
 
 
 def test_from_env_reads_period_specific_var(monkeypatch):
@@ -36,8 +39,27 @@ def test_from_env_missing_var_raises_runtime_error(monkeypatch):
     monkeypatch.delenv("ANAPTYXI_API_BASE_URL", raising=False)
     monkeypatch.delenv("ANAPTYXI_2021_2027_API_BASE_URL", raising=False)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(AnaptyxiUpstreamContractError):
         AnaptyxiConnectorConfig.from_env(program_period="ANAPTYXI_2021_2027")
+
+
+def test_validated_legacy_periods_have_public_defaults(monkeypatch):
+    for name in (
+        "ANAPTYXI_API_BASE_URL",
+        "ANAPTYXI_2007_2013_API_BASE_URL",
+        "ANAPTYXI_2014_2020_API_BASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    old = AnaptyxiConnectorConfig.from_env(
+        program_period="ANAPTYXI_2007_2013"
+    )
+    current = AnaptyxiConnectorConfig.from_env(
+        program_period="ANAPTYXI_2014_2020"
+    )
+
+    assert old.base_url == "https://2013.anaptyxi.gov.gr"
+    assert current.base_url == "https://anaptyxi.gov.gr"
 
 
 def test_from_env_unknown_period_raises_value_error():

@@ -56,6 +56,7 @@ test("process 360 exposes every intelligence tab and evidence drawer", async ({ 
   const tabs = [
     ["Overview", "Αναθέτουσα αρχή"],
     ["Documents", "Πράξεις"],
+    ["Bid workspace", /Αξιολόγηση και προετοιμασία προσφοράς|Καθήκοντα ομάδας/],
     ["Buyer history", "Buyer history"],
     ["Competitors", "Ανταγωνιστικό τοπίο"],
     ["Similar contracts", "Similar contracts"],
@@ -65,9 +66,76 @@ test("process 360 exposes every intelligence tab and evidence drawer", async ({ 
   ] as const;
   for (const [tab, heading] of tabs) {
     await page.getByRole("button", { name: tab, exact: true }).click();
-    await expect(page.getByRole("heading", { name: heading, exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: heading, exact: typeof heading === "string" }).first()).toBeVisible();
   }
   await expectNoHorizontalOverflow(page);
+});
+
+test("document intelligence answers against page evidence with citations", async ({ page }) => {
+  await page.goto(`/processes/${PROCESS_ID}`);
+  await page.getByRole("button", { name: "Documents", exact: true }).click();
+  await page.getByLabel("Ερώτηση στα έγγραφα").fill("Ποιες είναι οι βασικές απαιτήσεις;");
+  await page.getByRole("button", { name: "Υποβολή ερώτησης" }).click();
+  await expect(page.locator(".document-answer")).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator(".document-answer")).toContainText(/EXTRACTIVE|LLM GROUNDED|NO EVIDENCE/);
+  await expect(page.locator(".document-chat-log")).toHaveCSS("overflow-y", "auto");
+  await expectNoHorizontalOverflow(page);
+});
+
+test("bid workspace persists decision, tasks, and requirements", async ({ page, request }) => {
+  type BidWorkspace = {
+    status: string;
+    decision: string;
+    decision_rationale: string | null;
+    submission_due_at: string | null;
+    tasks: Array<{ id: string; title: string }>;
+    requirements: Array<{ id: string; title: string }>;
+  };
+  const initialResponse = await request.post(`/api/v1/bids/${PROCESS_ID}`);
+  expect([200, 201]).toContain(initialResponse.status());
+  const initial = await initialResponse.json() as BidWorkspace;
+  const taskTitle = `E2E task ${Date.now()}`;
+  const requirementTitle = `E2E requirement ${Date.now()}`;
+  let taskId: string | null = null;
+  let requirementId: string | null = null;
+
+  try {
+    await page.goto(`/processes/${PROCESS_ID}`);
+    await page.getByRole("button", { name: "Bid workspace", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Καθήκοντα ομάδας" })).toBeVisible();
+    await page.getByLabel("Νέο καθήκον").fill(taskTitle);
+    const taskResponse = page.waitForResponse((response) =>
+      response.url().includes(`/api/v1/bids/${PROCESS_ID}/tasks`) && response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Προσθήκη καθήκοντος" }).click();
+    taskId = (await (await taskResponse).json() as { id: string }).id;
+    await expect(page.getByText(taskTitle)).toBeVisible();
+    await page.getByLabel(`Κατάσταση ${taskTitle}`).selectOption("IN_PROGRESS");
+
+    await page.getByLabel("Τύπος απαίτησης").selectOption("CERTIFICATE");
+    await page.getByLabel("Νέα απαίτηση").fill(requirementTitle);
+    const requirementResponse = page.waitForResponse((response) =>
+      response.url().includes(`/api/v1/bids/${PROCESS_ID}/requirements`) && response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Προσθήκη απαίτησης" }).click();
+    requirementId = (await (await requirementResponse).json() as { id: string }).id;
+    await expect(page.getByLabel("Απαιτήσεις", { exact: true }).getByText(requirementTitle)).toBeVisible();
+    await page.getByLabel(`Κατάσταση ${requirementTitle}`).selectOption("MET");
+
+    await page.getByRole("button", { name: "BID", exact: true }).click();
+    await expect.poll(async () => (await apiGet<BidWorkspace>(request, `/v1/bids/${PROCESS_ID}`)).decision).toBe("BID");
+  } finally {
+    if (taskId) await apiDelete(request, `/v1/bids/${PROCESS_ID}/tasks/${taskId}`);
+    if (requirementId) await apiDelete(request, `/v1/bids/${PROCESS_ID}/requirements/${requirementId}`);
+    await request.patch(`/api/v1/bids/${PROCESS_ID}`, {
+      data: {
+        status: initial.status,
+        decision: initial.decision,
+        decision_rationale: initial.decision_rationale,
+        submission_due_at: initial.submission_due_at,
+      },
+    });
+  }
 });
 
 test("process notes and tags persist and can be removed", async ({ page, request }) => {

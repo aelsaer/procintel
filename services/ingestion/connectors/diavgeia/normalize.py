@@ -1,13 +1,9 @@
 """Διαύγεια decision -> canonical shape (spec §17.2).
 
-Field names below are a best-effort guess — description.txt lists what a
-decision carries conceptually (subject, type, date, protocol number,
-issuing authority, organizational unit, signers, document URL, version log)
-but not the JSON field names themselves, since no sample payload was
-available. Fix here once a real payload is confirmed
-(docs/source-contracts/diavgeia.md, Στάδιο 0); each field tries a couple of
-plausible names as a soft hedge, same pattern as
-`services/ingestion/connectors/khmdhs/normalize.py`.
+The primary field mapping is validated against live Open Data decisions
+(`subject`, `issueDate`, `protocolNumber`, `organizationId`, `unitIds`,
+`signerIds`, `documentUrl`). Historical label aliases remain accepted for
+archived fixtures and proxy-normalized payloads.
 
 Issuing authority / organizational unit are kept as plain text, not
 resolved to a canonical `entities` row: description.txt's matching

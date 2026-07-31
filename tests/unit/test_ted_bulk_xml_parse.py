@@ -49,3 +49,26 @@ def test_parsed_record_feeds_normalize_ted_notice_unchanged():
 def test_malformed_xml_raises_parse_error():
     with pytest.raises(ParseError):
         parse_bulk_xml_package(b"<TedExport><Notice><Title>unterminated")
+
+
+def test_parse_bulk_xml_supports_namespaced_eforms_ubl():
+    xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <efac:ContractNotice
+      xmlns:efac="urn:oasis:names:specification:ubl:schema:xsd:ContractNotice-2"
+      xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2"
+      xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2">
+      <cbc:CustomizationID>eforms-sdk-1.13</cbc:CustomizationID>
+      <cbc:ID>notice-2026-001</cbc:ID>
+      <cbc:IssueDate>2026-07-10</cbc:IssueDate>
+      <cac:ContractingParty><cac:Party><cac:PartyName><cbc:Name>Greek Buyer</cbc:Name></cac:PartyName></cac:Party></cac:ContractingParty>
+      <cac:ProcurementProject>
+        <cbc:Name>GIS services</cbc:Name>
+        <cac:MainCommodityClassification><cbc:ItemClassificationCode>72212326</cbc:ItemClassificationCode></cac:MainCommodityClassification>
+        <cbc:EstimatedOverallContractAmount>120000</cbc:EstimatedOverallContractAmount>
+      </cac:ProcurementProject>
+    </efac:ContractNotice>"""
+    rows = parse_bulk_xml_package(xml)
+    assert rows[0]["noticeId"] == "notice-2026-001"
+    assert rows[0]["customization-id"] == "eforms-sdk-1.13"
+    assert rows[0]["buyer"]["name"] == "Greek Buyer"
+    assert rows[0]["cpvCodes"] == ["72212326"]

@@ -21,14 +21,18 @@ dataset gets its own configuration on top of a generic connector.
   resource_search
   ```
 
-  Exact paths/limits must be confirmed against the live deployment at
-  onboarding time — record findings in `external_datasets.config`.
+  These paths and signed resource-download redirects are live-validated.
+  Every onboarded resource records its schema fingerprint and mapping in
+  `external_datasets`/`external_dataset_validations`.
 
 ## First datasets to onboard (v1)
 
 Administrative boundaries, population per municipality/NUTS, basic school
 data, basic hospital data, regional economic indicators, selected
-environmental layers.
+environmental layers. The maintained manifest currently auto-onboards
+municipal-unit boundaries and the national school/student dataset; other
+datasets use the same validation-first onboarding command when a suitable
+official resource is selected.
 
 ## Derived metrics enabled (§22.3)
 

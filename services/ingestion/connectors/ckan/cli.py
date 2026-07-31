@@ -33,7 +33,7 @@ import asyncio
 import os
 from datetime import datetime, timezone
 
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 from packages.source_clients.raw_store import LocalFilesystemRawStore
 
@@ -45,19 +45,66 @@ from .db_writer import (
     ingest_metric_dataset,
     ingest_population_dataset,
 )
-from .facilities import DEFAULT_CAPACITY_FIELD_CANDIDATES
+from .facilities import DEFAULT_CAPACITY_FIELD_CANDIDATES, STUDENT_COMPONENT_FIELDS
 from .normalize import DEFAULT_VALUE_FIELD_CANDIDATES
 from .registry import upsert_external_dataset
+from .validation import record_validation, validate_resource
 
 CATALOG_SOURCE = "DATA_GOV_GR"
 BOUNDARY_TYPES = ("MUNICIPALITY", "REGION", "REGIONAL_UNIT", "POSTAL_CODE", "ENVIRONMENTAL_ZONE")
 FACILITY_TYPES = ("SCHOOL", "HOSPITAL")
+DEFAULT_DATASETS = (
+    {
+        "dataset_id": "gis-ypen-floods-wms-adm_pol_dimotikes_enotites",
+        "adapter": "boundaries",
+        "boundary_type": "MUNICIPALITY",
+        "coverage": "GREECE",
+    },
+    {
+        "dataset_id": "minedu_students_school",
+        "adapter": "facilities",
+        "facility_type": "SCHOOL",
+        "capacity_metric": "STUDENTS",
+        "capacity_field": None,
+        "coverage": "GREECE",
+    },
+)
 
 
 def _to_asyncpg_url(database_url: str) -> str:
     if database_url.startswith("postgresql://"):
         return "postgresql+asyncpg://" + database_url[len("postgresql://") :]
     return database_url
+
+
+async def _validate_download(
+    conn: AsyncConnection,
+    *,
+    dataset_id: str,
+    external_dataset_id,
+    adapter_name: str,
+    resource_url: str,
+    content: bytes,
+    required_column_groups: tuple[tuple[str, ...], ...] = (),
+) -> None:
+    validation = validate_resource(
+        content,
+        adapter_name=adapter_name,
+        required_column_groups=required_column_groups,
+    )
+    await record_validation(
+        conn,
+        external_dataset_id=external_dataset_id,
+        adapter_name=adapter_name,
+        resource_url=resource_url,
+        validation=validation,
+    )
+    if validation.status != "VALID":
+        await conn.commit()
+        raise RuntimeError(
+            f"dataset {dataset_id!r} failed live schema validation: "
+            + "; ".join(validation.errors)
+        )
 
 
 async def _sync_population(dataset_id: str, reference_year: int, database_url: str, raw_root: str) -> None:
@@ -86,6 +133,18 @@ async def _sync_population(dataset_id: str, reference_year: int, database_url: s
             await conn.commit()
 
             resource_response = await client.fetch_resource_bytes(resource_url)
+            await _validate_download(
+                conn,
+                dataset_id=dataset_id,
+                external_dataset_id=registry_result.external_dataset_id,
+                adapter_name="population",
+                resource_url=resource_url,
+                content=resource_response.content,
+                required_column_groups=(
+                    ("kallikratis_code", "municipality_code", "dimos_code", "nuts_code", "nuts3", "nuts"),
+                    DEFAULT_VALUE_FIELD_CANDIDATES,
+                ),
+            )
             raw_ref = await raw_store.put(
                 source="ckan",
                 resource="population",
@@ -140,6 +199,14 @@ async def _sync_boundaries(dataset_id: str, boundary_type: str, database_url: st
             await conn.commit()
 
             resource_response = await client.fetch_resource_bytes(resource_url)
+            await _validate_download(
+                conn,
+                dataset_id=dataset_id,
+                external_dataset_id=registry_result.external_dataset_id,
+                adapter_name="boundaries",
+                resource_url=resource_url,
+                content=resource_response.content,
+            )
             raw_ref = await raw_store.put(
                 source="ckan",
                 resource="administrative_boundary",
@@ -190,11 +257,27 @@ async def _sync_metric(
                 resource_type="CSV",
                 resource_url=resource_url,
                 adapter_name="metric",
-                config={"metric_name": metric_name, "reference_year": reference_year},
+                config={
+                    "metric_name": metric_name,
+                    "reference_year": reference_year,
+                    "value_field": value_field,
+                },
             )
             await conn.commit()
 
             resource_response = await client.fetch_resource_bytes(resource_url)
+            await _validate_download(
+                conn,
+                dataset_id=dataset_id,
+                external_dataset_id=registry_result.external_dataset_id,
+                adapter_name="metric",
+                resource_url=resource_url,
+                content=resource_response.content,
+                required_column_groups=(
+                    ("kallikratis_code", "municipality_code", "dimos_code", "nuts_code", "nuts3", "nuts"),
+                    value_field_candidates,
+                ),
+            )
             raw_ref = await raw_store.put(
                 source="ckan",
                 resource=f"metric_{metric_name.lower()}",
@@ -255,11 +338,43 @@ async def _sync_facilities(
                 resource_type="CSV",
                 resource_url=resource_url,
                 adapter_name="facilities",
-                config={"facility_type": facility_type, "capacity_metric": capacity_metric},
+                config={
+                    "facility_type": facility_type,
+                    "capacity_metric": capacity_metric,
+                    "capacity_field": capacity_field,
+                },
             )
             await conn.commit()
 
             resource_response = await client.fetch_resource_bytes(resource_url)
+            capacity_columns = (
+                (*capacity_field_candidates, *STUDENT_COMPONENT_FIELDS)
+                if capacity_metric
+                else ()
+            )
+            required_groups = [
+                (
+                    "code",
+                    "facility_code",
+                    "school_code",
+                    "hospital_code",
+                    "name",
+                    "facility_name",
+                    "school_name",
+                    "hospital_name",
+                )
+            ]
+            if capacity_columns:
+                required_groups.append(capacity_columns)
+            await _validate_download(
+                conn,
+                dataset_id=dataset_id,
+                external_dataset_id=registry_result.external_dataset_id,
+                adapter_name="facilities",
+                resource_url=resource_url,
+                content=resource_response.content,
+                required_column_groups=tuple(required_groups),
+            )
             raw_ref = await raw_store.put(
                 source="ckan",
                 resource=f"facility_{facility_type.lower()}",
@@ -326,12 +441,41 @@ def main() -> None:
     sync_facilities.add_argument("--database-url", default=None, help="defaults to $DATABASE_URL")
     sync_facilities.add_argument("--raw-root", default="./raw", help="local raw-storage root")
 
+    onboard_defaults = subparsers.add_parser(
+        "onboard-defaults",
+        help="validate and ingest the maintained data.gov.gr dataset manifest",
+    )
+    onboard_defaults.add_argument("--database-url", default=None, help="defaults to $DATABASE_URL")
+    onboard_defaults.add_argument("--raw-root", default="./raw", help="local raw-storage root")
+
     args = parser.parse_args()
     database_url = args.database_url or os.environ.get("DATABASE_URL")
     if not database_url:
         parser.error("--database-url or $DATABASE_URL is required")
 
-    if args.command == "sync-boundaries":
+    if args.command == "onboard-defaults":
+        for dataset in DEFAULT_DATASETS:
+            if dataset["adapter"] == "boundaries":
+                asyncio.run(
+                    _sync_boundaries(
+                        dataset["dataset_id"],
+                        dataset["boundary_type"],
+                        database_url,
+                        args.raw_root,
+                    )
+                )
+            elif dataset["adapter"] == "facilities":
+                asyncio.run(
+                    _sync_facilities(
+                        dataset["dataset_id"],
+                        dataset["facility_type"],
+                        dataset.get("capacity_metric"),
+                        dataset.get("capacity_field"),
+                        database_url,
+                        args.raw_root,
+                    )
+                )
+    elif args.command == "sync-boundaries":
         asyncio.run(_sync_boundaries(args.dataset_id, args.boundary_type, database_url, args.raw_root))
     elif args.command == "sync-metric":
         asyncio.run(

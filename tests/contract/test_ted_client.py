@@ -49,30 +49,41 @@ async def test_search_notices_posts_official_v3_body_and_parses_total_count():
     assert request_body == {
         "query": "buyer-country = GRC AND publication-date >= 20250101 AND publication-date <= 20250130",
         "fields": list(TED_SEARCH_FIELDS),
-        "page": 1,
         "limit": 250,
         "scope": "ALL",
         "checkQuerySyntax": False,
-        "paginationMode": "PAGE_NUMBER",
+        "paginationMode": "ITERATION",
+        "onlyLatestVersions": False,
     }
     assert page.is_last_page is True
     assert page.notices[0]["publication-number"] == "123456-2025"
 
 
 @respx.mock
-async def test_total_count_drives_page_number_pagination():
-    body = {"notices": [SAMPLE_NOTICE], "totalNoticeCount": 501}
+async def test_iteration_token_drives_cursor_pagination():
+    body = {
+        "notices": [SAMPLE_NOTICE],
+        "totalNoticeCount": 501,
+        "iterationNextToken": "next-page-token",
+    }
     route = respx.post(f"{BASE_URL}/v3/notices/search").mock(
         return_value=httpx.Response(200, json=body)
     )
     client = TedClient(_config())
     try:
         page = await client.search_notices(
-            country="GR", date_from=date(2025, 1, 1), date_to=date(2025, 1, 30), page=1
+            country="GR",
+            date_from=date(2025, 1, 1),
+            date_to=date(2025, 1, 30),
+            page=1,
+            iteration_next_token="current-page-token",
         )
     finally:
         await client.aclose()
-    assert json.loads(route.calls[0].request.content)["page"] == 2
+    request_body = json.loads(route.calls[0].request.content)
+    assert request_body["iterationNextToken"] == "current-page-token"
+    assert "page" not in request_body
+    assert page.iteration_next_token == "next-page-token"
     assert page.is_last_page is False
 
 
@@ -87,4 +98,3 @@ async def test_5xx_is_retried_then_raises_on_exhaustion():
             )
     finally:
         await client.aclose()
-

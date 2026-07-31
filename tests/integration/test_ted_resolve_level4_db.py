@@ -12,6 +12,7 @@ enough to match at Level 4. Verifies: the link uses
 — the review-queue signal, §21.3's "manual review" tier).
 """
 
+import copy
 import json
 import os
 import uuid
@@ -50,15 +51,40 @@ def _asyncpg_url() -> str:
     return url
 
 
+def _valid_afm(seed: int) -> str:
+    prefix = f"{10_000_000 + seed % 89_999_999:08d}"
+    checksum = (
+        sum(int(prefix[index]) * (2 ** (8 - index)) for index in range(8))
+        % 11
+    ) % 10
+    return f"{prefix}{checksum}"
+
+
 async def test_level4_matches_on_title_amount_when_cpv_does_not_overlap(tmp_path):
     engine = create_async_engine(_asyncpg_url())
+    unique_seed = uuid.uuid4().int
+    buyer_afm = _valid_afm(unique_seed)
+    contract_record = copy.deepcopy(CONTRACT_RECORD)
+    contract_record["referenceNumber"] = (
+        f"25SYMV{unique_seed % 1_000_000_000:09d}"
+    )
+    contract_record["organizationVatNumber"] = buyer_afm
+    contract_record["organizationName"] = f"ΔΗΜΟΣ ΔΟΚΙΜΗΣ {unique_seed}"
+    ted_notice = copy.deepcopy(TED_NOTICE)
+    ted_notice_id = f"2025-TED-{unique_seed % 1_000_000_000:09d}"
+    ted_notice["noticeId"] = ted_notice_id
+    ted_notice["publicationNumber"] = (
+        f"{unique_seed % 1_000_000:06d}-2025"
+    )
+    ted_notice["buyer"]["vatNumber"] = buyer_afm
+    ted_notice["buyer"]["name"] = contract_record["organizationName"]
 
     try:
         async with engine.connect() as conn:
             khmdhs_result = await ingest_khmdhs_record(
                 conn,
                 resource="contract",
-                raw_record=CONTRACT_RECORD,
+                raw_record=contract_record,
                 payload_uri="mem://contract",
                 content_sha256=f"sha-{uuid.uuid4()}",
                 http_status=200,
@@ -83,8 +109,8 @@ async def test_level4_matches_on_title_amount_when_cpv_does_not_overlap(tmp_path
 
             notice_result = await ingest_notice_record(
                 conn,
-                ted_notice_id="2025-TED-000789",
-                raw_body=TED_NOTICE,
+                ted_notice_id=ted_notice_id,
+                raw_body=ted_notice,
                 raw_format="JSON",
                 payload_uri="mem://ted-level4",
                 content_sha256=f"sha-{uuid.uuid4()}",

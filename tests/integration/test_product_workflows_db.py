@@ -55,6 +55,31 @@ async def test_tenant_product_workflows_end_to_end(monkeypatch, tmp_path):
         assert scoring.json()["status"] in {"QUEUED", "RUNNING", "SUCCEEDED"}
         assert scoring.json()["reason"] == "BUSINESS_PROFILE_CHANGED"
 
+        feedback = await client.put("/v1/business-profile/relevance-feedback", json={
+            "process_id": str(process_id),
+            "label": "RELEVANT",
+            "reason": "Matches the current GIS profile",
+        })
+        assert feedback.status_code == 200
+        assert len((await client.get("/v1/business-profile/relevance-feedback")).json()) == 1
+
+        changed_profile = await client.put("/v1/business-profile", json={
+            "company_name": "Workflow Supplier",
+            "description": "Υπηρεσίες καθαρισμού και αποψιλώσεων",
+            "cpv_prefixes": ["77312000"], "keywords": ["αποψιλ"],
+            "nuts_codes": [], "buyer_types": [], "procedure_types": [],
+            "amount_min": 0, "classify": True,
+        })
+        assert changed_profile.status_code == 200
+        assert changed_profile.json()["classification_version"] > profile.json()["classification_version"]
+        assert (await client.get("/v1/business-profile/relevance-feedback")).json() == []
+        stale_radar = await client.get(
+            "/v1/intelligence/opportunities",
+            params={"profile_version": profile.json()["classification_version"]},
+        )
+        assert stale_radar.status_code == 200
+        assert stale_radar.json() == []
+
         saved = await client.post("/v1/workspace/saved-searches", json={
             "name": "ICT", "query": {"q": "cloud"},
         })

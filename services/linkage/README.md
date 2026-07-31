@@ -1,7 +1,7 @@
 # services/linkage
 
-**This package is an empty placeholder — there is no code here.** The
-cross-act/cross-source linkage engine described below (spec §8,
+This package is the index and contract for the distributed cross-act and
+cross-source linkage engine described below (spec §8,
 §16.5-16.6, §19.2, §20.1, §21.3: the confidence hierarchy from official
 source relation → exact identifier → multi-attribute → fuzzy → human
 review, `act_links`/`funding_links` writes, stable `process_id`
@@ -23,8 +23,6 @@ confidence-hierarchy shape (official relation first, exact identifier
 next, fuzzy/similarity last), since each source's "how do I know this
 links to that" evidence is genuinely different — an ΑΔΑ reference isn't
 the same shape as a TED notice number match. Consolidating them into one
-shared engine module (what this package's name promises) is a real,
-worthwhile refactor, just not one that's been done yet — don't add new
-code here expecting it to be picked up; wire new linkage logic into the
-relevant connector's own `resolve.py` instead, following the existing
-pattern.
+shared engine is unnecessary while each source has a different evidence
+contract. New linkage logic belongs in the relevant connector's
+`resolve.py`, following the existing confidence and review pattern.

@@ -10,6 +10,7 @@ some *other* field (with the status staying the same) must not fire it at
 all.
 """
 
+import copy
 import json
 import os
 import uuid
@@ -49,18 +50,27 @@ def _asyncpg_url() -> str:
     return url
 
 
-async def _make_company_entity(conn) -> uuid.UUID:
+def _valid_afm(seed: int) -> str:
+    prefix = f"{10_000_000 + seed % 89_999_999:08d}"
+    checksum = (
+        sum(int(prefix[index]) * (2 ** (8 - index)) for index in range(8))
+        % 11
+    ) % 10
+    return f"{prefix}{checksum}"
+
+
+async def _make_company_entity(conn, afm: str) -> uuid.UUID:
     entity_id = uuid.uuid4()
     await conn.execute(
-        entities.insert().values(id=entity_id, entity_type="COMPANY", canonical_name=AFM, normalized_name=AFM)
+        entities.insert().values(id=entity_id, entity_type="COMPANY", canonical_name=afm, normalized_name=afm)
     )
     await conn.execute(
         entity_identifiers.insert().values(
             id=uuid.uuid4(),
             entity_id=entity_id,
             scheme="AFM",
-            value_raw=AFM,
-            value_normalized=AFM,
+            value_raw=afm,
+            value_normalized=afm,
             country_code="GR",
         )
     )
@@ -68,7 +78,7 @@ async def _make_company_entity(conn) -> uuid.UUID:
     return entity_id
 
 
-async def _seed_rule(conn) -> uuid.UUID:
+async def _seed_rule(conn, entity_id: uuid.UUID) -> uuid.UUID:
     tenant_id, user_id = uuid.uuid4(), uuid.uuid4()
     await conn.execute(tenants.insert().values(id=tenant_id, name="Test Tenant"))
     await conn.execute(users.insert().values(id=user_id, email=f"{uuid.uuid4()}@example.test"))
@@ -80,7 +90,7 @@ async def _seed_rule(conn) -> uuid.UUID:
             user_id=user_id,
             name="company status changes",
             event_types=["company.status_changed"],
-            filters={},
+            filters={"supplier_id": str(entity_id)},
             schedule="IMMEDIATE",
             delivery_channels=["IN_APP"],
         )
@@ -91,6 +101,12 @@ async def _seed_rule(conn) -> uuid.UUID:
 
 @respx.mock
 async def test_status_change_fires_once_not_on_first_snapshot_or_unrelated_change(tmp_path):
+    unique_seed = uuid.uuid4().int
+    afm = _valid_afm(unique_seed)
+    ar_gemi = 100_000_000_000 + unique_seed % 900_000_000_000
+    sample_body = copy.deepcopy(SAMPLE_BODY)
+    sample_body["afm"] = afm
+    sample_body["arGemi"] = ar_gemi
     client = GemiClient(GemiConnectorConfig(base_url=BASE_URL, api_key="test-key", rate_limit_per_minute=6000))
     provider = GemiCompanyRegistryProvider(client)
     raw_store = LocalFilesystemRawStore(tmp_path / "raw")
@@ -99,21 +115,21 @@ async def test_status_change_fires_once_not_on_first_snapshot_or_unrelated_chang
 
     try:
         async with engine.connect() as conn:
-            entity_id = await _make_company_entity(conn)
-            rule_id = await _seed_rule(conn)
+            entity_id = await _make_company_entity(conn, afm)
+            rule_id = await _seed_rule(conn, entity_id)
 
             # 1. first-ever snapshot: wrote_new_snapshot=True but old_status is
             # None (nothing to report a change from) -> must not fire
             respx.get(
-                f"{BASE_URL}/companies", params={"afm": AFM, "resultsSize": "1"}
+                f"{BASE_URL}/companies", params={"afm": afm, "resultsSize": "1"}
             ).mock(
-                return_value=httpx.Response(200, json={"searchResults": [SAMPLE_BODY]})
+                return_value=httpx.Response(200, json={"searchResults": [sample_body]})
             )
-            respx.get(f"{BASE_URL}/companies/{AR_GEMI}/documents").mock(
+            respx.get(f"{BASE_URL}/companies/{ar_gemi}/documents").mock(
                 return_value=httpx.Response(200, json={"decision": [], "publication": []})
             )
             first = await resolve_company_snapshot(
-                conn, provider=provider, raw_store=raw_store, afm_normalized=AFM, entity_id=entity_id
+                conn, provider=provider, raw_store=raw_store, afm_normalized=afm, entity_id=entity_id
             )
             assert first.wrote_new_snapshot is True
             assert first.old_status is None

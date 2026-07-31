@@ -12,6 +12,22 @@ import services.ingestion.connectors.diavgeia.resolve as resolve_module
 from services.ingestion.connectors.diavgeia.db_writer import DecisionIngestResult
 
 
+class _DocumentLookupResult:
+    def __init__(self, value=None):
+        self.value = value
+
+    def first(self):
+        return self.value
+
+
+class _DocumentLookupConnection:
+    def __init__(self, value=None):
+        self.value = value
+
+    async def execute(self, statement):
+        return _DocumentLookupResult(self.value)
+
+
 async def test_does_nothing_when_process_documents_is_false(monkeypatch):
     calls = []
 
@@ -34,7 +50,11 @@ async def test_does_nothing_when_there_is_no_document_url(monkeypatch):
     monkeypatch.setattr(resolve_module, "process_document", _spy_process_document)
 
     result = DecisionIngestResult(source_record_id=uuid.uuid4(), act_id=uuid.uuid4(), document_url=None)
-    await resolve_module._maybe_process_decision_document(conn=object(), result=result, process_documents=True)
+    await resolve_module._maybe_process_decision_document(
+        conn=_DocumentLookupConnection(),
+        result=result,
+        process_documents=True,
+    )
     assert calls == []
 
 
@@ -48,12 +68,38 @@ async def test_calls_process_document_with_the_decision_url_and_act_id(monkeypat
 
     act_id = uuid.uuid4()
     result = DecisionIngestResult(source_record_id=uuid.uuid4(), act_id=act_id, document_url="https://example.test/a.pdf")
-    await resolve_module._maybe_process_decision_document(conn=object(), result=result, process_documents=True)
-
+    await resolve_module._maybe_process_decision_document(
+        conn=_DocumentLookupConnection(),
+        result=result,
+        process_documents=True,
+    )
     assert len(calls) == 1
     assert calls[0]["url"] == "https://example.test/a.pdf"
     assert calls[0]["act_id"] == act_id
     assert calls[0]["document_type"] == "DIAVGEIA_DECISION_PDF"
+
+
+async def test_skips_download_when_decision_document_already_exists(monkeypatch):
+    calls = []
+
+    async def _spy_process_document(conn, **kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(resolve_module, "process_document", _spy_process_document)
+    result = DecisionIngestResult(
+        source_record_id=uuid.uuid4(),
+        act_id=uuid.uuid4(),
+        document_url="https://example.test/a.pdf",
+    )
+
+    status = await resolve_module._maybe_process_decision_document(
+        conn=_DocumentLookupConnection(value=object()),
+        result=result,
+        process_documents=True,
+    )
+
+    assert status == "EXISTING"
+    assert calls == []
 
 
 async def test_a_processing_failure_is_swallowed_not_raised(monkeypatch):
@@ -64,4 +110,8 @@ async def test_a_processing_failure_is_swallowed_not_raised(monkeypatch):
 
     result = DecisionIngestResult(source_record_id=uuid.uuid4(), act_id=uuid.uuid4(), document_url="https://example.test/a.pdf")
     # must not raise
-    await resolve_module._maybe_process_decision_document(conn=object(), result=result, process_documents=True)
+    await resolve_module._maybe_process_decision_document(
+        conn=_DocumentLookupConnection(),
+        result=result,
+        process_documents=True,
+    )

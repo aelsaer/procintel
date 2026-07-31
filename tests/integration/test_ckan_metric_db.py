@@ -16,10 +16,10 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from packages.domain.tables import geo_denominators, source_records
+from packages.domain.tables import external_datasets, geo_denominators, source_records
 from services.ingestion.connectors.ckan.db_writer import ingest_metric_dataset, ingest_population_dataset
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -42,6 +42,27 @@ async def test_regional_indicator_and_population_coexist_without_collision():
 
     try:
         async with engine.connect() as conn:
+            await conn.execute(
+                external_datasets.insert().values(
+                    id=external_dataset_id,
+                    catalog_source="TEST",
+                    catalog_dataset_id=f"regional-metrics-{external_dataset_id}",
+                    title="Regional metrics fixture",
+                    ingestion_status="ONBOARDED",
+                    adapter_name="metric",
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO nuts_areas (code, level, name_en, classification_version)
+                    VALUES
+                        ('EL301', 3, 'Central Athens', 'NUTS-2021'),
+                        ('EL303', 3, 'West Athens', 'NUTS-2021')
+                    ON CONFLICT (code) DO NOTHING
+                    """
+                )
+            )
             gdp_result = await ingest_metric_dataset(
                 conn,
                 external_dataset_id=external_dataset_id,

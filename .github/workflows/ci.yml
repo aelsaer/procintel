@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: python -m compileall apps packages services scripts
+      - run: pytest tests/unit tests/contract -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: npm run build
+      - run: npm audit --audit-level=high
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: procintel
+          POSTGRES_PASSWORD: procintel
+          POSTGRES_DB: procintel
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U procintel -d procintel"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://procintel:procintel@127.0.0.1:5432/procintel
+      PROCINTEL_APP_DATABASE_URL: postgresql://procintel_app:CHANGE_ME_procintel_app@127.0.0.1:5432/procintel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ./db/run_migrations.sh
+      - run: pytest tests/integration -q
+
+  ui-smoke:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test e2e/auth.spec.ts
+
+  containers:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend, integration, ui-smoke]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose --env-file infra/docker/.env.production.example -f infra/docker/docker-compose.production.yml config >/dev/null
+      - run: docker build -f infra/docker/Dockerfile.api -t procintel-api:ci .
+      - run: docker build -f infra/docker/Dockerfile.web -t procintel-web:ci .
+      - run: docker build -f infra/docker/Dockerfile.scheduler -t procintel-scheduler:ci .

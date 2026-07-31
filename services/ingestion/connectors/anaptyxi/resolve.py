@@ -4,16 +4,14 @@
        confirmed for that record type. Confidence 0.95 (`MIS_OPS_EXACT`).
     2. Beneficiary/contractor ΑΦΜ + project title + time period.
        Confidence 0.85 (`AFM_TITLE_PERIOD`).
-    3. ΑΔΑ or ΑΔΑΜ found in metadata or documents. Confidence 0.90
+    3. ΑΔΑ or ΑΔΑΜ found in source metadata. Confidence 0.90
        (`ADA_ADAM_IN_METADATA`) — a concrete identifier match, stronger
        than fuzzy text but still not source-asserted (contrast with
        `adamChain`/Διαύγεια exact-ΑΔΑ links at 1.0).
     4. Normalized title + similar amount + same region + same beneficiary,
        with mandatory review when confidence isn't high. Confidence 0.60
-       (`FUZZY_TITLE_AMOUNT_REGION`), left with `funding_links.reviewed_by
-       IS NULL` — the review-queue signal (§19.2's own words, mirroring
-       the same confidence + `reviewed_by IS NULL` convention `act_links`
-       already uses; no separate review-queue table exists).
+       (`FUZZY_TITLE_AMOUNT_REGION`), left with
+       `review_status='PENDING_REVIEW'` for the audited API/UI review queue.
 
 Tried strictly in that order — the first level that produces exactly one
 unambiguous candidate wins; a ΚΗΜΔΗΣ act whose funding-reference fields
@@ -42,6 +40,7 @@ semantics were confirmed for that record.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -50,7 +49,12 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from packages.domain.tables import funding_links, funding_projects
+from packages.domain.tables import (
+    entity_identifiers,
+    funding_links,
+    funding_project_participations,
+    funding_projects,
+)
 from packages.source_clients.raw_store import RawStore
 from services.entity_resolution.text_similarity import normalized_similarity
 
@@ -65,6 +69,20 @@ LEVEL3_CONFIDENCE = 0.90
 LEVEL4_CONFIDENCE = 0.60
 LEVEL4_TITLE_SIMILARITY_THRESHOLD = 0.35
 LEVEL4_AMOUNT_TOLERANCE = 0.15  # +/-15%
+MAX_SUPPLIER_PROJECT_DETAILS_PER_LOOKUP = 5
+
+
+def _candidate_mis_values(raw_value: str) -> list[str]:
+    value = str(raw_value).strip()
+    if re.fullmatch(r"[A-Za-z]+-\d+", value):
+        return [value]
+    if re.search(r"\d\.\d", value):
+        return []
+    return list(
+        dict.fromkeys(
+            re.findall(r"(?<!\d)\d{5,8}(?!\d)", value)
+        )
+    )
 
 
 async def _link_exists(conn: AsyncConnection, *, act_id: uuid.UUID, funding_project_id: uuid.UUID) -> bool:
@@ -115,26 +133,37 @@ async def _create_link(
     return funding_project_id
 
 
-async def _ingest_candidate_and_link(
+async def _persist_candidate_project(
     conn: AsyncConnection,
     *,
+    client: AnaptyxiClient,
     raw_store: RawStore,
     program_period: str,
-    act_id: uuid.UUID,
     raw_project: dict[str, Any],
-    link_method: str,
-    confidence: float,
-    evidence: dict[str, Any],
 ) -> uuid.UUID | None:
-    mis_code = raw_project.get("misCode") or raw_project.get("mis") or raw_project.get("opsCode")
+    mis_code = (
+        raw_project.get("kodikos")
+        or raw_project.get("misCode")
+        or raw_project.get("mis")
+        or raw_project.get("mis_ops_code")
+        or raw_project.get("opsCode")
+        or raw_project.get("projectCode")
+    )
     if not mis_code:
         return None  # can't ingest a project with no identifier at all
+    mis_code = str(mis_code)
+    try:
+        detailed = await client.hydrate_project_summary(raw_project)
+    except ProjectNotFoundError:
+        return None
+    raw_project = detailed.body
 
     raw_ref = await raw_store.put(
         source="anaptyxi",
         resource=program_period,
         partition_key=f"mis={mis_code}",
-        payload=json.dumps(raw_project, ensure_ascii=False).encode("utf-8"),
+        payload=detailed.raw_body
+        or json.dumps(raw_project, ensure_ascii=False).encode("utf-8"),
     )
     ingest_result = await ingest_project_record(
         conn,
@@ -143,7 +172,7 @@ async def _ingest_candidate_and_link(
         raw_body=raw_project,
         payload_uri=raw_ref.payload_uri,
         content_sha256=raw_ref.content_sha256,
-        http_status=200,
+        http_status=detailed.http_status,
         fetched_at=datetime.now(timezone.utc),
     )
     if ingest_result.project is not None:
@@ -153,6 +182,30 @@ async def _ingest_candidate_and_link(
     if funding_project_id is None:
         return None
 
+    return funding_project_id
+
+
+async def _ingest_candidate_and_link(
+    conn: AsyncConnection,
+    *,
+    client: AnaptyxiClient,
+    raw_store: RawStore,
+    program_period: str,
+    act_id: uuid.UUID,
+    raw_project: dict[str, Any],
+    link_method: str,
+    confidence: float,
+    evidence: dict[str, Any],
+) -> uuid.UUID | None:
+    funding_project_id = await _persist_candidate_project(
+        conn,
+        client=client,
+        raw_store=raw_store,
+        program_period=program_period,
+        raw_project=raw_project,
+    )
+    if funding_project_id is None:
+        return None
     return await _create_link(
         conn,
         act_id=act_id,
@@ -163,13 +216,23 @@ async def _ingest_candidate_and_link(
     )
 
 
+def _source_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    for format_string in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(str(value)[:10], format_string).date()
+        except ValueError:
+            continue
+    return None
+
+
 def _period_overlaps(act_date: date | None, start: str | None, end: str | None, slack_days: int) -> bool:
     if act_date is None or (not start and not end):
         return False
-    try:
-        start_date = date.fromisoformat(start) if start else None
-        end_date = date.fromisoformat(end) if end else None
-    except ValueError:
+    start_date = _source_date(start)
+    end_date = _source_date(end)
+    if start and start_date is None or end and end_date is None:
         return False
     if start_date is not None and act_date < start_date - timedelta(days=slack_days):
         return False
@@ -181,7 +244,7 @@ def _period_overlaps(act_date: date | None, start: str | None, end: str | None, 
 async def _fetch_candidates(
     client: AnaptyxiClient, *, beneficiary_afm: str | None, contractor_afm: str | None
 ) -> AnaptyxiBeneficiarySearchResponse | None:
-    for afm in (beneficiary_afm, contractor_afm):
+    for afm in (contractor_afm, beneficiary_afm):
         if not afm:
             continue
         try:
@@ -191,6 +254,103 @@ async def _fetch_candidates(
         if response.results:
             return response
     return None
+
+
+async def _contractor_entity_id(
+    conn: AsyncConnection,
+    afm: str,
+) -> uuid.UUID | None:
+    afm_digits = "".join(character for character in afm if character.isdigit())
+    return (
+        await conn.execute(
+            select(entity_identifiers.c.entity_id)
+            .where(
+                entity_identifiers.c.scheme == "AFM",
+                entity_identifiers.c.value_normalized == afm_digits,
+                entity_identifiers.c.is_current.is_(True),
+            )
+            .limit(1)
+        )
+    ).scalar()
+
+
+async def _persist_supplier_project_history(
+    conn: AsyncConnection,
+    *,
+    client: AnaptyxiClient,
+    raw_store: RawStore,
+    program_period: str,
+    contractor_afm: str,
+    candidates: list[dict[str, Any]],
+) -> int:
+    entity_id = await _contractor_entity_id(conn, contractor_afm)
+    written = 0
+    for candidate in candidates[:MAX_SUPPLIER_PROJECT_DETAILS_PER_LOOKUP]:
+        project_id = await _persist_candidate_project(
+            conn,
+            client=client,
+            raw_store=raw_store,
+            program_period=program_period,
+            raw_project=candidate,
+        )
+        if project_id is None:
+            continue
+        written += 1
+        if entity_id is not None:
+            source_record_id = (
+                await conn.execute(
+                    select(funding_projects.c.source_record_id).where(
+                        funding_projects.c.id == project_id
+                    )
+                )
+            ).scalar()
+            existing = (
+                await conn.execute(
+                    select(funding_project_participations.c.id).where(
+                        funding_project_participations.c.funding_project_id
+                        == project_id,
+                        funding_project_participations.c.entity_id == entity_id,
+                        funding_project_participations.c.role == "CONTRACTOR",
+                        funding_project_participations.c.link_method
+                        == "ANAPTYXI_AFM_QUERY",
+                    )
+                )
+            ).scalar()
+            values = {
+                "confidence": 1.0,
+                "evidence": {
+                    "queried_afm": "".join(
+                        character
+                        for character in contractor_afm
+                        if character.isdigit()
+                    ),
+                    "provider": program_period,
+                    "scope": "project_participation",
+                },
+                "review_status": "AUTO_ACCEPTED",
+                "source_record_id": source_record_id,
+                "observed_at": datetime.now(timezone.utc),
+            }
+            if existing is None:
+                await conn.execute(
+                    funding_project_participations.insert().values(
+                        id=uuid.uuid4(),
+                        funding_project_id=project_id,
+                        entity_id=entity_id,
+                        role="CONTRACTOR",
+                        link_method="ANAPTYXI_AFM_QUERY",
+                        **values,
+                    )
+                )
+            else:
+                await conn.execute(
+                    funding_project_participations.update()
+                    .where(funding_project_participations.c.id == existing)
+                    .values(**values)
+                )
+    if written:
+        await conn.commit()
+    return written
 
 
 def _try_level2_afm_title_period(
@@ -281,45 +441,52 @@ async def resolve_funding_link_for_act(
     program_period = client.program_period
 
     # Level 1: exact ΟΠΣ/MIS code
-    for field_name, mis_value in mis_candidates:
-        if not mis_value:
-            continue
-        try:
-            response = await client.find_project_by_mis(mis_value)
-        except ProjectNotFoundError:
-            continue
+    for field_name, raw_mis_value in mis_candidates:
+        for mis_value in _candidate_mis_values(raw_mis_value):
+            try:
+                response = await client.find_project_by_mis(mis_value)
+            except ProjectNotFoundError:
+                continue
 
-        raw_ref = await raw_store.put(
-            source="anaptyxi",
-            resource=program_period,
-            partition_key=f"mis={mis_value}",
-            payload=response.raw_body or json.dumps(response.body).encode("utf-8"),
-        )
-        ingest_result = await ingest_project_record(
-            conn,
-            mis_code=mis_value,
-            program_period=program_period,
-            raw_body=response.body,
-            payload_uri=raw_ref.payload_uri,
-            content_sha256=raw_ref.content_sha256,
-            http_status=response.http_status,
-            fetched_at=datetime.now(timezone.utc),
-        )
-        if ingest_result.project is not None:
-            funding_project_id = ingest_result.project.funding_project_id
-        else:
-            funding_project_id = await _find_project_id(conn, mis_value=mis_value, program_period=program_period)
-        if funding_project_id is None:
-            continue
+            raw_ref = await raw_store.put(
+                source="anaptyxi",
+                resource=program_period,
+                partition_key=f"mis={mis_value}",
+                payload=response.raw_body
+                or json.dumps(response.body).encode("utf-8"),
+            )
+            ingest_result = await ingest_project_record(
+                conn,
+                mis_code=mis_value,
+                program_period=program_period,
+                raw_body=response.body,
+                payload_uri=raw_ref.payload_uri,
+                content_sha256=raw_ref.content_sha256,
+                http_status=response.http_status,
+                fetched_at=datetime.now(timezone.utc),
+            )
+            if ingest_result.project is not None:
+                funding_project_id = ingest_result.project.funding_project_id
+            else:
+                funding_project_id = await _find_project_id(
+                    conn,
+                    mis_value=mis_value,
+                    program_period=program_period,
+                )
+            if funding_project_id is None:
+                continue
 
-        return await _create_link(
-            conn,
-            act_id=act_id,
-            funding_project_id=funding_project_id,
-            link_method="MIS_OPS_EXACT",
-            confidence=FUNDING_REF_EXACT_MIS_CONFIDENCE,
-            evidence={"matched_field": field_name, "mis_value": mis_value},
-        )
+            evidence = {"matched_field": field_name, "mis_value": mis_value}
+            if mis_value != raw_mis_value:
+                evidence["source_value"] = raw_mis_value
+            return await _create_link(
+                conn,
+                act_id=act_id,
+                funding_project_id=funding_project_id,
+                link_method="MIS_OPS_EXACT",
+                confidence=FUNDING_REF_EXACT_MIS_CONFIDENCE,
+                evidence=evidence,
+            )
 
     # Levels 2-4 share one beneficiary/contractor-ΑΦΜ-scoped candidate set
     if not beneficiary_afm and not contractor_afm:
@@ -334,6 +501,7 @@ async def resolve_funding_link_for_act(
         raw_project, title_score = level2_match
         return await _ingest_candidate_and_link(
             conn,
+            client=client,
             raw_store=raw_store,
             program_period=program_period,
             act_id=act_id,
@@ -348,6 +516,7 @@ async def resolve_funding_link_for_act(
         raw_project, matched_ada = level3_match
         return await _ingest_candidate_and_link(
             conn,
+            client=client,
             raw_store=raw_store,
             program_period=program_period,
             act_id=act_id,
@@ -362,6 +531,7 @@ async def resolve_funding_link_for_act(
         raw_project, title_score = level4_match
         return await _ingest_candidate_and_link(
             conn,
+            client=client,
             raw_store=raw_store,
             program_period=program_period,
             act_id=act_id,
@@ -373,6 +543,20 @@ async def resolve_funding_link_for_act(
                 "title_similarity": round(title_score, 4),
                 "needs_review": True,
             },
+        )
+
+    if (
+        contractor_afm
+        and search_response.afm == contractor_afm
+        and candidates
+    ):
+        await _persist_supplier_project_history(
+            conn,
+            client=client,
+            raw_store=raw_store,
+            program_period=program_period,
+            contractor_afm=contractor_afm,
+            candidates=candidates,
         )
 
     return None

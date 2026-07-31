@@ -29,3 +29,17 @@ def test_row_with_neither_code_nor_name_is_skipped():
     csv_bytes = b"code,name,students\n,,100\n"
     rows = normalize_facilities_csv(csv_bytes)
     assert rows == []
+
+
+def test_live_minedu_school_schema_sums_registered_students():
+    csv_bytes = (
+        "year,jurisdiction,district,school_class,school_type,school_name,"
+        "registered_students_boys,registered_students_girls\n"
+        "2019,Secretariat,District,Gymnasium,Type,School of Patmos,20,3\n"
+    ).encode()
+
+    rows = normalize_facilities_csv(csv_bytes)
+
+    assert len(rows) == 1
+    assert rows[0].name == "School of Patmos"
+    assert rows[0].capacity_value == Decimal("23")

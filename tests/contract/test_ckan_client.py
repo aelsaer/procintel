@@ -93,6 +93,27 @@ async def test_fetch_resource_bytes_downloads_raw_content():
 
 
 @respx.mock
+async def test_fetch_resource_bytes_follows_signed_storage_redirect():
+    resource_url = "https://data.example.test/download/schools.csv"
+    signed_url = "https://storage.example.test/schools.csv?signature=test"
+    respx.get(resource_url).mock(
+        return_value=httpx.Response(302, headers={"location": signed_url})
+    )
+    respx.get(signed_url).mock(
+        return_value=httpx.Response(200, content=b"school_name,students\nA,20\n")
+    )
+
+    client = CkanClient(_config())
+    try:
+        response = await client.fetch_resource_bytes(resource_url)
+    finally:
+        await client.aclose()
+
+    assert response.content.startswith(b"school_name")
+    assert response.http_status == 200
+
+
+@respx.mock
 async def test_5xx_is_retried_then_raises_on_exhaustion():
     respx.get(f"{BASE_URL}/api/3/action/package_show", params={"id": DATASET_ID}).mock(
         return_value=httpx.Response(503)

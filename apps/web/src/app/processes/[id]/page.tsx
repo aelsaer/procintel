@@ -3,7 +3,7 @@
 import { use, useState } from "react";
 import { useCustom, useOne } from "@refinedev/core";
 import Link from "next/link";
-import { CalendarClock, Download, ExternalLink, Files, Landmark, MapPinned, Radar, ReceiptText, ShieldCheck, Trophy, Users, UsersRound } from "lucide-react";
+import { CalendarClock, Download, ExternalLink, FileCheck2, Files, Landmark, MapPinned, Radar, ReceiptText, ShieldCheck, Trophy, Users, UsersRound } from "lucide-react";
 import {
   BackLink,
   Badge,
@@ -20,7 +20,11 @@ import type { OpportunityIntelligenceResponse, ProcessCompetitionResponse, Proce
 import { formatAmount, formatDate } from "@/lib/format";
 import { EvidenceDrawer } from "@/components/evidence-drawer";
 import { ObjectWorkspace } from "@/components/object-workspace";
+import { BidWorkspacePanel } from "@/components/bid-workspace";
+import { ProcessDocumentTools } from "@/components/process-document-tools";
+import { DocumentIntelligence } from "@/components/document-intelligence";
 import { PublicationSources, TenderSummarySection } from "@/components/tender-publication";
+import { BidReportPanel } from "@/components/bid-report-panel";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
@@ -173,7 +177,8 @@ function CompetitionParticipantRow({ participant }: { participant: ProcessPartic
 
 export default function ProcessPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const [activeTab, setActiveTab] = useState<"overview" | "documents" | "buyer" | "competitors" | "similar" | "lifecycle" | "funding" | "notes">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "documents" | "bid" | "buyer" | "competitors" | "similar" | "lifecycle" | "funding" | "notes">("overview");
+  const [reportOpen, setReportOpen] = useState(false);
 
   const processQuery = useOne<ProcessDetailResponse>({
     resource: "processes",
@@ -214,7 +219,7 @@ export default function ProcessPage({ params }: { params: Promise<{ id: string }
   const score = scoreQuery.query.isSuccess ? scoreQuery.result.data[0] : null;
   const primaryPublication = process.official_records.find((record) => record.official_url || record.document_url);
   const tabs = [
-    ["overview", "Overview"], ["documents", "Documents"], ["buyer", "Buyer history"],
+    ["overview", "Overview"], ["documents", "Documents"], ["bid", "Bid workspace"], ["buyer", "Buyer history"],
     ["competitors", "Competitors"], ["similar", "Similar contracts"],
     ["lifecycle", "Lifecycle"], ["funding", "Funding"], ["notes", "Notes"],
   ] as const;
@@ -227,6 +232,10 @@ export default function ProcessPage({ params }: { params: Promise<{ id: string }
         subtitle={process.public_id}
         actions={
           <>
+            <button className="button button-primary" type="button" onClick={() => setReportOpen(true)}>
+              <FileCheck2 size={16} aria-hidden="true" />
+              BID / NO-BID
+            </button>
             {primaryPublication?.official_url && (
               <a className="button button-secondary" href={primaryPublication.official_url} target="_blank" rel="noreferrer">
                 <ExternalLink size={16} aria-hidden="true" />
@@ -250,6 +259,7 @@ export default function ProcessPage({ params }: { params: Promise<{ id: string }
           {process.currency && <Badge tone="blue">{process.currency}</Badge>}
         </div>
       </PageHeader>
+      {reportOpen && <BidReportPanel processId={id} onClose={() => setReportOpen(false)} />}
 
       <div className="metric-grid">
         <MetricCard label="Εκτίμηση" value={formatAmount(process.estimated_value, process.currency)} icon={Landmark} />
@@ -375,6 +385,10 @@ export default function ProcessPage({ params }: { params: Promise<{ id: string }
 
       <div hidden={activeTab !== "notes"} className="detail-tab-panel"><ObjectWorkspace objectType="procurement_processes" objectId={id} /></div>
 
+      <div hidden={activeTab !== "bid"} className="detail-tab-panel">
+        <BidWorkspacePanel processId={id} />
+      </div>
+
       <div hidden={activeTab !== "lifecycle"} className="detail-tab-panel"><Section title="Χρονολόγιο">
         {timelineQuery.query.isLoading && <LoadingState label="Φόρτωση χρονολογίου" />}
         {timelineQuery.query.isError && <ErrorState error={timelineQuery.query.error} />}
@@ -406,6 +420,8 @@ export default function ProcessPage({ params }: { params: Promise<{ id: string }
       </Section></div>
 
       <div hidden={activeTab !== "documents"} className="detail-tab-panel">
+      <ProcessDocumentTools processId={id} documents={process.documents} />
+      <DocumentIntelligence processId={id} />
       <Section title="Επίσημες πηγές και αρχεία">
         <PublicationSources records={process.official_records} documents={process.documents} />
       </Section>

@@ -12,12 +12,12 @@ fields.
 import json
 import os
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
 import pytest
-import respx
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from packages.source_clients.raw_store import LocalFilesystemRawStore
@@ -25,6 +25,7 @@ from services.ingestion.connectors.khmdhs.client import KhmdhsClient
 from services.ingestion.connectors.khmdhs.config import KhmdhsConnectorConfig
 from services.ingestion.connectors.khmdhs.db_writer import ingest_khmdhs_record
 from services.search_index.client import create_index, delete_index, index_exists
+from services.search_index.catalog import CATALOGS
 from services.search_index.config import OpenSearchConfig
 from services.search_index.indexer import reindex_all_acts
 from services.search_index.mapping import PROCUREMENT_ACTS_MAPPING
@@ -48,9 +49,13 @@ def _asyncpg_url() -> str:
     return url
 
 
-@respx.mock
 async def test_reindex_and_search_finds_the_seeded_contract(tmp_path):
-    config = OpenSearchConfig(base_url=OPENSEARCH_URL.rstrip("/"), index_name=f"test_procurement_acts_{uuid.uuid4().hex[:8]}")
+    suffix = uuid.uuid4().hex[:8]
+    config = OpenSearchConfig(
+        base_url=OPENSEARCH_URL.rstrip("/"),
+        index_name=f"test_procurement_acts_{suffix}",
+        index_prefix=f"test_catalogs_{suffix}",
+    )
     engine = create_async_engine(_asyncpg_url())
 
     try:
@@ -74,6 +79,8 @@ async def test_reindex_and_search_finds_the_seeded_contract(tmp_path):
 
                     result = await reindex_all_acts(conn, os_client, config)
                     assert result.acts_indexed >= 1
+                    assert result.catalogs is not None
+                    assert set(result.catalogs) == set(CATALOGS)
 
                     # OpenSearch is near-real-time, not instant — a fresh index
                     # commonly needs a refresh before a just-indexed doc is searchable.
@@ -84,5 +91,13 @@ async def test_reindex_and_search_finds_the_seeded_contract(tmp_path):
                     assert any("καθαρισμ" in (hit.title or "").lower() for hit in search_result.hits)
                 finally:
                     await delete_index(os_client, config)
+                    for catalog in CATALOGS:
+                        await delete_index(
+                            os_client,
+                            replace(
+                                config,
+                                index_name=config.catalog_index_name(catalog),
+                            ),
+                        )
     finally:
         await engine.dispose()

@@ -1,10 +1,11 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Bell, BellRing, Check, Mail, Pause, Pencil, Play, Plus, Save, Trash2, Webhook, X } from "lucide-react";
 import { api, type AlertDeliveryHistoryResponse, type AlertDigestHistoryResponse, type AlertEventResponse, type AlertRuleResponse } from "@/lib/api";
 import { activeCpvPrefixes, activeKeywords, type BusinessScope } from "@/lib/business-scope";
 import { Badge, EmptyState, ErrorState, LoadingState } from "@/components/procurement-ui";
+import { PhraseMonitors } from "@/components/phrase-monitors";
 
 export function AlertsWorkspace({ profile }: { profile: BusinessScope }) {
   const [rules, setRules] = useState<AlertRuleResponse[]>([]);
@@ -20,30 +21,45 @@ export function AlertsWorkspace({ profile }: { profile: BusinessScope }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const ruleMutationVersion = useRef(0);
+  const loadVersion = useRef(0);
 
   async function refresh() {
+    const requestedVersion = ++loadVersion.current;
     setLoading(true);
     try {
       const [nextRules, nextEvents, nextDigests, nextDeliveries] = await Promise.all([api.getAlertRules(), api.getAlertEvents(), api.getAlertDigests(), api.getAlertDeliveries()]);
+      if (loadVersion.current !== requestedVersion) return;
       setRules(nextRules);
       setEvents(nextEvents);
       setDigests(nextDigests);
       setDeliveries(nextDeliveries);
       setError(null);
     } catch (nextError) {
-      setError(nextError);
+      if (loadVersion.current === requestedVersion) setError(nextError);
     } finally {
-      setLoading(false);
+      if (loadVersion.current === requestedVersion) setLoading(false);
     }
   }
 
   useEffect(() => {
     let active = true;
+    const initialRuleVersion = ruleMutationVersion.current;
+    const requestedVersion = ++loadVersion.current;
     void Promise.all([api.getAlertRules(), api.getAlertEvents(), api.getAlertDigests(), api.getAlertDeliveries()]).then(([nextRules, nextEvents, nextDigests, nextDeliveries]) => {
-      if (!active) return;
-      setRules(nextRules); setEvents(nextEvents); setDigests(nextDigests); setDeliveries(nextDeliveries); setLoading(false);
-    }).catch((nextError) => { if (active) { setError(nextError); setLoading(false); } });
-    return () => { active = false; };
+      if (!active || loadVersion.current !== requestedVersion) return;
+      if (ruleMutationVersion.current === initialRuleVersion) setRules(nextRules);
+      setEvents(nextEvents); setDigests(nextDigests); setDeliveries(nextDeliveries); setLoading(false);
+    }).catch((nextError) => {
+      if (active && loadVersion.current === requestedVersion) {
+        setError(nextError);
+        setLoading(false);
+      }
+    });
+    return () => {
+      active = false;
+      if (loadVersion.current === requestedVersion) loadVersion.current += 1;
+    };
   }, []);
 
   function bodyFor(rule?: AlertRuleResponse, preserveRule = false) {
@@ -96,15 +112,15 @@ export function AlertsWorkspace({ profile }: { profile: BusinessScope }) {
   async function saveRule(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
+    ruleMutationVersion.current += 1;
     try {
       const current = rules.find((rule) => rule.id === editingId);
       if (current) {
-        const updated = await api.updateAlertRule(current.id, bodyFor(current));
-        setRules((items) => items.map((item) => item.id === updated.id ? updated : item));
+        await api.updateAlertRule(current.id, bodyFor(current));
       } else {
-        const created = await api.createAlertRule(bodyFor());
-        setRules((items) => [created, ...items]);
+        await api.createAlertRule(bodyFor());
       }
+      await refresh();
       resetEditor();
     } catch (nextError) {
       setError(nextError);
@@ -114,13 +130,15 @@ export function AlertsWorkspace({ profile }: { profile: BusinessScope }) {
   }
 
   async function toggleRule(rule: AlertRuleResponse) {
-    const updated = await api.updateAlertRule(rule.id, { ...bodyFor(rule, true), is_active: !rule.is_active });
-    setRules((items) => items.map((item) => item.id === updated.id ? updated : item));
+    ruleMutationVersion.current += 1;
+    await api.updateAlertRule(rule.id, { ...bodyFor(rule, true), is_active: !rule.is_active });
+    await refresh();
   }
 
   async function archiveRule(rule: AlertRuleResponse) {
+    ruleMutationVersion.current += 1;
     await api.archiveAlertRule(rule.id);
-    setRules((items) => items.filter((item) => item.id !== rule.id));
+    await refresh();
   }
 
   async function markRead(event: AlertEventResponse) {
@@ -149,10 +167,11 @@ export function AlertsWorkspace({ profile }: { profile: BusinessScope }) {
             <label><span>Προορισμός, προαιρετικός</span><input type={channel === "EMAIL" ? "email" : "url"} value={target} onChange={(event) => setTarget(event.target.value)} placeholder={channel === "EMAIL" ? "sales@example.gr" : "https://…"} /></label>
             <div className="active-filter-strip">
               <span>{activeCpvPrefixes(profile).length ? `${activeCpvPrefixes(profile).length} CPV` : "Όλα τα CPV"}</span>
-              <span>{profile.nutsCode || "Ελλάδα"}</span>
+              <span>{profile.municipality || profile.nutsCode || "Όλη η Ελλάδα"}</span>
+              <span>{profile.dateFrom} - {profile.dateTo}</span>
               <span>{activeKeywords(profile).join(", ") || "όλα τα αντικείμενα"}</span>
             </div>
-            <button className="button button-primary" type="submit" disabled={saving}>{editingId ? <Save size={16} /> : <Plus size={16} />}{saving ? "Αποθήκευση" : editingId ? "Ενημέρωση κανόνα" : "Δημιουργία κανόνα"}</button>
+            <button className="button button-primary" type="submit" disabled={saving || loading}>{editingId ? <Save size={16} /> : <Plus size={16} />}{saving ? "Αποθήκευση" : editingId ? "Ενημέρωση κανόνα" : "Δημιουργία κανόνα"}</button>
           </form>
         </section>
 
@@ -168,6 +187,8 @@ export function AlertsWorkspace({ profile }: { profile: BusinessScope }) {
           {!rules.length && !loading ? <EmptyState title="Δεν υπάρχουν κανόνες" detail="Δημιούργησε τον πρώτο κανόνα από το ενεργό business profile." /> : null}
         </section>
       </div>
+
+      <PhraseMonitors profile={profile} />
 
       <section className="alert-inbox" aria-labelledby="alert-inbox-title">
         <div className="panel-heading"><div><span className="eyebrow">Digest history</span><h2 id="alert-inbox-title">Inbox ειδοποιήσεων</h2></div><Badge>{events.filter((event) => !event.read_at).length} νέα</Badge></div>

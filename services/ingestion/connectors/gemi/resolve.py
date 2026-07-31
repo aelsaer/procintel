@@ -30,6 +30,8 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.domain.tables import entity_company_snapshots, source_records
 from packages.source_clients.raw_store import RawStore
+from services.entity_resolution.resolve import find_or_create_entity_by_afm
+from services.ingestion.connectors.khmdhs.afm import valid_greek_afm
 
 from .cache import should_refresh
 from .db_writer import ingest_company_record
@@ -48,6 +50,13 @@ class SnapshotResolveResult:
     # not on every unrelated field change (name, office, ...)
     old_status: str | None = None
     new_status: str | None = None
+
+
+@dataclass(frozen=True)
+class RegistryResolveResult:
+    entity_id: uuid.UUID
+    snapshot_id: uuid.UUID | None
+    wrote_new_snapshot: bool
 
 
 async def _last_checked_at(conn: AsyncConnection, afm_normalized: str) -> datetime | None:
@@ -159,4 +168,52 @@ async def resolve_company_snapshot(
         return SnapshotResolveResult(wrote_new_snapshot=False)
     return SnapshotResolveResult(
         wrote_new_snapshot=True, old_status=current_status, new_status=result.company.company_status
+    )
+
+
+async def resolve_company_by_gemi(
+    conn: AsyncConnection,
+    *,
+    provider: CompanyRegistryProvider,
+    raw_store: RawStore,
+    gemi_number: str,
+) -> RegistryResolveResult | None:
+    """Resolve an official ΓΕΜΗ number to its exact AFM entity and persist it."""
+    result = await provider.find_by_gemi(gemi_number)
+    if result.company is None or result.raw_response is None:
+        return None
+    company = result.company
+    entity_id = await find_or_create_entity_by_afm(
+        conn,
+        afm_raw=company.afm_raw,
+        afm_normalized=company.afm_normalized,
+        afm_checksum_valid=valid_greek_afm(company.afm_raw),
+        name=company.official_name or company.trade_name,
+        entity_type="COMPANY",
+        source_record_id=None,
+    )
+    raw_body = result.raw_response.body
+    raw_ref = await raw_store.put(
+        source="gemi",
+        resource="company",
+        partition_key=f"gemi={gemi_number}",
+        payload=json.dumps(raw_body, sort_keys=True, ensure_ascii=False).encode("utf-8"),
+    )
+    ingested = await ingest_company_record(
+        conn,
+        entity_id=entity_id,
+        normalized=company,
+        raw_body=raw_body,
+        payload_uri=raw_ref.payload_uri,
+        content_sha256=raw_ref.content_sha256,
+        http_status=result.raw_response.http_status,
+        fetched_at=datetime.now(timezone.utc),
+    )
+    await conn.commit()
+    return RegistryResolveResult(
+        entity_id=entity_id,
+        snapshot_id=ingested.snapshot.snapshot_id if ingested.snapshot else None,
+        wrote_new_snapshot=bool(
+            ingested.snapshot and ingested.snapshot.wrote_new_snapshot
+        ),
     )

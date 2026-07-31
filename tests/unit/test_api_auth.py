@@ -65,3 +65,24 @@ async def test_require_role_rejects_a_role_not_in_the_allow_list():
     with pytest.raises(HTTPException) as exc_info:
         await check(user=user)
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD", "OPTIONS"])
+def test_api_key_read_scope_allows_only_read_methods(method):
+    assert auth_module.api_key_scope_permits(frozenset({"read"}), method)
+    assert not auth_module.api_key_scope_permits(frozenset({"read"}), "POST")
+
+
+def test_api_key_scope_hierarchy_enforces_write_and_admin():
+    assert auth_module.api_key_scope_permits(frozenset({"write"}), "GET")
+    assert auth_module.api_key_scope_permits(frozenset({"write"}), "PATCH")
+    assert auth_module.api_key_scope_permits(frozenset({"admin"}), "DELETE")
+    assert auth_module.api_key_scope_permits(frozenset({"*"}), "POST")
+    assert not auth_module.api_key_scope_permits(frozenset(), "GET")
+
+
+def test_api_key_scopes_map_to_least_privileged_rbac_role():
+    assert auth_module.api_key_role(frozenset({"read"})) == "VIEWER"
+    assert auth_module.api_key_role(frozenset({"write"})) == "ANALYST"
+    assert auth_module.api_key_role(frozenset({"admin"})) == "ADMIN"
+    assert auth_module.api_key_role(frozenset({"*"})) == "ADMIN"

@@ -38,7 +38,7 @@ class KhmdhsResourcePage:
 @dataclass(frozen=True)
 class KhmdhsAdamChainResponse:
     reference_number: str
-    body: Any  # exact shape unconfirmed against the live API, see adamchain.py
+    body: dict[str, list[str]]
     raw_body: bytes
     http_status: int
 
@@ -48,14 +48,21 @@ class KhmdhsClient:
         self,
         config: KhmdhsConnectorConfig,
         http_client: httpx.AsyncClient | None = None,
+        rate_limiter: TokenBucket | None = None,
     ) -> None:
         self._config = config
         self._http = http_client or httpx.AsyncClient(
             base_url=config.base_url, timeout=config.request_timeout_seconds
         )
         self._owns_http_client = http_client is None
-        self._rate_limiter = TokenBucket(config.rate_limit_per_minute)
+        self._rate_limiter = rate_limiter or TokenBucket(
+            config.rate_limit_per_minute
+        )
         self._circuit_breaker = CircuitBreaker()
+
+    @property
+    def request_rate_limiter(self) -> TokenBucket:
+        return self._rate_limiter
 
     async def aclose(self) -> None:
         if self._owns_http_client:
@@ -102,19 +109,23 @@ class KhmdhsClient:
 
         response.raise_for_status()  # non-retryable 4xx surfaces as a real error
         body = response.json()
-
-        records = body.get("content") or body.get("data") or body.get("results") or []
+        if not isinstance(body, dict):
+            raise ValueError("KHMDHS resource response must be a JSON object")
+        records = body.get("content")
+        if records is None:
+            records = body.get("data")
+        if not isinstance(records, list) or any(not isinstance(item, dict) for item in records):
+            raise ValueError("KHMDHS resource response has no valid record list")
         last_marker = body.get("last")
         if last_marker is None:
             last_marker = body.get("isLastPage")
-        if last_marker is None:
-            last_marker = body.get("lastPage")
-        is_last_page = bool(last_marker) if last_marker is not None else len(records) == 0
+        if not isinstance(last_marker, bool):
+            raise ValueError("KHMDHS resource response has no boolean last-page marker")
 
         return KhmdhsResourcePage(
             resource=resource,
             records=records,
-            is_last_page=is_last_page,
+            is_last_page=last_marker,
             raw_body=response.content,
             http_status=response.status_code,
         )
@@ -135,10 +146,7 @@ class KhmdhsClient:
         return await self.fetch_resource_page(resource="payment", page=page, date_from=date_from, date_to=date_to)
 
     async def fetch_adam_chain(self, reference_number: str) -> KhmdhsAdamChainResponse:
-        """GET /khmdhs-opendata/adamChain/{referenceNumber} (§16.5). Response
-        body shape is unconfirmed against the live API — parsing it into a
-        flat ΑΔΑΜ list happens in adamchain.py, not here, so this method
-        stays correct regardless of what that shape turns out to be."""
+        """Fetch the official six-bucket lifecycle chain for one ΑΔΑΜ."""
         self._circuit_breaker.raise_if_open()
         await self._rate_limiter.acquire()
 
@@ -156,9 +164,28 @@ class KhmdhsClient:
         self._circuit_breaker.record_success()
 
         response.raise_for_status()
+        body = response.json()
+        if not isinstance(body, dict):
+            raise ValueError("KHMDHS adamChain response must be a JSON object")
+        expected = (
+            "requests",
+            "approvedRequests",
+            "notices",
+            "auctions",
+            "contracts",
+            "payments",
+        )
+        for bucket_name in expected:
+            bucket = body.get(bucket_name, [])
+            if not isinstance(bucket, list) or any(
+                not isinstance(item, (str, dict)) for item in bucket
+            ):
+                raise ValueError(
+                    f"KHMDHS adamChain bucket {bucket_name!r} must be a list"
+                )
         return KhmdhsAdamChainResponse(
             reference_number=reference_number,
-            body=response.json(),
+            body=body,
             raw_body=response.content,
             http_status=response.status_code,
         )

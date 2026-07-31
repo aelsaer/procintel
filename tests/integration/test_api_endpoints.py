@@ -257,6 +257,12 @@ async def test_api_endpoints_against_a_seeded_contract(tmp_path, monkeypatch):
         assert competitor_profile["metrics"]["award_count"] >= 1
         assert any(item["key"].startswith("909") for item in competitor_profile["cpv_distribution"])
         assert any(item["process_id"] == process_id for item in competitor_profile["recent_activity"])
+        activity_keys = [
+            (item["process_id"], item["role"])
+            for item in competitor_profile["recent_activity"]
+        ]
+        assert len(activity_keys) == len(set(activity_keys))
+        assert all(item["activity_id"] for item in competitor_profile["recent_activity"])
 
         relationships_resp = await api_client.get(
             "/v1/intelligence/relationships",

@@ -1,8 +1,4 @@
-"""Connector-level tests against mocked HTTP (respx) — no live VIES access
-required or attempted. SOAP envelope/response parsing is a best-effort
-guess (see services/ingestion/connectors/vies/client.py's module docstring);
-these tests exercise the parser against synthetic SOAP-shaped XML, not a
-captured real VIES response."""
+"""Connector-level tests against mocked HTTP (respx); no live VIES call."""
 
 import httpx
 import pytest
@@ -10,7 +6,7 @@ import respx
 
 from packages.source_clients.retry import TransientServerError
 from services.ingestion.connectors.vies.client import ViesClient
-from services.ingestion.connectors.vies.config import ViesConnectorConfig
+from services.ingestion.connectors.vies.config import DEFAULT_BASE_URL, ViesConnectorConfig
 
 BASE_URL = "https://vies.example.test"
 
@@ -37,6 +33,11 @@ def _config(**overrides) -> ViesConnectorConfig:
         max_retry_attempts=overrides.pop("max_retry_attempts", 5),
         **overrides,
     )
+
+
+def test_official_service_is_the_default(monkeypatch):
+    monkeypatch.delenv("VIES_API_BASE_URL", raising=False)
+    assert ViesConnectorConfig.from_env().base_url == DEFAULT_BASE_URL
 
 
 @respx.mock

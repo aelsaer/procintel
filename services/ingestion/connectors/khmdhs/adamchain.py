@@ -7,19 +7,12 @@ involved are grouped into a stable `procurement_processes` row via
 `process_members` — merging two existing processes, with full audit trail,
 if the chain reveals they're actually the same procurement (§16.6).
 
-Two things here are best-effort pending confirmation against the live API
-(docs/source-contracts/khmdhs.md, Στάδιο 0):
-
-1. The adamChain response shape — `_extract_chain_adams` tolerates a few
-   plausible envelope shapes (flat string list, or a list of dicts with a
-   `referenceNumber` field, under a few plausible top-level keys), but the
-   real shape needs confirming and this function fixing to match.
-2. What relationship *type* connects two ΑΔΑΜ in the chain (APPROVES,
-   AWARDS, EXECUTES, ...). Without a confirmed response structure that
-   states this per-pair, every chain member is linked to the seed act with
-   `link_type='RELATED_TO'` — correct and safe (never asserts a relationship
-   stronger than what's known), but coarser than the ideal §15.7 link-type
-   vocabulary. Tighten this once the real response is confirmed.
+The live envelope is bucketed as `requests`, `approvedRequests`, `notices`,
+`auctions`, `contracts` and `payments`. Bucket order produces typed
+`APPROVES`, `ANNOUNCES`, `AWARDS`, `EXECUTES` and `PAYS` edges; legacy
+flat/dict variants remain accepted for replay compatibility. Modification
+markers are retained without asserting a stronger relationship than the
+source exposes.
 
 ΑΔΑΜ category inference (`infer_act_type_from_adam`) is *not* a guess — it's
 literally spec'd in §7.1 (REQ/PROC/AWRD/SYMV/PAY segments) and is only used
@@ -31,9 +24,11 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
 
+import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -78,35 +73,83 @@ def infer_act_type_from_adam(adam_normalized: str) -> str:
     return "UNKNOWN"
 
 
-def _extract_chain_adams(raw_response: Any) -> list[str]:
+_CHAIN_BUCKETS = (
+    "requests",
+    "approvedRequests",
+    "notices",
+    "auctions",
+    "contracts",
+    "payments",
+)
+
+_BUCKET_ACT_TYPE = {
+    "requests": "REQUEST",
+    "approvedRequests": "REQUEST",
+    "notices": "NOTICE",
+    "auctions": "AWARD",
+    "contracts": "CONTRACT",
+    "payments": "PAYMENT",
+}
+
+
+@dataclass(frozen=True)
+class ChainEntry:
+    adam: str
+    bucket: str
+    marker: str | None = None
+
+
+def _extract_chain_entries(raw_response: Any) -> list[ChainEntry]:
     if isinstance(raw_response, list):
-        items = raw_response
-    elif isinstance(raw_response, dict):
-        items = []
-        for key in ("requests", "approvedRequests", "notices", "auctions", "contracts", "payments"):
-            bucket = raw_response.get(key)
-            if isinstance(bucket, list):
-                items.extend(bucket)
-        if not items:
-            items = (
+        raw_response = {"requests": raw_response}
+    if not isinstance(raw_response, dict):
+        return []
+    if not any(key in raw_response for key in _CHAIN_BUCKETS):
+        raw_response = {
+            "requests": (
                 raw_response.get("relatedRecords")
                 or raw_response.get("relatedAdams")
                 or raw_response.get("chain")
                 or raw_response.get("data")
                 or []
             )
-    else:
-        items = []
+        }
+    entries: list[ChainEntry] = []
+    for bucket_name in _CHAIN_BUCKETS:
+        items = raw_response.get(bucket_name) or []
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            value = (
+                item
+                if isinstance(item, str)
+                else item.get("referenceNumber") or item.get("adam")
+                if isinstance(item, dict)
+                else None
+            )
+            if not value:
+                continue
+            raw_value = str(value).strip()
+            suffix_length = len(raw_value) - len(raw_value.rstrip("*"))
+            marker = (
+                "CANCELLATION"
+                if suffix_length >= 2
+                else "MODIFICATION_OR_EXTENSION"
+                if suffix_length == 1
+                else None
+            )
+            entries.append(
+                ChainEntry(
+                    adam=normalize_adam(raw_value.rstrip("*")),
+                    bucket=bucket_name,
+                    marker=marker,
+                )
+            )
+    return entries
 
-    adams: list[str] = []
-    for item in items:
-        if isinstance(item, str):
-            adams.append(item.rstrip("*"))
-        elif isinstance(item, dict):
-            value = item.get("referenceNumber") or item.get("adam")
-            if value:
-                adams.append(str(value).rstrip("*"))
-    return [normalize_adam(a) for a in adams if a]
+
+def _extract_chain_adams(raw_response: Any) -> list[str]:
+    return list(dict.fromkeys(entry.adam for entry in _extract_chain_entries(raw_response)))
 
 
 async def get_act_id_by_adam(conn: AsyncConnection, adam_normalized: str) -> uuid.UUID | None:
@@ -122,7 +165,11 @@ async def get_act_id_by_adam(conn: AsyncConnection, adam_normalized: str) -> uui
 
 
 async def _ensure_act_for_adam(
-    conn: AsyncConnection, *, adam_normalized: str, fallback_source_record_id: uuid.UUID
+    conn: AsyncConnection,
+    *,
+    adam_normalized: str,
+    fallback_source_record_id: uuid.UUID,
+    act_type: str | None = None,
 ) -> uuid.UUID:
     existing_act_id = await get_act_id_by_adam(conn, adam_normalized)
     if existing_act_id is not None:
@@ -132,7 +179,7 @@ async def _ensure_act_for_adam(
     await conn.execute(
         procurement_acts.insert().values(
             id=act_id,
-            act_type=infer_act_type_from_adam(adam_normalized),
+            act_type=act_type or infer_act_type_from_adam(adam_normalized),
             source_record_id=fallback_source_record_id,
         )
     )
@@ -149,39 +196,137 @@ async def _ensure_act_for_adam(
     return act_id
 
 
+async def _ensure_link(
+    conn: AsyncConnection,
+    *,
+    from_act_id: uuid.UUID,
+    to_act_id: uuid.UUID,
+    link_type: str,
+    source_record_id: uuid.UUID,
+    evidence: dict[str, Any] | None = None,
+) -> None:
+    if from_act_id == to_act_id:
+        return
+    already_linked = (
+        await conn.execute(
+            select(act_links.c.id).where(
+                act_links.c.from_act_id == from_act_id,
+                act_links.c.to_act_id == to_act_id,
+                act_links.c.link_type == link_type,
+            )
+        )
+    ).first()
+    if already_linked is not None:
+        return
+    await conn.execute(
+        act_links.insert().values(
+            id=uuid.uuid4(),
+            from_act_id=from_act_id,
+            to_act_id=to_act_id,
+            link_type=link_type,
+            link_method="ADAMCHAIN",
+            confidence=1.000,
+            evidence={
+                "source": "adamChain",
+                "source_record_id": str(source_record_id),
+                **(evidence or {}),
+            },
+            created_by="services.ingestion.connectors.khmdhs.adamchain",
+        )
+    )
+
+
 async def _link_chain(
     conn: AsyncConnection,
     *,
     seed_act_id: uuid.UUID,
-    related_act_ids: list[uuid.UUID],
+    entries: list[ChainEntry],
+    act_ids_by_adam: dict[str, uuid.UUID],
     source_record_id: uuid.UUID,
 ) -> None:
-    for related_act_id in related_act_ids:
+    by_bucket: dict[str, list[ChainEntry]] = {
+        bucket: [entry for entry in entries if entry.bucket == bucket]
+        for bucket in _CHAIN_BUCKETS
+    }
+
+    async def link_buckets(
+        from_bucket: str,
+        to_bucket: str,
+        link_type: str,
+        *,
+        reverse: bool = False,
+    ) -> None:
+        for from_entry in by_bucket[from_bucket]:
+            for to_entry in by_bucket[to_bucket]:
+                first, second = (
+                    (to_entry, from_entry) if reverse else (from_entry, to_entry)
+                )
+                await _ensure_link(
+                    conn,
+                    from_act_id=act_ids_by_adam[first.adam],
+                    to_act_id=act_ids_by_adam[second.adam],
+                    link_type=link_type,
+                    source_record_id=source_record_id,
+                    evidence={
+                        "from_bucket": first.bucket,
+                        "to_bucket": second.bucket,
+                        "marker": from_entry.marker or to_entry.marker,
+                    },
+                )
+
+    await link_buckets("approvedRequests", "requests", "APPROVES")
+    request_bucket = "approvedRequests" if by_bucket["approvedRequests"] else "requests"
+    await link_buckets(request_bucket, "notices", "ANNOUNCES")
+    await link_buckets("notices", "auctions", "AWARDS", reverse=True)
+    await link_buckets("auctions", "contracts", "EXECUTES")
+    await link_buckets("contracts", "payments", "PAYS", reverse=True)
+
+    # A trailing star in the official response marks a modification/extension;
+    # two stars mark cancellation. Relate it to the preceding item in the same
+    # lifecycle bucket when the source provides one.
+    for bucket_name, bucket_entries in by_bucket.items():
+        for index, entry in enumerate(bucket_entries):
+            if entry.marker is None or index == 0:
+                continue
+            previous = bucket_entries[index - 1]
+            await _ensure_link(
+                conn,
+                from_act_id=act_ids_by_adam[entry.adam],
+                to_act_id=act_ids_by_adam[previous.adam],
+                link_type="CANCELS" if entry.marker == "CANCELLATION" else "AMENDS",
+                source_record_id=source_record_id,
+                evidence={"bucket": bucket_name, "marker": entry.marker},
+            )
+
+    linked_ids = set(act_ids_by_adam.values())
+    for related_act_id in linked_ids:
         if related_act_id == seed_act_id:
             continue
-        already_linked = (
+        has_typed_link = (
             await conn.execute(
                 select(act_links.c.id).where(
-                    act_links.c.from_act_id == seed_act_id,
-                    act_links.c.to_act_id == related_act_id,
-                    act_links.c.link_type == "RELATED_TO",
+                    sa.or_(
+                        sa.and_(
+                            act_links.c.from_act_id == seed_act_id,
+                            act_links.c.to_act_id == related_act_id,
+                        ),
+                        sa.and_(
+                            act_links.c.from_act_id == related_act_id,
+                            act_links.c.to_act_id == seed_act_id,
+                        ),
+                    ),
+                    act_links.c.link_method == "ADAMCHAIN",
                 )
             )
         ).first()
-        if already_linked is not None:
-            continue
-        await conn.execute(
-            act_links.insert().values(
-                id=uuid.uuid4(),
+        if has_typed_link is None:
+            await _ensure_link(
+                conn,
                 from_act_id=seed_act_id,
                 to_act_id=related_act_id,
                 link_type="RELATED_TO",
-                link_method="ADAMCHAIN",
-                confidence=1.000,
-                evidence={"source": "adamChain", "source_record_id": str(source_record_id)},
-                created_by="services.ingestion.connectors.khmdhs.adamchain",
+                source_record_id=source_record_id,
             )
-        )
 
 
 async def _merge_process(conn: AsyncConnection, *, survivor_id: uuid.UUID, merged_id: uuid.UUID) -> None:
@@ -422,7 +567,9 @@ async def resolve_adam_chain_for_act(
 
     if already_seen is not None:
         # Same chain content already fully processed in an earlier run —
-        # process assignment for the seed act is already settled.
+        # process assignment for this seed act may already be settled. Empty
+        # chains from different ADAMs legitimately have identical payloads,
+        # so reuse the evidence row but still process an unassigned seed.
         member_row = (
             await conn.execute(
                 select(process_members.c.process_id).where(process_members.c.act_id == seed_act_id)
@@ -432,36 +579,59 @@ async def resolve_adam_chain_for_act(
             await _sync_process_summary(conn, member_row.process_id)
             await conn.commit()
             return member_row.process_id
-        return None
-
-    source_record_id = uuid.uuid4()
-    await conn.execute(
-        source_records.insert().values(
-            id=source_record_id,
-            source_system="KHMDHS",
-            resource_type="adamChain",
-            source_native_id=seed_adam_normalized,
-            content_sha256=raw_ref.content_sha256,
-            payload_uri=raw_ref.payload_uri,
-            fetched_at=datetime.now(timezone.utc),
-            http_status=response.http_status,
-            license_code="CC-BY-4.0",
-            parse_status="PARSED",
+        source_record_id = already_seen.id
+    else:
+        source_record_id = uuid.uuid4()
+        await conn.execute(
+            source_records.insert().values(
+                id=source_record_id,
+                source_system="KHMDHS",
+                resource_type="adamChain",
+                source_native_id=seed_adam_normalized,
+                content_sha256=raw_ref.content_sha256,
+                payload_uri=raw_ref.payload_uri,
+                fetched_at=datetime.now(timezone.utc),
+                http_status=response.http_status,
+                license_code="CC-BY-4.0",
+                parse_status="PARSED",
+            )
         )
-    )
 
-    chain_adams = _extract_chain_adams(response.body)
-    related_act_ids = [
-        await _ensure_act_for_adam(conn, adam_normalized=adam, fallback_source_record_id=source_record_id)
-        for adam in chain_adams
-        if adam != seed_adam_normalized
-    ]
+    chain_entries = _extract_chain_entries(response.body)
+    if not any(entry.adam == seed_adam_normalized for entry in chain_entries):
+        chain_entries.append(
+            ChainEntry(
+                adam=seed_adam_normalized,
+                bucket=next(
+                    (
+                        bucket
+                        for bucket, act_type in _BUCKET_ACT_TYPE.items()
+                        if act_type == infer_act_type_from_adam(seed_adam_normalized)
+                    ),
+                    "requests",
+                ),
+            )
+        )
+    act_ids_by_adam: dict[str, uuid.UUID] = {seed_adam_normalized: seed_act_id}
+    for entry in chain_entries:
+        if entry.adam in act_ids_by_adam:
+            continue
+        act_ids_by_adam[entry.adam] = await _ensure_act_for_adam(
+            conn,
+            adam_normalized=entry.adam,
+            fallback_source_record_id=source_record_id,
+            act_type=_BUCKET_ACT_TYPE[entry.bucket],
+        )
 
     await _link_chain(
-        conn, seed_act_id=seed_act_id, related_act_ids=related_act_ids, source_record_id=source_record_id
+        conn,
+        seed_act_id=seed_act_id,
+        entries=chain_entries,
+        act_ids_by_adam=act_ids_by_adam,
+        source_record_id=source_record_id,
     )
 
-    all_act_ids = [seed_act_id, *related_act_ids]
+    all_act_ids = list(dict.fromkeys(act_ids_by_adam.values()))
     process_id, is_new_process = await _assign_process(conn, act_ids=all_act_ids)
     await _sync_process_summary(conn, process_id)
 

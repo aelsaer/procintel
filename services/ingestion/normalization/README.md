@@ -1,8 +1,8 @@
 # ingestion/normalization
 
-**This package is an empty placeholder — there is no code here.** What's
-described below (source-specific field-name mapping, Greek amount parsing
-§23.4, name normalization §9, identifier canonicalization §7.2) exists,
+This package documents the normalization ownership boundary. Source-specific
+field-name mapping, Greek amount parsing (§23.4), name normalization (§9), and
+identifier canonicalization (§7.2) exist,
 but as each connector's own `normalize.py`, not centralized here — every
 source has different raw field names/casing drift
 (`contractRelatedAda`/`contractRelatedADA`), so each connector owns the
@@ -27,8 +27,6 @@ are already-numeric API fields (just `Decimal(str(value))` conversion in
 `normalize.py`) — free-text Greek amount *parsing* (§23.4, out of PDF/OCR
 text) is a distinct, unrelated concern handled by
 `services/documents/amounts.py`. Name matching/canonicalization for
-entity dedup is genuinely shared, in `services/entity_resolution/`
-(`find_or_create_entity_by_afm`, `text_similarity.py`), not here. Don't
-add new normalization code expecting it to be picked up from this
-directory; add it to the relevant connector's `normalize.py`, following
-the existing pattern.
+entity dedup is shared in `services/entity_resolution/`
+(`find_or_create_entity_by_afm`, `text_similarity.py`). New source field
+mappings belong in the relevant connector's `normalize.py`.

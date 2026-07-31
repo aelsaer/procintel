@@ -19,14 +19,19 @@ async function expectNoSeriousAccessibilityViolations(page: Page) {
 
 test("primary workspaces meet serious WCAG checks", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Τι θέλεις να παρακολουθεί το Procintel;" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Δραστηριότητα και μόνιμη στόχευση" })).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
 
-  for (const view of ["Ευκαιρίες", "Alerts", "Ανταγωνισμός", "Analytics", "Αρχείο"]) {
+  for (const view of ["Ευκαιρίες", "Alerts", "Ανταγωνισμός", "Frameworks", "Analytics", "Αρχείο"]) {
     await openSidebarView(page, view);
     await page.waitForTimeout(300);
     await expectNoSeriousAccessibilityViolations(page);
   }
+
+  await openSidebarView(page, "Analytics");
+  await page.getByRole("button", { name: "Ευρώπη" }).click();
+  await expect(page.getByRole("heading", { name: "Η αγορά ανά χώρα" })).toBeVisible();
+  await expectNoSeriousAccessibilityViolations(page);
 });
 
 test("analytics dialogs, map alternative, and detail workspace meet serious WCAG checks", async ({ page }) => {
@@ -44,4 +49,3 @@ test("analytics dialogs, map alternative, and detail workspace meet serious WCAG
   await expect(page.getByRole("dialog", { name: "Τεκμηρίωση δεδομένων" })).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
 });
-

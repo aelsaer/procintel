@@ -94,11 +94,15 @@ async def test_signers_become_person_entities_and_dedup_by_name(tmp_path):
                 )
             ).all()
             assert {r.canonical_name for r in signer_rows} == {"Ιωάννης Παπαδόπουλος", "Μαρία Γεωργίου"}
-            assert all(
-                (await conn.execute(select(entities.c.entity_type).where(entities.c.id == r.id))).scalar()
-                == "PERSON"
-                for r in signer_rows
-            )
+            for signer_row in signer_rows:
+                entity_type = (
+                    await conn.execute(
+                        select(entities.c.entity_type).where(
+                            entities.c.id == signer_row.id
+                        )
+                    )
+                ).scalar()
+                assert entity_type == "PERSON"
 
             # a second, unrelated decision naming one of the same signers
             # (by name) resolves to the *same* PERSON entity, not a new one

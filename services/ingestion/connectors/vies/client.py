@@ -1,11 +1,4 @@
-"""SOAP client for VIES `checkVat` (spec §3.9, §7.2).
-
-Endpoint path and SOAP envelope shape are a best-effort guess —
-description.txt confirms VIES exposes a WSDL `checkVat` operation but not
-this repo's exact envelope/response parsing (no live sample available).
-Isolated to `check_vat()` so fixing it against the real WSDL is a one-place
-change.
-"""
+"""SOAP client for the VIES `checkVat` operation (spec §3.9, §7.2)."""
 
 from __future__ import annotations
 
@@ -69,7 +62,6 @@ class ViesClient:
 
         @retrying(max_attempts=self._config.max_retry_attempts)
         async def _do_request() -> httpx.Response:
-            # TODO(confirm against live WSDL): exact SOAP endpoint path/envelope.
             response = await self._http.post(
                 "/checkVatService",
                 content=envelope,

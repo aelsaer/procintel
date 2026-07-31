@@ -3,6 +3,8 @@ export interface BusinessScope {
   keywords: string[];
   cpvPrefix: string;
   cpvPrefixes: string[];
+  excludedCpvPrefixes: string[];
+  excludedKeywords: string[];
   nutsCode: string;
   municipality: string;
   amountMin: string;
@@ -39,10 +41,22 @@ export function businessScopeQuery(scope: BusinessScope): Record<string, string 
   };
 }
 
+export function workspaceFilterQuery(scope: BusinessScope): Record<string, string | number> {
+  return {
+    ...(scope.nutsCode.trim() ? { nuts_code: scope.nutsCode.trim().toUpperCase() } : {}),
+    ...(scope.municipality.trim() ? { municipality: scope.municipality.trim() } : {}),
+    ...(Number(scope.amountMin) > 0 ? { amount_min: Number(scope.amountMin) } : {}),
+    ...(scope.dateFrom ? { date_from: scope.dateFrom } : {}),
+    ...(scope.dateTo ? { date_to: scope.dateTo } : {}),
+  };
+}
+
 export function businessScopeFingerprint(scope: BusinessScope): string {
   return JSON.stringify({
     cpv: activeCpvPrefixes(scope),
     keywords: activeKeywords(scope),
+    excludedCpv: unique(scope.excludedCpvPrefixes),
+    excludedKeywords: unique(scope.excludedKeywords),
     nutsCode: scope.nutsCode,
     municipality: scope.municipality,
     amountMin: scope.amountMin,

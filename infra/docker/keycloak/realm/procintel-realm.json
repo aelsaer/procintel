@@ -1,0 +1,192 @@
+{
+  "realm": "procintel",
+  "displayName": "Procintel",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": true,
+  "registrationEmailAsUsername": true,
+  "rememberMe": true,
+  "verifyEmail": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "minimumQuickLoginWaitSeconds": 60,
+  "waitIncrementSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "maxDeltaTimeSeconds": 43200,
+  "failureFactor": 5,
+  "accessTokenLifespan": 900,
+  "accessTokenLifespanForImplicitFlow": 900,
+  "ssoSessionIdleTimeout": 28800,
+  "ssoSessionMaxLifespan": 43200,
+  "offlineSessionIdleTimeout": 2592000,
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
+  "passwordPolicy": "length(12) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1)",
+  "internationalizationEnabled": true,
+  "supportedLocales": [
+    "el",
+    "en"
+  ],
+  "defaultLocale": "el",
+  "loginTheme": "procintel",
+  "eventsEnabled": true,
+  "eventsExpiration": 2592000,
+  "enabledEventTypes": [
+    "LOGIN",
+    "LOGIN_ERROR",
+    "LOGOUT",
+    "REGISTER",
+    "REGISTER_ERROR",
+    "UPDATE_PASSWORD",
+    "UPDATE_TOTP",
+    "REMOVE_TOTP"
+  ],
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "OWNER",
+        "description": "Workspace owner"
+      },
+      {
+        "name": "ADMIN",
+        "description": "Workspace administrator"
+      },
+      {
+        "name": "ANALYST",
+        "description": "Procurement analyst"
+      },
+      {
+        "name": "SALES",
+        "description": "Sales workspace member"
+      },
+      {
+        "name": "BID_MANAGER",
+        "description": "Bid workspace manager"
+      },
+      {
+        "name": "VIEWER",
+        "description": "Read-only workspace member"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "procintel-api",
+      "name": "Procintel API",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "bearerOnly": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false
+    },
+    {
+      "clientId": "procintel-web",
+      "name": "Procintel Web",
+      "description": "Public browser client using Authorization Code and PKCE",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "rootUrl": "${PROCINTEL_WEB_ORIGIN}",
+      "baseUrl": "${PROCINTEL_WEB_ORIGIN}",
+      "redirectUris": [
+        "${PROCINTEL_WEB_ORIGIN}/callback",
+        "${PROCINTEL_WEB_ORIGIN}/login",
+        "${PROCINTEL_WEB_ORIGIN_ALT}/callback",
+        "${PROCINTEL_WEB_ORIGIN_ALT}/login",
+        "http://localhost:3012/callback",
+        "http://localhost:3012/login",
+        "http://127.0.0.1:3012/callback",
+        "http://127.0.0.1:3012/login"
+      ],
+      "webOrigins": [
+        "${PROCINTEL_WEB_ORIGIN}",
+        "${PROCINTEL_WEB_ORIGIN_ALT}",
+        "http://localhost:3012",
+        "http://127.0.0.1:3012"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+",
+        "oauth2.device.authorization.grant.enabled": "false",
+        "oidc.ciba.grant.enabled": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "procintel-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "procintel-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "tenant_id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "tenant_id",
+            "claim.value": "${PROCINTEL_DEFAULT_TENANT_ID}",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ],
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "roles",
+        "profile",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "offline_access",
+        "microprofile-jwt"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "demo@procintel.local",
+      "email": "demo@procintel.local",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Procintel",
+      "lastName": "Demo",
+      "realmRoles": [
+        "ANALYST"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "ProcintelDemo!2026",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

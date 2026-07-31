@@ -11,8 +11,10 @@ same file is a no-op (content-hash dedup, no duplicate rows); ingesting a
 rows wholesale rather than appending to them.
 """
 
+import copy
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -52,8 +54,12 @@ def _asyncpg_url() -> str:
 
 @respx.mock
 async def test_population_ingested_deduped_and_replaced_on_change(tmp_path):
-    respx.get(f"{BASE_URL}/api/3/action/package_show", params={"id": DATASET_ID}).mock(
-        return_value=httpx.Response(200, json=PACKAGE_BODY)
+    dataset_id = f"{DATASET_ID}-{uuid.uuid4().hex}"
+    package_body = copy.deepcopy(PACKAGE_BODY)
+    package_body["result"]["id"] = dataset_id
+    package_body["result"]["name"] = dataset_id
+    respx.get(f"{BASE_URL}/api/3/action/package_show", params={"id": dataset_id}).mock(
+        return_value=httpx.Response(200, json=package_body)
     )
     resource_route = respx.get(RESOURCE_URL).mock(return_value=httpx.Response(200, content=CSV_BYTES))
 
@@ -63,7 +69,7 @@ async def test_population_ingested_deduped_and_replaced_on_change(tmp_path):
 
     try:
         async with engine.connect() as conn:
-            package = await client.package_show(DATASET_ID)
+            package = await client.package_show(dataset_id)
             registry_result = await upsert_external_dataset(
                 conn,
                 catalog_source="DATA_GOV_GR",
@@ -83,11 +89,11 @@ async def test_population_ingested_deduped_and_replaced_on_change(tmp_path):
             ).one()
             assert dataset_row.ingestion_status == "ONBOARDED"
             assert dataset_row.adapter_name == "population"
-            assert dataset_row.title == PACKAGE_BODY["result"]["title"]
+            assert dataset_row.title == package_body["result"]["title"]
 
             resource_response = await client.fetch_resource_bytes(RESOURCE_URL)
             raw_ref = await raw_store.put(
-                source="ckan", resource="population", partition_key=f"dataset={DATASET_ID}",
+                source="ckan", resource="population", partition_key=f"dataset={dataset_id}",
                 payload=resource_response.content,
             )
             ingest_result = await ingest_population_dataset(
@@ -141,7 +147,7 @@ async def test_population_ingested_deduped_and_replaced_on_change(tmp_path):
             # a changed file (different hash) replaces the rows wholesale
             changed_csv = b"kallikratis_code,population\n6101,700000\n"
             changed_ref = await raw_store.put(
-                source="ckan", resource="population", partition_key=f"dataset={DATASET_ID}", payload=changed_csv
+                source="ckan", resource="population", partition_key=f"dataset={dataset_id}", payload=changed_csv
             )
             ingest_changed = await ingest_population_dataset(
                 conn,

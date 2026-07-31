@@ -94,7 +94,7 @@ async def _run_backfill(
         vies_client = ViesClient(ViesConnectorConfig.from_env())
 
     try:
-        async with engine.connect() as conn:
+        async with engine.begin() as conn:
             result = await ingest_ted_partition(
                 client=client,
                 raw_store=raw_store,
@@ -132,7 +132,7 @@ def main() -> None:
     backfill.add_argument(
         "--with-vies",
         action="store_true",
-        help="validate foreign (non-GR) suppliers via VIES (§3.9) — opt-in, requires VIES_API_BASE_URL",
+        help="validate foreign (non-GR) suppliers through the official VIES service (§3.9)",
     )
 
     args = parser.parse_args()

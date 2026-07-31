@@ -10,7 +10,7 @@ implemented.
 | Module | Purpose |
 |---|---|
 | `afm.py` | Greek ΑΦΜ checksum validator (§7.2) |
-| `config.py` | `KhmdhsConnectorConfig` — `KHMDHS_API_BASE_URL` env var, no default (unconfirmed hostname, see `docs/source-contracts/khmdhs.md`) |
+| `config.py` | `KhmdhsConnectorConfig` — official ΚΗΜΔΗΣ Open Data host by default; `KHMDHS_API_BASE_URL` is an optional override |
 | `client.py` | `KhmdhsClient.fetch_resource_page(resource, ...)` + `fetch_adam_chain(reference_number)` — rate limiting, retry/backoff, circuit breaker, shared across all five resources (`ALL_RESOURCES`) |
 | `normalize.py` | `normalize_khmdhs_record(raw, resource=...)` → `NormalizedAct`, handling `contractRelatedAda`/`contractRelatedADA` casing drift, resource→act_type mapping (request→REQUEST, notice→NOTICE, auction→AWARD, contract→CONTRACT, payment→PAYMENT), and the two separate funding-reference fields (§19.4) |
 | `db_writer.py` | `upsert_act()` / `ingest_khmdhs_record()` — idempotent canonical upsert (`source_records`, `entities`, `entity_identifiers`, `procurement_acts`, `act_identifiers`, `act_cpv_codes`, `act_locations`, `act_parties`), parameterized by act_type. Returns `ActUpsertResult`/`IngestResult` (insert-vs-changed-fields, `related_ada`, `contractor_entity_id`/`contractor_afm_normalized`, `funding_ref_candidates` — see below) |
@@ -40,16 +40,14 @@ the start this time: a pure trigger list for
 `services/ingestion/connectors/anaptyxi`, never assumed to be a ΟΠΣ/MIS code
 by this module itself.
 
-Several details are best-effort guesses pending confirmation against the
-live API (each flagged with a `TODO`/module docstring note): the
-request-body field names for the date window, the response envelope's field
-names, and — for `request`/`notice`/`payment` specifically — a couple of
-extra fallback field names for dates/amounts where the spec's field list
-doesn't spell out resource-specific naming (`normalize.py`'s
-`_EXTRA_*_KEYS` maps). Tests (`tests/unit`, `tests/contract`) don't depend
-on any of these being correct — they run against local, clearly-labeled
-synthetic fixtures (`tests/fixtures/khmdhs/*_sample.json`), not the live
-API.
+Request envelopes and resource mappings have been validated against live
+payloads for all five resources. The canonical mapping includes live
+`contractSignedDate`, payment payees, city/postal fields, Διαύγεια
+cross-references, VAT derivation and every member of
+`contractingDataDetails.contractingMembersDataList`; consortium suppliers
+are persisted as separate `act_parties` and each receives ΓΕΜΗ/ΜΕΦ
+enrichment within provider budgets. Legacy aliases remain covered by
+synthetic fixture and contract tests.
 
 See `docs/runbooks/local-dev.md` for how to run this end-to-end, and
 `docs/source-contracts/khmdhs.md` for the source contract this implements.

@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { useCustom } from "@refinedev/core";
-import { ArrowRight, Filter, Network, Table2 } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, ExternalLink, Filter, Network, Table2 } from "lucide-react";
 import { Badge, EmptyState, LoadingState } from "@/components/procurement-ui";
 import {
   activeCpvPrefixes,
@@ -13,8 +14,8 @@ import {
 
 type RelationshipResponse = {
   nodes: Array<{ id: string; node_type: string; label: string; value: number | string | null }>;
-  edges: Array<{ source: string; target: string; relation_type: string; value: number | string | null; confidence: number }>;
-  table: Array<{ process_id: string; process: string | null; buyer: string | null; supplier: string | null; value: number | string | null; cpv_codes: string[] }>;
+  edges: Array<{ source: string; target: string; relation_type: string; value: number | string | null; confidence: number; act_id: string | null; date: string | null; official_document_identifier: string | null; official_url: string | null; evidence: { document_url?: string | null } }>;
+  table: Array<{ process_id: string; process: string | null; buyer: string | null; supplier: string | null; value: number | string | null; cpv_codes: string[]; official_document_identifier: string | null; official_url: string | null; document_url: string | null; date: string | null }>;
 };
 
 export function RelationshipExplorer({ profile }: { profile: BusinessScope }) {
@@ -65,10 +66,10 @@ export function RelationshipExplorer({ profile }: { profile: BusinessScope }) {
         </div>
       </details>
       {response.query.isLoading ? <LoadingState label="Σύνθεση σχέσεων" /> : null}
-      {data && mode === "graph" && <div className="relationship-graph-wrap"><div className="relationship-graph" aria-label="Κόμβοι αγοραστών, διαδικασιών, προμηθευτών και χρηματοδότησης">{visibleNodes.map((node) => <div key={node.id} className={`graph-node node-${node.node_type.toLowerCase()}`}><Badge>{node.node_type}</Badge><strong>{node.label}</strong></div>)}</div><div className="relationship-edges" aria-label="Συνδέσεις κόμβων">{data.edges.slice(0, 14).map((edge, index) => <div key={`${edge.source}-${edge.target}-${index}`}><span>{nodesById.get(edge.source)?.label ?? edge.source}</span><span><Badge>{edge.relation_type}</Badge><ArrowRight size={14} /></span><span>{nodesById.get(edge.target)?.label ?? edge.target}</span><small>{Math.round(edge.confidence * 100)}%</small></div>)}</div></div>}
-      {data && mode === "table" && <div className="relationship-table" role="table"><div role="row"><strong>Αγοραστής</strong><strong>Διαδικασία</strong><strong>Προμηθευτής</strong><strong>Αξία</strong></div>{data.table.slice(0, 20).map((row) => <div role="row" key={`${row.process_id}-${row.supplier}`}><span>{row.buyer ?? "-"}</span><span>{row.process ?? row.process_id}</span><span>{row.supplier ?? "-"}</span><span>{new Intl.NumberFormat("el-GR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(Number(row.value ?? 0))}</span></div>)}</div>}
+      {data && mode === "graph" && <div className="relationship-graph-wrap"><div className="relationship-graph" aria-label="Κόμβοι αγοραστών, διαδικασιών, προμηθευτών και χρηματοδότησης">{visibleNodes.map((node) => <div key={node.id} className={`graph-node node-${node.node_type.toLowerCase()}`}><Badge>{node.node_type}</Badge><strong>{node.label}</strong></div>)}</div><div className="relationship-edges" aria-label="Συνδέσεις κόμβων">{data.edges.slice(0, 14).map((edge, index) => <div key={`${edge.source}-${edge.target}-${index}`}><span>{nodesById.get(edge.source)?.label ?? edge.source}</span><span><Badge>{edge.relation_type}</Badge><ArrowRight size={14} /></span><span>{nodesById.get(edge.target)?.label ?? edge.target}</span><small>{Math.round(edge.confidence * 100)}%{edge.official_url || edge.evidence.document_url ? <a href={edge.official_url ?? edge.evidence.document_url ?? "#"} target="_blank" rel="noreferrer" title={edge.official_document_identifier ?? "Επίσημο evidence"}><ExternalLink size={12} /></a> : null}</small></div>)}</div></div>}
+      {data && mode === "table" && <div className="relationship-table" role="table"><div role="row"><strong>Αγοραστής</strong><strong>Διαδικασία</strong><strong>Προμηθευτής</strong><strong>Αξία</strong><strong>Evidence</strong></div>{data.table.slice(0, 20).map((row) => <div role="row" key={`${row.process_id}-${row.supplier}`}><span>{row.buyer ?? "-"}</span><Link href={`/processes/${row.process_id}`}>{row.process ?? row.process_id}</Link><span>{row.supplier ?? "-"}</span><span>{new Intl.NumberFormat("el-GR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(Number(row.value ?? 0))}</span><span>{row.official_url || row.document_url ? <a href={row.official_url ?? row.document_url ?? "#"} target="_blank" rel="noreferrer">{row.official_document_identifier ?? "Έγγραφο"} <ExternalLink size={12} /></a> : "—"}</span></div>)}</div>}
       {data && !data.nodes.length ? <EmptyState title="Δεν υπάρχουν σχέσεις στο ενεργό προφίλ" detail="Δεν αναμιγνύονται σχέσεις από τη συνολική αγορά. Διεύρυνε CPV, λέξεις-κλειδιά ή χρονικό εύρος στο Προφίλ." /> : null}
-      <p className="relationship-note">Κάθε edge προέρχεται από canonical process buyer ή επίσημο act party. Η table view παραμένει η ακριβής προσβάσιμη εναλλακτική.</p>
+      <p className="relationship-note">Κάθε edge εμφανίζει ημερομηνία, επίσημο αναγνωριστικό και διαθέσιμο τεκμήριο. Η table view παραμένει η ακριβής προσβάσιμη εναλλακτική.</p>
     </section>
   );
 }

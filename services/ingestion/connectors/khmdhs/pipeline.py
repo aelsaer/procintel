@@ -31,26 +31,18 @@ call and the `on_ingest_result` hook are wrapped per-record — a failure is
 recorded in `PartitionIngestResult.failed_records` and the loop moves on to
 the next record, rather than the whole page/partition aborting.
 
-This deliberately does **not** use a savepoint (`conn.begin_nested()`)
-around each record — `on_ingest_result`'s composed hooks (`adamchain.py`,
-`services/alerts/evaluate.py`) already call `conn.commit()` internally at
-several points, and interleaving explicit commits with a nested
-savepoint transaction is exactly the kind of thing that can break in
-subtle ways that need a real Postgres instance to verify (not available
-while building this). In practice this is safe for the failure modes
-actually observed against the live API: a Pydantic validation error
-(`normalize_khmdhs_record`) and an httpx error (rate limiting, 5xx) both
-happen before any DB statement for that record runs, so there is no
-Postgres transaction state left to corrupt. A genuine DB-level failure
-mid-record (a constraint violation reached *after* some statements for
-that record already ran) could still leave the connection's transaction
-aborted for whatever runs next — a pre-existing risk this change doesn't
-introduce, just doesn't fully solve either.
+Core canonical writes run inside one savepoint per record. This prevents a
+constraint violation in one live record from leaving the outer page
+transaction aborted and turning every later row into a false failure. The
+enrichment callback runs after that savepoint because some composed hooks
+commit their own work; callback failures are counted separately and do not
+alter the core-ingestion result.
 """
 
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -80,7 +72,10 @@ class PartitionIngestResult:
     pages_fetched: int
     records_seen: int
     records_ingested: int  # excludes dedup hits (unchanged content re-ingested)
+    records_unchanged: int = 0
     records_failed: int = 0  # core ingestion or enrichment-hook failures, per-record — see module docstring
+    core_records_failed: int = 0
+    enrichment_callbacks_failed: int = 0
     failed_records: list[dict[str, Any]] = field(default_factory=list)  # bounded sample: [{"adam", "stage", "error"}]
     reached_page_budget: bool = False
     reached_record_budget: bool = False
@@ -88,6 +83,17 @@ class PartitionIngestResult:
 
 def _stable_json_bytes(record: dict) -> bytes:
     return json.dumps(record, sort_keys=True, ensure_ascii=False).encode("utf-8")
+
+
+@asynccontextmanager
+async def _record_savepoint(conn: AsyncConnection):
+    """Keep one bad canonical write from aborting every later row on a page."""
+    begin_nested = getattr(conn, "begin_nested", None)
+    if begin_nested is None:  # lightweight unit-test connections
+        yield
+        return
+    async with begin_nested():
+        yield
 
 
 async def ingest_khmdhs_partition(
@@ -112,7 +118,10 @@ async def ingest_khmdhs_partition(
     pages_fetched = 0
     records_seen = 0
     records_ingested = 0
+    records_unchanged = 0
     records_failed = 0
+    core_records_failed = 0
+    enrichment_callbacks_failed = 0
     failed_records: list[dict[str, Any]] = []
     reached_page_budget = False
     reached_record_budget = False
@@ -134,22 +143,26 @@ async def ingest_khmdhs_partition(
                     partition_key=f"adam={adam}",
                     payload=_stable_json_bytes(record),
                 )
-                ingest_result = await ingest_khmdhs_record(
-                    conn,
-                    resource=resource,
-                    raw_record=record,
-                    payload_uri=raw_ref.payload_uri,
-                    content_sha256=raw_ref.content_sha256,
-                    http_status=page_result.http_status,
-                    fetched_at=datetime.now(timezone.utc),
-                )
+                async with _record_savepoint(conn):
+                    ingest_result = await ingest_khmdhs_record(
+                        conn,
+                        resource=resource,
+                        raw_record=record,
+                        payload_uri=raw_ref.payload_uri,
+                        content_sha256=raw_ref.content_sha256,
+                        http_status=page_result.http_status,
+                        fetched_at=datetime.now(timezone.utc),
+                    )
             except Exception as exc:  # noqa: BLE001 — one bad record must not sacrifice the rest of the page, see module docstring
                 records_failed += 1
+                core_records_failed += 1
                 if len(failed_records) < _MAX_RECORDED_FAILURES:
                     failed_records.append({"adam": adam, "stage": "ingest", "error": _describe_exception(exc)})
             else:
                 if ingest_result.source_record_id is not None:
                     records_ingested += 1
+                else:
+                    records_unchanged += 1
                 if on_ingest_result is not None:
                     try:
                         if ingest_result.source_record_id is None and enrich_deduplicated:
@@ -162,6 +175,7 @@ async def ingest_khmdhs_partition(
                             await on_ingest_result(conn, resource, ingest_result)
                     except Exception as exc:  # noqa: BLE001 — the core record already ingested fine; don't lose it over a flaky enrichment hook
                         records_failed += 1
+                        enrichment_callbacks_failed += 1
                         if len(failed_records) < _MAX_RECORDED_FAILURES:
                             failed_records.append(
                                 {"adam": adam, "stage": "on_ingest_result", "error": _describe_exception(exc)}
@@ -187,7 +201,10 @@ async def ingest_khmdhs_partition(
         pages_fetched=pages_fetched,
         records_seen=records_seen,
         records_ingested=records_ingested,
+        records_unchanged=records_unchanged,
         records_failed=records_failed,
+        core_records_failed=core_records_failed,
+        enrichment_callbacks_failed=enrichment_callbacks_failed,
         failed_records=failed_records,
         reached_page_budget=reached_page_budget,
         reached_record_budget=reached_record_budget,

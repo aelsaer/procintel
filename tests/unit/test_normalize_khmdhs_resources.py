@@ -52,6 +52,21 @@ def test_unknown_resource_is_rejected():
         normalize_khmdhs_record({"referenceNumber": "X"}, resource="not-a-resource")
 
 
+def test_duplicate_cpv_codes_are_collapsed_before_canonical_insert():
+    normalized = normalize_khmdhs_record(
+        {
+            "referenceNumber": "26SYMV019542829",
+            "objectDetailsList": [
+                {"cpvs": ["71356300-1", "71356300-1", "71350000-6"]},
+                {"cpvs": ["71356300-1"]},
+            ],
+        },
+        resource="contract",
+    )
+
+    assert normalized.cpv_codes == ["71356300-1", "71350000-6"]
+
+
 def test_notice_preserves_real_provider_summary_fields():
     normalized = normalize_khmdhs_record(
         {
@@ -81,3 +96,72 @@ def test_notice_preserves_real_provider_summary_fields():
     assert normalized.source_details["award_criterion"] == "Βάσει τιμής"
     assert normalized.source_details["bidding_website"] == "https://example.test/tender"
     assert normalized.source_details["object_details"][0]["short_description"] == "Πομποί και παρελκόμενα"
+
+
+def test_live_contract_shape_preserves_all_consortium_members_and_dates():
+    normalized = normalize_khmdhs_record(
+        {
+            "referenceNumber": "26SYMV019498766",
+            "contractSignedDate": "2026-01-12",
+            "endDate": "2027-01-11",
+            "totalCostWithoutVAT": 3000,
+            "totalCostWithVAT": 3720,
+            "contractingDataDetails": {
+                "contractingMembersDataList": [
+                    {"name": "Supplier A", "vatNumber": "090000045"},
+                    {"name": "Supplier B", "vatNumber": "094019245"},
+                ]
+            },
+            "objectDetailsList": [
+                {
+                    "city": "ΧΑΙΔΑΡΙ",
+                    "postalCode": "12461",
+                    "costWithoutVAT": 3000,
+                }
+            ],
+            "decisionRelatedAda": ["ΑΔΑ-1", "ΑΔΑ-2"],
+            "diavgeiaADA": "ΑΔΑ-3",
+        },
+        resource="contract",
+    )
+
+    assert normalized.publication_date.isoformat() == "2026-01-12"
+    assert normalized.end_date.isoformat() == "2027-01-11"
+    assert normalized.vat_amount == Decimal("720")
+    assert [party.afm_normalized for party in normalized.contractors] == [
+        "090000045",
+        "094019245",
+    ]
+    assert normalized.contractor == normalized.contractors[0]
+    assert normalized.related_ada == ["ΑΔΑ-1", "ΑΔΑ-2", "ΑΔΑ-3"]
+    assert normalized.source_details["city"] == "ΧΑΙΔΑΡΙ"
+    assert normalized.source_details["postal_code"] == "12461"
+
+
+def test_live_payment_shape_maps_payee_location_and_official_reference():
+    normalized = normalize_khmdhs_record(
+        {
+            "referenceNumber": "26PAY019497778",
+            "signedDate": "2026-04-22T00:00:00",
+            "totalCostWithoutVAT": 5200,
+            "totalCostWithVAT": 6448,
+            "paymentRelatedAda": "Ψ123-ABC",
+            "objectDetails": [
+                {
+                    "name": "Payment Supplier",
+                    "vatNo": "090000045",
+                    "city": "ΔΡΑΜΑ",
+                    "postalCode": "66100",
+                    "costWithoutVAT": 5200,
+                }
+            ],
+        },
+        resource="payment",
+    )
+
+    assert normalized.submission_date.isoformat() == "2026-04-22"
+    assert normalized.contractor.afm_normalized == "090000045"
+    assert normalized.contractors == [normalized.contractor]
+    assert normalized.related_ada == ["Ψ123-ABC"]
+    assert normalized.source_details["city"] == "ΔΡΑΜΑ"
+    assert normalized.source_details["postal_code"] == "66100"

@@ -15,6 +15,7 @@ sandbox this was built in) and how it's gated (`CLAMD_HOST`/
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Protocol
 
 
@@ -36,3 +37,13 @@ class NoOpAntivirusScanner:
 
     async def scan(self, payload: bytes) -> ScanResult:
         return ScanResult(is_clean=True)
+
+
+def configured_antivirus_scanner() -> AntivirusScanner:
+    if os.environ.get("CLAMD_HOST") or os.environ.get("CLAMD_SOCKET_PATH"):
+        from .clamav import ClamdAntivirusScanner, ClamdConfig
+
+        return ClamdAntivirusScanner(ClamdConfig.from_env())
+    if os.environ.get("PROCINTEL_ENV", "development").lower() == "production":
+        raise RuntimeError("CLAMD_HOST or CLAMD_SOCKET_PATH is required in production")
+    return NoOpAntivirusScanner()

@@ -18,11 +18,11 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import create_async_engine
 import pytest
 
-from packages.domain.tables import administrative_boundaries
+from packages.domain.tables import administrative_boundaries, external_datasets
 from services.ingestion.connectors.ckan.db_writer import ingest_boundaries_dataset
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -46,6 +46,25 @@ async def test_environmental_zone_boundary_type_writes_real_geometry_independent
 
     try:
         async with engine.connect() as conn:
+            await conn.execute(
+                external_datasets.insert().values(
+                    id=external_dataset_id,
+                    catalog_source="TEST",
+                    catalog_dataset_id=f"environmental-zones-{external_dataset_id}",
+                    title="Environmental zones fixture",
+                    ingestion_status="ONBOARDED",
+                    adapter_name="boundaries",
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO nuts_areas (code, level, name_en, classification_version)
+                    VALUES ('EL301', 3, 'Central Athens', 'NUTS-2021')
+                    ON CONFLICT (code) DO NOTHING
+                    """
+                )
+            )
             env_result = await ingest_boundaries_dataset(
                 conn,
                 external_dataset_id=external_dataset_id,

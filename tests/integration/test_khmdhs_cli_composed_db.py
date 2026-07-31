@@ -11,6 +11,7 @@ the pieces.
 Skipped automatically unless $DATABASE_URL is set.
 """
 
+import copy
 import json
 import os
 import uuid
@@ -69,6 +70,15 @@ def _asyncpg_url() -> str:
     return url
 
 
+def _valid_afm(seed: int) -> str:
+    prefix = f"{10_000_000 + seed % 89_999_999:08d}"
+    checksum = (
+        sum(int(prefix[index]) * (2 ** (8 - index)) for index in range(8))
+        % 11
+    ) % 10
+    return f"{prefix}{checksum}"
+
+
 async def _seed_matching_alert_rule(engine) -> uuid.UUID:
     async with engine.connect() as conn:
         tenant_id, user_id = uuid.uuid4(), uuid.uuid4()
@@ -98,8 +108,23 @@ async def test_full_backfill_with_diavgeia_and_gemi_fires_everything(tmp_path, m
     monkeypatch.setenv("GEMI_API_BASE_URL", GEMI_BASE_URL)
     monkeypatch.setenv("GEMI_API_KEY", "test-key")
 
+    unique_seed = uuid.uuid4().int
+    supplier_afm = _valid_afm(unique_seed)
+    seed_adam = f"25SYMV{unique_seed % 1_000_000_000:09d}"
+    second_adam = f"25SYMV{(unique_seed + 1) % 1_000_000_000:09d}"
+    gemi_number = 100_000_000_000 + unique_seed % 900_000_000_000
+    khmdhs_fixture = copy.deepcopy(KHMDHS_FIXTURE)
+    khmdhs_fixture["data"][0]["referenceNumber"] = seed_adam
+    khmdhs_fixture["data"][1]["referenceNumber"] = second_adam
+    for record in khmdhs_fixture["data"]:
+        for awardee in record.get("awardees", []):
+            awardee["vatNumber"] = supplier_afm
+    company_body = copy.deepcopy(COMPANY_BODY)
+    company_body["afm"] = supplier_afm
+    company_body["arGemi"] = gemi_number
+
     respx.post(f"{KHMDHS_BASE_URL}/khmdhs-opendata/contract").mock(
-        return_value=httpx.Response(200, json=KHMDHS_FIXTURE)
+        return_value=httpx.Response(200, json=khmdhs_fixture)
     )
     respx.get(url__regex=rf"{KHMDHS_BASE_URL}/khmdhs-opendata/adamChain/.*").mock(
         return_value=httpx.Response(200, json={"relatedRecords": []})
@@ -108,11 +133,11 @@ async def test_full_backfill_with_diavgeia_and_gemi_fires_everything(tmp_path, m
         return_value=httpx.Response(200, json=DECISION_BODY)
     )
     gemi_route = respx.get(
-        f"{GEMI_BASE_URL}/companies", params={"afm": SUPPLIER_AFM, "resultsSize": "1"}
+        f"{GEMI_BASE_URL}/companies", params={"afm": supplier_afm, "resultsSize": "1"}
     ).mock(
-        return_value=httpx.Response(200, json={"searchResults": [COMPANY_BODY]})
+        return_value=httpx.Response(200, json={"searchResults": [company_body]})
     )
-    respx.get(f"{GEMI_BASE_URL}/companies/123456789000/documents").mock(
+    respx.get(f"{GEMI_BASE_URL}/companies/{gemi_number}/documents").mock(
         return_value=httpx.Response(200, json={"decision": [], "publication": []})
     )
 
@@ -135,7 +160,7 @@ async def test_full_backfill_with_diavgeia_and_gemi_fires_everything(tmp_path, m
     engine = create_async_engine(_asyncpg_url())
     try:
         async with engine.connect() as conn:
-            origin_act_id = await get_act_id_by_adam(conn, SEED_ADAM)
+            origin_act_id = await get_act_id_by_adam(conn, seed_adam)
             assert origin_act_id is not None
 
             # 1. adamChain assigned a process, and it's visible via the
@@ -179,7 +204,7 @@ async def test_full_backfill_with_diavgeia_and_gemi_fires_everything(tmp_path, m
             # cache gate meant only ONE real API call even though both
             # fixture records share the same supplier ΑΦΜ
             snapshot_rows = (await conn.execute(select(entity_company_snapshots))).all()
-            assert any(row.vat_number == SUPPLIER_AFM for row in snapshot_rows)
+            assert any(row.vat_number == supplier_afm for row in snapshot_rows)
             assert gemi_route.call_count == 1
     finally:
         await engine.dispose()

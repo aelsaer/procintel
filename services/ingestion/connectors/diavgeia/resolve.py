@@ -17,8 +17,8 @@ ever blocking direct fetch, per §17.3. When basic SEARCH returns zero or
 multiple candidates and the caller has a `decision_type`/`protocol_number`
 to narrow with, one ADVANCED_SEARCH retry is attempted before giving up —
 its own circuit breaker too, so a degraded ADVANCED_SEARCH never blocks
-SEARCH or direct fetch either. `ORGANIZATION_LOOKUP`/`SIGNER_LOOKUP`/
-`VERSION_LOG` remain unimplemented.
+SEARCH or direct fetch either. Version-log, organization, unit and signer
+reference responses are fetched and retained alongside the decision.
 """
 
 from __future__ import annotations
@@ -30,13 +30,20 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from packages.domain.tables import act_identifiers, act_links, procurement_acts, process_members
+from packages.domain.tables import (
+    act_identifiers,
+    act_links,
+    documents,
+    procurement_acts,
+    process_members,
+)
+from packages.source_clients.rate_limit import TokenBucket
 from packages.source_clients.raw_store import RawStore
 from services.documents.pipeline import process_document
 from services.entity_resolution.text_similarity import normalized_similarity
 
 from .client import DecisionNotFoundError, DiavgeiaClient
-from .db_writer import DecisionIngestResult, ingest_decision_record
+from .db_writer import DecisionIngestResult, ingest_decision_record, ingest_reference_record
 from .normalize import normalize_ada
 
 SEARCH_MATCH_CONFIDENCE = 0.75
@@ -46,9 +53,212 @@ SEARCH_TITLE_SIMILARITY_THRESHOLD = 0.5
 _logger = logging.getLogger("procintel.diavgeia.resolve")
 
 
-async def _maybe_process_decision_document(
-    conn: AsyncConnection, *, result: DecisionIngestResult, process_documents: bool
+async def _store_reference_response(
+    conn: AsyncConnection,
+    *,
+    raw_store: RawStore,
+    resource_type: str,
+    source_native_id: str,
+    response,
 ) -> None:
+    raw_ref = await raw_store.put(
+        source="diavgeia",
+        resource=resource_type,
+        partition_key=f"id={source_native_id}",
+        payload=response.raw_body,
+    )
+    await ingest_reference_record(
+        conn,
+        resource_type=resource_type,
+        source_native_id=source_native_id,
+        raw_body=response.body,
+        payload_uri=raw_ref.payload_uri,
+        content_sha256=raw_ref.content_sha256,
+        http_status=response.http_status,
+        fetched_at=datetime.now(timezone.utc),
+    )
+
+
+async def _enrich_decision_references(
+    conn: AsyncConnection,
+    *,
+    client: DiavgeiaClient,
+    raw_store: RawStore,
+    ada: str,
+    raw_decision: dict,
+) -> dict[str, str]:
+    """Persist official organization/unit/signer dictionaries and correction history."""
+    outcomes: dict[str, str] = {}
+    organization_uid = raw_decision.get("organizationId")
+    if organization_uid:
+        reference_calls = (
+            (
+                "organization",
+                lambda: client.get_organization(str(organization_uid)),
+            ),
+            (
+                "units",
+                lambda: client.list_organization_units(
+                    str(organization_uid), status="all"
+                ),
+            ),
+            (
+                "signers",
+                lambda: client.list_organization_signers(
+                    str(organization_uid), status="all"
+                ),
+            ),
+        )
+        for resource_type, operation in reference_calls:
+            try:
+                response = await operation()
+                await _store_reference_response(
+                    conn,
+                    raw_store=raw_store,
+                    resource_type=resource_type,
+                    source_native_id=str(organization_uid),
+                    response=response,
+                )
+                outcomes[resource_type] = "SUCCEEDED"
+            except Exception as exc:  # noqa: BLE001 - optional reference data
+                outcomes[resource_type] = f"FAILED: {type(exc).__name__}: {exc}"
+                _logger.warning(
+                    "Διαύγεια %s reference unavailable for %s: %s",
+                    resource_type,
+                    ada,
+                    exc,
+                )
+
+    if raw_decision.get("correctedVersionId"):
+        try:
+            history = await client.fetch_correction_history(ada)
+            for version in history:
+                version_id = str(version.body.get("versionId") or ada)
+                await _store_reference_response(
+                    conn,
+                    raw_store=raw_store,
+                    resource_type="decisionVersion",
+                    source_native_id=version_id,
+                    response=version,
+                )
+            outcomes["decisionVersion"] = "SUCCEEDED"
+        except Exception as exc:  # noqa: BLE001 - current published version remains usable
+            outcomes["decisionVersion"] = (
+                f"FAILED: {type(exc).__name__}: {exc}"
+            )
+            _logger.exception("failed to retrieve Διαύγεια correction history for %s", ada)
+    return outcomes
+
+
+async def refresh_decision_references(
+    conn: AsyncConnection,
+    *,
+    client: DiavgeiaClient,
+    raw_store: RawStore,
+    ada: str,
+    process_documents: bool = False,
+) -> dict[str, str]:
+    """Refresh reference dictionaries for an already canonicalized decision."""
+    ada_normalized = normalize_ada(ada)
+    response = await client.fetch_decision_by_ada(ada_normalized)
+    outcomes = await _enrich_decision_references(
+        conn,
+        client=client,
+        raw_store=raw_store,
+        ada=ada_normalized,
+        raw_decision=response.body,
+    )
+    if process_documents:
+        act_id = (
+            await conn.execute(
+                select(act_identifiers.c.act_id)
+                .where(
+                    act_identifiers.c.scheme == "ADA",
+                    act_identifiers.c.value_normalized == ada_normalized,
+                )
+                .limit(1)
+            )
+        ).scalar()
+        outcomes["document"] = await _maybe_process_decision_document(
+            conn,
+            result=DecisionIngestResult(
+                source_record_id=None,
+                act_id=act_id,
+                document_url=response.body.get("documentUrl"),
+            ),
+            process_documents=True,
+            rate_limiter=client.request_rate_limiter,
+        )
+    await conn.commit()
+    return outcomes
+
+
+async def backfill_decision_references(
+    conn: AsyncConnection,
+    *,
+    client: DiavgeiaClient,
+    raw_store: RawStore,
+    limit: int,
+    process_documents: bool = False,
+) -> dict[str, int]:
+    """Refresh dictionaries for the stored decision population within a budget."""
+    if limit < 0:
+        raise ValueError("limit must be non-negative")
+    adas = (
+        await conn.execute(
+            select(act_identifiers.c.value_normalized)
+            .join(
+                procurement_acts,
+                procurement_acts.c.id == act_identifiers.c.act_id,
+            )
+            .where(
+                act_identifiers.c.scheme == "ADA",
+                procurement_acts.c.act_type == "DIAVGEIA_DECISION",
+                procurement_acts.c.is_current.is_(True),
+            )
+            .distinct()
+            .order_by(act_identifiers.c.value_normalized)
+            .limit(limit)
+        )
+    ).scalars().all()
+    counts = {
+        "selected": len(adas),
+        "refreshed": 0,
+        "partial": 0,
+        "not_found": 0,
+        "failed": 0,
+    }
+    for ada in adas:
+        try:
+            outcomes = await refresh_decision_references(
+                conn,
+                client=client,
+                raw_store=raw_store,
+                ada=str(ada),
+                process_documents=process_documents,
+            )
+        except DecisionNotFoundError:
+            await conn.rollback()
+            counts["not_found"] += 1
+        except Exception:  # noqa: BLE001 - one decision is one failure boundary
+            await conn.rollback()
+            counts["failed"] += 1
+            _logger.exception("failed to refresh Διαύγεια references for %s", ada)
+        else:
+            if any(value.startswith("FAILED:") for value in outcomes.values()):
+                counts["partial"] += 1
+            else:
+                counts["refreshed"] += 1
+    return counts
+
+
+async def _maybe_process_decision_document(
+    conn: AsyncConnection,
+    *,
+    result: DecisionIngestResult,
+    process_documents: bool,
+    rate_limiter: TokenBucket | None = None,
+) -> str:
     """§23's documents pipeline was fully built with no automatic caller —
     this is that caller. Opt-in (mirrors every other "needs its own real
     infra to run well" enrichment in this codebase, e.g. ΓΕΜΗ/OpenSearch):
@@ -60,16 +270,31 @@ async def _maybe_process_decision_document(
     already fully linked/stored by the time this runs, and losing that over
     a failed PDF download would be strictly worse than a missing document."""
     if not process_documents or not result.document_url or result.act_id is None:
-        return
+        return "SKIPPED"
+    existing = (
+        await conn.execute(
+            select(documents.c.id)
+            .where(
+                documents.c.act_id == result.act_id,
+                documents.c.document_type == "DIAVGEIA_DECISION_PDF",
+            )
+            .limit(1)
+        )
+    ).first()
+    if existing is not None:
+        return "EXISTING"
     try:
         await process_document(
             conn,
             url=result.document_url,
             act_id=result.act_id,
             document_type="DIAVGEIA_DECISION_PDF",
+            download_rate_limiter=rate_limiter,
         )
-    except Exception:  # noqa: BLE001 — see docstring above
+    except Exception as exc:  # noqa: BLE001 — see docstring above
         _logger.exception("failed to process Διαύγεια decision document for act %s", result.act_id)
+        return f"FAILED: {type(exc).__name__}: {exc}"
+    return "SUCCEEDED"
 
 
 async def _link_to_origin(
@@ -218,10 +443,23 @@ async def resolve_decision_for_ada(
     if result.act_id is None:
         return None
 
+    await _enrich_decision_references(
+        conn,
+        client=client,
+        raw_store=raw_store,
+        ada=ada_normalized,
+        raw_decision=response.body,
+    )
+
     await _link_to_origin(conn, origin_act_id=origin_act_id, decision_act_id=result.act_id)
     await _join_origin_process(conn, origin_act_id=origin_act_id, decision_act_id=result.act_id)
     await conn.commit()
-    await _maybe_process_decision_document(conn, result=result, process_documents=process_documents)
+    await _maybe_process_decision_document(
+        conn,
+        result=result,
+        process_documents=process_documents,
+        rate_limiter=client.request_rate_limiter,
+    )
     return result.act_id
 
 
@@ -324,6 +562,15 @@ async def resolve_decision_via_search(
     if result.act_id is None:
         return None
 
+    if result.source_record_id is not None:
+        await _enrich_decision_references(
+            conn,
+            client=client,
+            raw_store=raw_store,
+            ada=ada_normalized,
+            raw_decision=full_response.body,
+        )
+
     await _link_to_origin(
         conn,
         origin_act_id=origin_act_id,
@@ -339,5 +586,10 @@ async def resolve_decision_via_search(
     )
     await _join_origin_process(conn, origin_act_id=origin_act_id, decision_act_id=result.act_id)
     await conn.commit()
-    await _maybe_process_decision_document(conn, result=result, process_documents=process_documents)
+    await _maybe_process_decision_document(
+        conn,
+        result=result,
+        process_documents=process_documents,
+        rate_limiter=client.request_rate_limiter,
+    )
     return result.act_id

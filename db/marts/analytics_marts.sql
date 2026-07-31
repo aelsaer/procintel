@@ -363,10 +363,11 @@ WHERE c.act_type = 'CONTRACT' AND c.is_current = TRUE AND c.end_date IS NOT NULL
 -- application code. Table shape carries the required explainability: every
 -- sub-score plus its evidence bullet points.
 -- ---------------------------------------------------------------------------
-CREATE TABLE opportunity_scores (
+CREATE TABLE IF NOT EXISTS opportunity_scores (
     id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     process_id                UUID NOT NULL REFERENCES procurement_processes(id),
     tenant_id                    UUID NOT NULL REFERENCES tenants(id),   -- score is company-fit-relative, so tenant-scoped
+    profile_version                 INTEGER NOT NULL DEFAULT 1,
     total_score                    NUMERIC(5,2) NOT NULL,                  -- 0-100
     cpv_company_fit_score              NUMERIC(5,2) NOT NULL,                -- 25% weight
     buyer_affinity_score                  NUMERIC(5,2) NOT NULL,               -- 20% weight
@@ -379,7 +380,10 @@ CREATE TABLE opportunity_scores (
     UNIQUE (process_id, tenant_id)
 );
 
-CREATE INDEX ix_opportunity_scores_tenant ON opportunity_scores (tenant_id, total_score DESC);
+CREATE INDEX IF NOT EXISTS ix_opportunity_scores_tenant
+    ON opportunity_scores (tenant_id, total_score DESC);
+CREATE INDEX IF NOT EXISTS ix_opportunity_scores_tenant_profile
+    ON opportunity_scores (tenant_id, profile_version, total_score DESC);
 
 COMMENT ON TABLE opportunity_scores IS
     'Never rename/expose as "win probability" until reliable participation/outcome labels exist (§27.12).';

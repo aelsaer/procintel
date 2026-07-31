@@ -16,6 +16,7 @@ wired directly into `orchestration/cli.py::_run_once` alongside
 from __future__ import annotations
 
 import os
+import math
 from datetime import date, timedelta
 
 from services.ingestion.connectors.anaptyxi.config import (
@@ -30,6 +31,7 @@ from services.ingestion.connectors.mef.config import MefConnectorConfig
 from services.ingestion.connectors.ted.config import TedConnectorConfig
 from services.ingestion.connectors.ted.scheduled import run_scheduled_window as run_ted_scheduled_window
 from services.ingestion.connectors.vies.config import ViesConnectorConfig
+from services.intelligence.eu_matching import EU_MEMBER_COUNTRIES, countries_for_day
 from services.search_index.config import OpenSearchConfig
 
 from .scheduler import ScheduledJob
@@ -81,7 +83,8 @@ def default_jobs(*, raw_root: str = "./raw") -> tuple[list[ScheduledJob], list[s
     mef_budget = _positive_int_env("DAILY_MEF_MAX_LOOKUPS", 500)
     anaptyxi_budget = _positive_int_env("DAILY_ANAPTYXI_MAX_LOOKUPS_PER_PERIOD", 500)
     vies_budget = _positive_int_env("DAILY_VIES_MAX_LOOKUPS", 500)
-    document_budget = _positive_int_env("DAILY_DOCUMENT_MAX_DOWNLOADS", 100)
+    document_budget = _positive_int_env("DAILY_DOCUMENT_MAX_DOWNLOADS", 10000)
+    adamchain_budget = _positive_int_env("DAILY_ADAMCHAIN_MAX_LOOKUPS", 12000)
 
     # Optional cross-cutting enrichment, not a job of its own — if
     # OPENSEARCH_URL isn't set, ΚΗΜΔΗΣ ingestion just runs without
@@ -143,11 +146,18 @@ def default_jobs(*, raw_root: str = "./raw") -> tuple[list[ScheduledJob], list[s
                     raw_root=raw_root,
                     opensearch_config=opensearch_config,
                     diavgeia_config=diavgeia_config,
+                    diavgeia_search=False,
                     gemi_config=gemi_config,
                     anaptyxi_configs=tuple(anaptyxi_configs),
                     mef_config=mef_config,
                     process_documents=True,
+                    inline_enrichment_providers={
+                        "ALERTS",
+                        "OPENSEARCH",
+                    },
+                    queue_unconfigured_providers=True,
                     provider_lookup_budgets={
+                        "KHMDHS_ADAMCHAIN": adamchain_budget,
                         "DIAVGEIA": diavgeia_budget,
                         "DIAVGEIA_SEARCH": diavgeia_budget,
                         "GEMI": gemi_budget,
@@ -164,24 +174,52 @@ def default_jobs(*, raw_root: str = "./raw") -> tuple[list[ScheduledJob], list[s
     except RuntimeError as exc:
         skip_reasons.append(f"TED job skipped: {exc}")
     else:
-        jobs.append(
-            ScheduledJob(
-                source_system="TED",
-                resource_type="ALL",
-                partition_key="GLOBAL",
-                window_days=30,
-                backfill_start_date=DEFAULT_BACKFILL_START_DATE,
-                min_interval=min_interval,
-                rolling_lookback_days=lookback_days,
-                run_window=lambda conn, date_from, date_to: run_ted_scheduled_window(
-                    conn,
-                    date_from,
-                    date_to,
-                    raw_root=raw_root,
-                    vies_config=vies_config,
-                    vies_lookup_budget=vies_budget,
-                ),
+        configured_countries = tuple(
+            dict.fromkeys(
+                code.strip().upper()
+                for code in os.environ.get(
+                    "TED_BENCHMARK_COUNTRIES",
+                    ",".join(EU_MEMBER_COUNTRIES),
+                ).split(",")
+                if code.strip()
             )
         )
+        country_batch_size = _positive_int_env("TED_COUNTRIES_PER_CYCLE", 5)
+        scheduled_countries = countries_for_day(
+            date.today(),
+            countries=configured_countries,
+            batch_size=min(country_batch_size, len(configured_countries)),
+        )
+        rotating_slots = max(country_batch_size - (1 if "GR" in configured_countries else 0), 1)
+        rotation_days = math.ceil(
+            max(len(configured_countries) - (1 if "GR" in configured_countries else 0), 0)
+            / rotating_slots
+        )
+        ted_lookback_days = _positive_int_env(
+            "TED_DAILY_LOOKBACK_DAYS",
+            max(lookback_days, rotation_days + 2),
+        )
+        for country in scheduled_countries:
+            jobs.append(
+                ScheduledJob(
+                    source_system="TED",
+                    resource_type="ALL",
+                    partition_key=country,
+                    window_days=30,
+                    backfill_start_date=DEFAULT_BACKFILL_START_DATE,
+                    min_interval=min_interval,
+                    rolling_lookback_days=ted_lookback_days,
+                    run_window=lambda conn, date_from, date_to, country=country: run_ted_scheduled_window(
+                        conn,
+                        date_from,
+                        date_to,
+                        country=country,
+                        raw_root=raw_root,
+                        vies_config=vies_config,
+                        vies_lookup_budget=vies_budget,
+                        opensearch_config=opensearch_config,
+                    ),
+                )
+            )
 
     return jobs, skip_reasons

@@ -4,28 +4,18 @@ description.txt §3.1/§16 gives its field-preservation list once, generically
 ("Το ΚΗΜΔΗΣ πρέπει να υποστηριχθεί για όλους τους βασικούς πόρους ... Τα
 πεδία που πρέπει να διατηρούνται αυτούσια περιλαμβάνουν ..."), immediately
 after listing all five endpoints — so it's read here as the common field set
-for request/notice/auction/contract/payment, not contract-specific. What
-*is* a best-effort guess, flagged below, is the handful of extra fallback
-field names added per resource for amounts/dates where the spec doesn't
-spell out resource-specific naming (e.g. a payment likely uses something
-like `paymentAmount`/`paymentDate` rather than the contract's
-`totalCostWithVAT`/`submissionDate`, but the exact name isn't documented).
-Fix those against real sample payloads once available
-(docs/source-contracts/khmdhs.md, Στάδιο 0) — they're isolated to the two
-`_EXTRA_*_KEYS` maps below, not spread through the normalization logic.
+for request/notice/auction/contract/payment, not contract-specific. The
+resource-specific mappings are validated against live request, notice,
+auction, contract and payment payloads. Legacy aliases remain supported so
+older archived records can be replayed through the same normalizer.
 
 Also implements: casing-drift-tolerant field lookup (`contractRelatedAda` /
 `contractRelatedADA`), ΑΦΜ checksum validation (identifier kept either way,
 §7.2), CPV/NUTS list handling, and the two funding-reference fields kept
 separate and unverified (§19.4).
 
-`end_date` (contract duration end, distinct from `submission_date`) is
-another guess in the same spirit — §27.11's renewal-window logic assumes a
-`contract_end_date` exists, but §16's field list names no such field
-explicitly; `contractEndDate`/`endDate`/`contractDurationEndDate` are tried
-as candidates. Feeds `services/alerts/evaluate.py::evaluate_expiring_contracts_and_fire()`
-(§30.5's `contract.expiring`) — that function is real and tested, but has
-nothing to scan until this field name is confirmed against a live payload.
+`end_date` maps the live contract `endDate` field and retains the historical
+`contractEndDate`/`contractDurationEndDate` aliases.
 """
 
 from __future__ import annotations
@@ -48,15 +38,11 @@ _ACT_TYPE_BY_RESOURCE: dict[str, KhmdhsActType] = {
     "payment": "PAYMENT",
 }
 
-# Best-effort additional fallback keys per resource, see module docstring.
 _EXTRA_DATE_KEYS: dict[str, tuple[str, ...]] = {
-    "payment": ("paymentDate",),
-}
-_EXTRA_AMOUNT_NET_KEYS: dict[str, tuple[str, ...]] = {
-    "payment": ("paymentAmountWithoutVAT",),
+    "payment": ("signedDate", "paymentDate"),
 }
 _EXTRA_AMOUNT_GROSS_KEYS: dict[str, tuple[str, ...]] = {
-    "payment": ("paymentAmountWithVAT", "paymentAmount"),
+    "payment": ("contractValue", "paymentAmountWithVAT", "paymentAmount"),
 }
 
 
@@ -160,11 +146,11 @@ def _object_details(raw: dict[str, Any]) -> list[dict[str, Any]]:
 def _cpv_codes(raw: dict[str, Any]) -> list[str]:
     explicit = _as_list(raw.get("cpvItems"))
     if explicit:
-        return explicit
+        return _dedupe(explicit)
     codes: list[str] = []
     for detail in _object_details(raw):
         codes.extend(_as_list(detail.get("cpvs")))
-    return codes
+    return _dedupe(codes)
 
 
 def _nuts_codes(raw: dict[str, Any]) -> list[str]:
@@ -179,7 +165,17 @@ def _first_object_detail(raw: dict[str, Any]) -> dict[str, Any] | None:
     return details[0] if details else None
 
 
+def _object_details_net_total(raw: dict[str, Any]) -> Decimal | None:
+    values = [
+        value
+        for item in _object_details(raw)
+        if (value := _to_decimal(item.get("costWithoutVAT"))) is not None
+    ]
+    return sum(values, Decimal("0")) if values else None
+
+
 def _source_details(raw: dict[str, Any]) -> dict[str, Any]:
+    first_detail = _first_object_detail(raw) or {}
     object_details = []
     for item in _object_details(raw):
         object_details.append({
@@ -208,8 +204,8 @@ def _source_details(raw: dict[str, Any]) -> dict[str, Any]:
         ],
         "duration": raw.get("contractDuration"),
         "duration_unit": _key_value_str(raw.get("contractDurationUnitOfMeasure"), prefer="value"),
-        "city": raw.get("nutsCity"),
-        "postal_code": raw.get("nutsPostalCode"),
+        "city": raw.get("nutsCity") or first_detail.get("city"),
+        "postal_code": raw.get("nutsPostalCode") or first_detail.get("postalCode"),
         "object_details": object_details,
     }
 
@@ -238,7 +234,7 @@ class NormalizedAct(BaseModel):
     submission_date: date | None = None
     publication_date: date | None = None
     submission_deadline: datetime | None = None
-    end_date: date | None = None  # contract duration end — TODO(confirm): no field name given in §16's list
+    end_date: date | None = None
     procedure_type: str | None = None
     amount_net: Decimal | None = None
     vat_amount: Decimal | None = None
@@ -248,6 +244,7 @@ class NormalizedAct(BaseModel):
     nuts_codes: list[str] = []
     buyer: NormalizedParty | None = None
     contractor: NormalizedParty | None = None
+    contractors: list[NormalizedParty] = Field(default_factory=list)
     related_ada: list[str] = []  # decisionRelatedAda / contractRelatedAda(ADA) / cancellationADA
     commitment_no: str | None = None
     aaht_raw: str | None = None
@@ -281,6 +278,30 @@ def _normalize_party(
     )
 
 
+def _contractor_payloads(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return every supplier or consortium member across live and legacy shapes."""
+    candidates: list[dict[str, Any]] = []
+    legacy = raw.get("awardees") or raw.get("contractors")
+    if isinstance(legacy, list):
+        candidates.extend(item for item in legacy if isinstance(item, dict))
+    elif isinstance(legacy, dict):
+        candidates.append(legacy)
+
+    contracting_details = raw.get("contractingDataDetails")
+    if isinstance(contracting_details, dict):
+        members = contracting_details.get("contractingMembersDataList") or []
+        if isinstance(members, list):
+            candidates.extend(item for item in members if isinstance(item, dict))
+
+    # Payment records expose the payee in objectDetails.
+    candidates.extend(
+        detail
+        for detail in _object_details(raw)
+        if detail.get("vatNo") or detail.get("vatNumber") or detail.get("afm")
+    )
+    return candidates
+
+
 def normalize_khmdhs_record(raw: dict[str, Any], *, resource: str) -> NormalizedAct:
     if resource not in _ACT_TYPE_BY_RESOURCE:
         raise ValueError(f"unknown KHMDHS resource: {resource!r}")
@@ -292,43 +313,60 @@ def normalize_khmdhs_record(raw: dict[str, Any], *, resource: str) -> Normalized
     funding_details = raw.get("fundingDetails") if isinstance(raw.get("fundingDetails"), dict) else {}
     first_object_detail = _first_object_detail(raw)
 
-    related_ada = [
+    related_ada = _dedupe([
         str(v).strip().upper()
-        for v in (
+        for value in (
             _first(raw, "decisionRelatedAda", "decisionRelatedADA"),
             _first(raw, "contractRelatedAda", "contractRelatedADA"),
             _first(raw, "approvalADA", "approvalAda"),
             _first(raw, "cancellationADA", "cancellationAda"),
+            _first(raw, "paymentRelatedAda", "paymentRelatedADA"),
+            _first(raw, "diavgeiaADA", "diavgeiaAda"),
         )
+        for v in _as_list(value)
         if v
-    ]
+    ])
 
-    contractor = raw.get("awardees") or raw.get("contractors") or []
-    first_contractor = contractor[0] if isinstance(contractor, list) and contractor else contractor
-    if isinstance(first_contractor, dict):
-        contractor_afm = first_contractor.get("vatNumber") or first_contractor.get("afm")
-        contractor_name = first_contractor.get("name")
-    elif first_object_detail is not None:
-        contractor_afm = first_object_detail.get("vatNo") or first_object_detail.get("vatNumber") or first_object_detail.get("afm")
-        contractor_name = first_object_detail.get("name")
-    else:
-        contractor_afm = None
-        contractor_name = None
-
-    date_value = _first(raw, "submissionDate", *_EXTRA_DATE_KEYS.get(resource, ()))
+    date_value = _first(
+        raw,
+        *(_EXTRA_DATE_KEYS.get(resource, ()) if resource == "payment" else ("submissionDate",)),
+    )
     amount_net = _to_decimal(
         raw.get("totalCostWithoutVAT")
         or raw.get("amountNet")
-        or raw.get("contractValue")
-        or (first_object_detail or {}).get("costWithoutVAT")
-        or _first(raw, *_EXTRA_AMOUNT_NET_KEYS.get(resource, ()))
-    )
+    ) or _object_details_net_total(raw)
+    if amount_net is None and resource != "payment":
+        amount_net = _to_decimal(
+            raw.get("contractValue") or (first_object_detail or {}).get("costWithoutVAT")
+        )
     amount_gross_raw = (
         raw.get("totalCostWithVAT")
         or raw.get("amountGross")
         or raw.get("totalCost")
         or _first(raw, *_EXTRA_AMOUNT_GROSS_KEYS.get(resource, ()))
     )
+    amount_gross = _to_decimal(amount_gross_raw)
+    vat_amount = _to_decimal(raw.get("vatAmount"))
+    if vat_amount is None and amount_net is not None and amount_gross is not None:
+        vat_amount = amount_gross - amount_net
+
+    contractor_parties: list[NormalizedParty] = []
+    seen_contractors: set[tuple[str | None, str | None, str | None]] = set()
+    for payload in _contractor_payloads(raw):
+        party = _normalize_party(
+            payload.get("vatNo") or payload.get("vatNumber") or payload.get("afm"),
+            payload.get("name") or payload.get("companyName"),
+            payload.get("amount") or amount_gross_raw or amount_net,
+            source_native_id=payload.get("id") or payload.get("gemiNumber"),
+        )
+        if party is None:
+            continue
+        identity = (party.afm_normalized, party.source_native_id, party.name)
+        if identity in seen_contractors:
+            continue
+        seen_contractors.add(identity)
+        contractor_parties.append(party)
+    primary_contractor = contractor_parties[0] if contractor_parties else None
 
     return NormalizedAct(
         act_type=act_type,
@@ -336,7 +374,9 @@ def normalize_khmdhs_record(raw: dict[str, Any], *, resource: str) -> Normalized
         adam_normalized=adam_normalized,
         title=raw.get("title"),
         submission_date=_to_date(date_value),
-        publication_date=_to_date(_first(raw, "publishedDate", "signedDate")),
+        publication_date=_to_date(
+            _first(raw, "publishedDate", "contractSignedDate", "signedDate", "startDate")
+        ),
         submission_deadline=_to_datetime(
             _first(raw, "finalSubmissionDate", "offersSubmissionDeadline", "submissionDeadline")
         ),
@@ -345,8 +385,8 @@ def normalize_khmdhs_record(raw: dict[str, Any], *, resource: str) -> Normalized
         or _key_value_str(raw.get("procedureType"), prefer="value")
         or _key_value_str(raw.get("procedureCategory"), prefer="value"),
         amount_net=amount_net,
-        vat_amount=_to_decimal(raw.get("vatAmount")),
-        amount_gross=_to_decimal(amount_gross_raw),
+        vat_amount=vat_amount,
+        amount_gross=amount_gross,
         currency=raw.get("currency") or "EUR",
         cpv_codes=_cpv_codes(raw),
         nuts_codes=_nuts_codes(raw),
@@ -356,7 +396,8 @@ def normalize_khmdhs_record(raw: dict[str, Any], *, resource: str) -> Normalized
             None,
             source_native_id=_key_value(raw.get("organization"), prefer="key"),
         ),
-        contractor=_normalize_party(contractor_afm, contractor_name, amount_gross_raw or amount_net),
+        contractor=primary_contractor,
+        contractors=contractor_parties,
         related_ada=related_ada,
         commitment_no=raw.get("commitmentNo") or raw.get("paymentCommitmentCode"),
         aaht_raw=raw.get("aaht"),

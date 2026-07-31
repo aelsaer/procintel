@@ -14,8 +14,12 @@ alias for `ANAPTYXI_2014_2020_API_BASE_URL` — 2014-2020 was the only period
 built and documented before the other two, and existing deployments/docs
 already reference the unsuffixed name.
 
-`base_url` has no default for any period — same discipline as every other
-connector.
+The two legacy deployments have stable, publicly documented hosts and use
+the project-level ``GetData.ashx`` contract validated by the connector
+tests. They therefore have public defaults. The 2021-2027 portal currently
+publishes aggregate chart endpoints only; it intentionally has no default
+project API URL so the platform cannot present aggregate data as linked
+project detail.
 """
 
 from __future__ import annotations
@@ -32,6 +36,15 @@ _ENV_VAR_BY_PERIOD = {
     "ANAPTYXI_2014_2020": "ANAPTYXI_2014_2020_API_BASE_URL",
     "ANAPTYXI_2021_2027": "ANAPTYXI_2021_2027_API_BASE_URL",
 }
+
+PUBLIC_API_BASE_URL_BY_PERIOD = {
+    "ANAPTYXI_2007_2013": "https://2013.anaptyxi.gov.gr",
+    "ANAPTYXI_2014_2020": "https://anaptyxi.gov.gr",
+}
+
+
+class AnaptyxiUpstreamContractError(RuntimeError):
+    """The official portal exists but has no validated project API."""
 
 
 def _float_env(name: str, default: float) -> float:
@@ -67,13 +80,15 @@ class AnaptyxiConnectorConfig:
         if base_url is None and program_period == DEFAULT_PROGRAM_PERIOD:
             # backward-compatible alias — see module docstring
             base_url = os.environ.get("ANAPTYXI_API_BASE_URL")
+        if base_url is None:
+            base_url = PUBLIC_API_BASE_URL_BY_PERIOD.get(program_period)
 
         if not base_url:
-            raise RuntimeError(
-                f"{env_var} is not set. See docs/source-contracts/anaptyxi.md — confirm the "
-                f"base hostname and endpoint paths for {program_period} against its own live "
-                "Open Data documentation before setting this (each programming period is a "
-                "separate deployment, not a query parameter on one system)."
+            raise AnaptyxiUpstreamContractError(
+                f"{program_period} has no validated public project-level API. "
+                f"Set {env_var} only after validating the GetData.ashx project-detail "
+                "contract; the official 2021-2027 portal currently exposes aggregate "
+                "charts, which are not sufficient for procurement-project linkage."
             )
         return cls(
             base_url=base_url,

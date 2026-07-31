@@ -37,11 +37,62 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from packages.domain.tables import external_datasets
 from packages.source_clients.pg_lock import advisory_unlock, try_advisory_lock
 
-from .cli import _sync_boundaries, _sync_facilities, _sync_metric, _sync_population
+from .cli import (
+    DEFAULT_DATASETS,
+    _sync_boundaries,
+    _sync_facilities,
+    _sync_metric,
+    _sync_population,
+)
 
 _logger = logging.getLogger(__name__)
 
 DEFAULT_REFRESH_INTERVAL = timedelta(days=7)
+
+
+async def onboard_default_ckan_datasets(
+    conn: AsyncConnection,
+    *,
+    database_url: str,
+    raw_root: str = "./raw",
+) -> list[str]:
+    """Onboard maintained national datasets once, with live validation."""
+    existing = set(
+        (
+            await conn.execute(
+                select(external_datasets.c.catalog_dataset_id).where(
+                    external_datasets.c.catalog_dataset_id.in_(
+                        [dataset["dataset_id"] for dataset in DEFAULT_DATASETS]
+                    )
+                )
+            )
+        ).scalars()
+    )
+    onboarded: list[str] = []
+    for dataset in DEFAULT_DATASETS:
+        dataset_id = dataset["dataset_id"]
+        if dataset_id in existing:
+            continue
+        if dataset["adapter"] == "boundaries":
+            await _sync_boundaries(
+                dataset_id,
+                dataset["boundary_type"],
+                database_url,
+                raw_root,
+            )
+        elif dataset["adapter"] == "facilities":
+            await _sync_facilities(
+                dataset_id,
+                dataset["facility_type"],
+                dataset.get("capacity_metric"),
+                dataset.get("capacity_field"),
+                database_url,
+                raw_root,
+            )
+        else:
+            raise ValueError(f"unknown default CKAN adapter {dataset['adapter']!r}")
+        onboarded.append(dataset_id)
+    return onboarded
 
 
 @dataclass(frozen=True)
@@ -66,11 +117,21 @@ async def _dispatch(row: Any, *, database_url: str, raw_root: str) -> None:
         await _sync_boundaries(row.catalog_dataset_id, config["boundary_type"], database_url, raw_root)
     elif row.adapter_name == "metric":
         await _sync_metric(
-            row.catalog_dataset_id, config["metric_name"], config["reference_year"], None, database_url, raw_root
+            row.catalog_dataset_id,
+            config["metric_name"],
+            config["reference_year"],
+            config.get("value_field"),
+            database_url,
+            raw_root,
         )
     elif row.adapter_name == "facilities":
         await _sync_facilities(
-            row.catalog_dataset_id, config["facility_type"], config.get("capacity_metric"), None, database_url, raw_root
+            row.catalog_dataset_id,
+            config["facility_type"],
+            config.get("capacity_metric"),
+            config.get("capacity_field"),
+            database_url,
+            raw_root,
         )
     else:
         raise ValueError(f"unknown external_datasets.adapter_name {row.adapter_name!r}")

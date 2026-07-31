@@ -16,6 +16,7 @@ from dataclasses import dataclass
 class DocumentPipelineConfig:
     max_file_size_bytes: int = 50 * 1024 * 1024  # §23.2 "μέγιστο μέγεθος αρχείου"
     download_timeout_seconds: float = 30.0  # §23.2 "timeout"
+    max_download_attempts: int = 5
     max_page_pixels: int = 40_000_000  # §23.2 decompression-bomb guard for rasterized pages (~6300x6300)
     max_pages: int = 200  # refuses to OCR unbounded page counts from a hostile/corrupt PDF
     ocr_lang: str = "ell+eng"  # Greek primary, English fallback (tesseract multi-lang string)

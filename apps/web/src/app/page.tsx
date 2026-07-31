@@ -28,14 +28,19 @@ import {
   Landmark,
   ListTodo,
   LogOut,
+  Globe2,
   MapPinned,
   MessageSquare,
+  Plus,
   RefreshCw,
   ReceiptText,
+  Route,
   Search,
   Send,
   Sparkles,
   Target,
+  ThumbsDown,
+  ThumbsUp,
   UsersRound,
   X,
 } from "lucide-react";
@@ -44,8 +49,12 @@ import { AlertsWorkspace } from "@/components/alerts-workspace";
 import { ExportsPanel } from "@/components/exports-panel";
 import { RelationshipExplorer } from "@/components/relationship-explorer";
 import { EntityReviewWorkspace } from "@/components/entity-review-workspace";
+import { EuropeanIntelligence } from "@/components/european-intelligence";
 import { MetricMethodologyDrawer } from "@/components/evidence-drawer";
 import { DataCoveragePanel } from "@/components/data-coverage-panel";
+import { OnboardingExperience } from "@/components/onboarding-experience";
+import { FrameworksWorkspace } from "@/components/frameworks-workspace";
+import { SectorProfilePicker } from "@/components/sector-profile-picker";
 import {
   Badge,
   EmptyState,
@@ -58,14 +67,15 @@ import {
   type GeocodedLocationAnalyticsResponse,
   type BusinessProfileResponse,
   type ProfileTermResponse,
-  type MarketMetricIntelligenceResponse,
   type MarketDashboardResponse,
   type OpportunityIntelligenceResponse,
   type PipelineItemResponse,
+  type ProcurementSignalResponse,
   type SavedSearchResponse,
   type MarketOverviewResponse,
   type RegionActivityResponse,
   type RegionAnalyticsResponse,
+  type RelevanceFeedbackResponse,
   type RenewalWatchResponse,
   type RiskIndicatorResponse,
   type SearchResponse,
@@ -79,6 +89,7 @@ import {
   activeKeywords,
   businessScopeFingerprint,
   businessScopeQuery,
+  workspaceFilterQuery,
   type BusinessScope,
 } from "@/lib/business-scope";
 
@@ -92,7 +103,7 @@ const InteractiveGreeceMap = dynamic(
 
 type HealthResponse = { status: string };
 type QueryKind = "ADA" | "ADAM" | "AFM" | "TEXT" | "EMPTY";
-type WorkspaceView = "home" | "opportunities" | "alerts" | "competitors" | "analytics" | "archive";
+type WorkspaceView = "home" | "opportunities" | "alerts" | "competitors" | "frameworks" | "analytics" | "archive";
 type ProfileUpdatePhase = "idle" | "saving" | "scoring" | "ready" | "error";
 
 type BusinessProfile = BusinessScope;
@@ -124,6 +135,8 @@ const DEFAULT_PROFILE: BusinessProfile = {
   keywords: ["προμήθεια"],
   cpvPrefix: "",
   cpvPrefixes: [],
+  excludedCpvPrefixes: [],
+  excludedKeywords: [],
   nutsCode: "",
   municipality: "",
   amountMin: "0",
@@ -134,8 +147,8 @@ const DEFAULT_PROFILE: BusinessProfile = {
 
 const QUICK_PROFILES: BusinessProfile[] = [
   DEFAULT_PROFILE,
-  { keyword: "αποψιλ", keywords: ["αποψιλ"], cpvPrefix: "77312000", cpvPrefixes: ["77312000", "77312100"], nutsCode: "EL3", municipality: "", amountMin: "0", dateFrom: "2026-06-01", dateTo: "2026-06-30", companyAfm: "" },
-  { keyword: "λογισμικ", keywords: ["λογισμικ"], cpvPrefix: "72", cpvPrefixes: ["72", "48"], nutsCode: "", municipality: "", amountMin: "0", dateFrom: "2026-05-01", dateTo: "2026-06-30", companyAfm: "" },
+  { keyword: "αποψιλ", keywords: ["αποψιλ"], cpvPrefix: "77312000", cpvPrefixes: ["77312000", "77312100"], excludedCpvPrefixes: [], excludedKeywords: [], nutsCode: "EL3", municipality: "", amountMin: "0", dateFrom: "2026-06-01", dateTo: "2026-06-30", companyAfm: "" },
+  { keyword: "λογισμικ", keywords: ["λογισμικ"], cpvPrefix: "72", cpvPrefixes: ["72", "48"], excludedCpvPrefixes: [], excludedKeywords: [], nutsCode: "", municipality: "", amountMin: "0", dateFrom: "2026-05-01", dateTo: "2026-06-30", companyAfm: "" },
 ];
 
 const NUTS_REGIONS: MapRegion[] = [
@@ -261,6 +274,8 @@ function loadScopePreferences(): Partial<BusinessProfile> {
 function saveScopePreferences(profile: BusinessProfile) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(SCOPE_PREFERENCES_KEY, JSON.stringify({
+    nutsCode: profile.nutsCode,
+    municipality: profile.municipality,
     dateFrom: profile.dateFrom,
     dateTo: profile.dateTo,
     companyAfm: profile.companyAfm,
@@ -278,7 +293,11 @@ function marketQuery(profile: BusinessProfile, limit?: number): Record<string, s
 }
 
 function competitorsQuery(profile: BusinessProfile): Record<string, string | number> {
-  return { ...businessScopeQuery(profile), limit: 30 };
+  return {
+    ...businessScopeQuery(profile),
+    taxonomy_match: "ANY",
+    limit: 30,
+  };
 }
 
 function regionName(code: string): string {
@@ -299,13 +318,34 @@ function resolveRegionCode(code: string): string {
 
 function WorkspaceScopeBar({
   profile,
+  onApply,
   onEdit,
 }: {
   profile: BusinessProfile;
+  onApply: (scope: Pick<BusinessProfile, "nutsCode" | "municipality" | "dateFrom" | "dateTo">) => void;
   onEdit: () => void;
 }) {
   const cpvPrefixes = activeCpvPrefixes(profile);
   const keywords = activeKeywords(profile);
+  const [draft, setDraft] = useState({
+    nutsCode: profile.nutsCode,
+    municipality: profile.municipality,
+    dateFrom: profile.dateFrom,
+    dateTo: profile.dateTo,
+  });
+  const invalidRange = Boolean(draft.dateFrom && draft.dateTo && draft.dateFrom > draft.dateTo);
+  const changed = (
+    draft.nutsCode !== profile.nutsCode
+    || draft.municipality !== profile.municipality
+    || draft.dateFrom !== profile.dateFrom
+    || draft.dateTo !== profile.dateTo
+  );
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!invalidRange) onApply(draft);
+  }
+
   return (
     <section className="workspace-scope-bar" aria-label="Ενεργό επιχειρηματικό scope">
       <div className="workspace-scope-title">
@@ -317,11 +357,54 @@ function WorkspaceScopeBar({
         {cpvPrefixes.length > 4 && <span>+{cpvPrefixes.length - 4} CPV</span>}
         {keywords.slice(0, 3).map((keyword) => <span key={keyword}>{keyword}</span>)}
         {!cpvPrefixes.length && !keywords.length && <span>Όλες οι κατηγορίες</span>}
-        <span>{regionName(profile.nutsCode)}</span>
-        {profile.municipality && <span>{profile.municipality}</span>}
-        <span>{profile.dateFrom} έως {profile.dateTo}</span>
       </div>
-      <button type="button" onClick={onEdit}>Επεξεργασία</button>
+      <form className="workspace-scope-controls" onSubmit={submit}>
+        <label>
+          <span>Περιοχή</span>
+          <select
+            aria-label="Κοινή περιοχή workspace"
+            value={resolveRegionCode(draft.nutsCode)}
+            onChange={(event) => setDraft({ ...draft, nutsCode: event.target.value, municipality: "" })}
+          >
+            <option value="">Όλη η Ελλάδα</option>
+            {NUTS_REGIONS.map((region) => <option key={region.code} value={region.code}>{region.name}</option>)}
+          </select>
+        </label>
+        <label>
+          <span>Δήμος / νομός</span>
+          <input
+            aria-label="Κοινός δήμος ή νομός workspace"
+            value={draft.municipality}
+            onChange={(event) => setDraft({ ...draft, municipality: event.target.value })}
+            placeholder="Προαιρετικά"
+          />
+        </label>
+        <label>
+          <span>Από</span>
+          <input
+            aria-label="Κοινή ημερομηνία από"
+            type="date"
+            value={draft.dateFrom}
+            onChange={(event) => setDraft({ ...draft, dateFrom: event.target.value })}
+          />
+        </label>
+        <label>
+          <span>Έως</span>
+          <input
+            aria-label="Κοινή ημερομηνία έως"
+            type="date"
+            min={draft.dateFrom || undefined}
+            value={draft.dateTo}
+            onChange={(event) => setDraft({ ...draft, dateTo: event.target.value })}
+          />
+        </label>
+        <button className="button button-primary workspace-scope-apply" type="submit" disabled={!changed || invalidRange}>
+          <CheckCircle2 size={15} aria-hidden="true" />
+          Εφαρμογή
+        </button>
+      </form>
+      <button className="workspace-profile-edit" type="button" onClick={onEdit}>Προφίλ</button>
+      {invalidRange && <p className="workspace-scope-error" role="alert">Η ημερομηνία λήξης πρέπει να είναι μετά την έναρξη.</p>}
     </section>
   );
 }
@@ -427,14 +510,26 @@ function SearchResultCard({ item }: { item: SearchResultItem }) {
   );
 }
 
-function OpportunityCard({ item, saved, onSave }: { item: OpportunityIntelligenceResponse; saved: boolean; onSave: () => void }) {
+function OpportunityCard({
+  item,
+  saved,
+  feedback,
+  onSave,
+  onFeedback,
+}: {
+  item: OpportunityIntelligenceResponse;
+  saved: boolean;
+  feedback?: RelevanceFeedbackResponse["label"];
+  onSave: () => void;
+  onFeedback: (label: RelevanceFeedbackResponse["label"]) => void;
+}) {
   const href = `/processes/${item.process_id}`;
-  const score = Number(item.score ?? 0);
+  const score = item.score === null ? null : Number(item.score);
   const content = (
     <>
-      <div className="opportunity-score" aria-label={`Fit score ${Math.round(score)}`}>
-        <strong>{Math.round(score)}</strong>
-        <span>fit</span>
+      <div className="opportunity-score" aria-label={score === null ? "Αναμονή βαθμολόγησης" : `Fit score ${Math.round(score)}`}>
+        <strong>{score === null ? "—" : Math.round(score)}</strong>
+        <span>{score === null ? "pending" : "fit"}</span>
       </div>
       <div className="opportunity-main">
         <div className="result-badges">
@@ -459,6 +554,8 @@ function OpportunityCard({ item, saved, onSave }: { item: OpportunityIntelligenc
         </div>
       </div>
       <div className="opportunity-actions">
+        <button className={`icon-button ${feedback === "RELEVANT" ? "is-selected" : ""}`} type="button" onClick={() => onFeedback("RELEVANT")} aria-label="Σήμανση ως σχετική" title="Σχετική για την επιχείρηση"><ThumbsUp size={15} fill={feedback === "RELEVANT" ? "currentColor" : "none"} /></button>
+        <button className={`icon-button ${feedback === "IRRELEVANT" ? "is-selected is-danger" : ""}`} type="button" onClick={() => onFeedback("IRRELEVANT")} aria-label="Σήμανση ως άσχετη" title="Άσχετη για την επιχείρηση"><ThumbsDown size={15} fill={feedback === "IRRELEVANT" ? "currentColor" : "none"} /></button>
         <button className="icon-button" type="button" onClick={onSave} disabled={saved} aria-label={saved ? "Αποθηκευμένη ευκαιρία" : "Αποθήκευση στο pipeline"} title={saved ? "Στο pipeline" : "Αποθήκευση στο pipeline"}><Bookmark size={16} fill={saved ? "currentColor" : "none"} /></button>
         {item.official_url && <a className="icon-button" href={item.official_url} target="_blank" rel="noreferrer" aria-label="Άνοιγμα επίσημης εγγραφής" title="Επίσημη εγγραφή"><ExternalLink size={16} /></a>}
         {item.document_url && <a className="icon-button" href={item.document_url} target="_blank" rel="noreferrer" aria-label="Άνοιγμα εγγράφου προκήρυξης" title="Έγγραφο προκήρυξης"><Download size={16} /></a>}
@@ -482,10 +579,11 @@ function Sidebar({
   onRefreshHealth: () => void;
 }) {
   const items: Array<{ id: WorkspaceView; label: string; icon: typeof Home }> = [
-    { id: "home", label: "Προφίλ", icon: Home },
+    { id: "home", label: "Εταιρικό προφίλ", icon: Building2 },
     { id: "opportunities", label: "Ευκαιρίες", icon: BellRing },
     { id: "alerts", label: "Alerts", icon: Bell },
     { id: "competitors", label: "Ανταγωνισμός", icon: UsersRound },
+    { id: "frameworks", label: "Frameworks", icon: Route },
     { id: "analytics", label: "Analytics", icon: BarChart3 },
     { id: "archive", label: "Αρχείο", icon: FileSearch },
   ];
@@ -536,6 +634,7 @@ function ProfileHome({
   classifying,
   feedback,
   savedAt,
+  dirty,
 }: {
   profile: BusinessProfile;
   appliedProfile: BusinessProfile;
@@ -552,8 +651,11 @@ function ProfileHome({
   classifying: boolean;
   feedback: string | null;
   savedAt: string | null;
+  dirty: boolean;
 }) {
   const updating = updatePhase === "saving" || updatePhase === "scoring";
+  const [manualCpv, setManualCpv] = useState("");
+
   function setField(
     key: "nutsCode" | "municipality" | "amountMin" | "dateFrom" | "dateTo" | "companyAfm",
     value: string,
@@ -566,23 +668,52 @@ function ProfileHome({
     const cpvPrefixes = selected
       ? profile.cpvPrefixes.filter((prefix) => prefix !== suggestion.cpvPrefix)
       : [...profile.cpvPrefixes, suggestion.cpvPrefix];
-    const keywords = activeKeywords(profile);
+    const existingKeywords = activeKeywords(profile);
+    const keywords = selected
+      ? existingKeywords.filter((keyword) => keyword !== suggestion.keyword)
+      : Array.from(new Set([...existingKeywords, suggestion.keyword]));
     onProfileChange({
       ...profile,
-      keyword: profile.keyword || suggestion.keyword,
-      keywords: keywords.length ? keywords : [suggestion.keyword],
+      keyword: keywords.join(", "),
+      keywords,
       cpvPrefixes,
       cpvPrefix: cpvPrefixes[0] ?? "",
     });
+  }
+
+  function addManualCpv() {
+    const value = manualCpv.replace(/[^\d]/g, "").slice(0, 8);
+    if (!value) return;
+    const cpvPrefixes = Array.from(new Set([...profile.cpvPrefixes, value]));
+    onProfileChange({
+      ...profile,
+      cpvPrefix: cpvPrefixes[0] ?? "",
+      cpvPrefixes,
+    });
+    setManualCpv("");
+  }
+
+  function removeCpv(prefix: string) {
+    const cpvPrefixes = profile.cpvPrefixes.filter((value) => value !== prefix);
+    onProfileChange({
+      ...profile,
+      cpvPrefix: cpvPrefixes[0] ?? "",
+      cpvPrefixes,
+    });
+  }
+
+  function removeKeyword(keyword: string) {
+    const keywords = activeKeywords(profile).filter((value) => value !== keyword);
+    onProfileChange({ ...profile, keyword: keywords.join(", "), keywords });
   }
 
   return (
     <div className="home-workspace">
       <header className="home-heading">
         <div>
-          <span className="eyebrow">Company radar</span>
-          <h1>Τι θέλεις να παρακολουθεί το Procintel;</h1>
-          <p>Περιέγραψε την επιχείρηση με φυσική γλώσσα. Το προφίλ μετατρέπεται σε CPV, λέξεις-κλειδιά και γεωγραφική στόχευση.</p>
+          <span className="eyebrow">Εταιρικό προφίλ</span>
+          <h1>Δραστηριότητα και μόνιμη στόχευση</h1>
+          <p>Το προφίλ είναι κοινό για Radar, Ανταγωνισμό, Alerts και Analytics. Οι αλλαγές εφαρμόζονται μόνο μετά από ρητή επιβεβαίωση.</p>
         </div>
         <div className="radar-state" aria-label="Κατάσταση ενεργού radar">
           <span className="live-dot" aria-hidden="true" />
@@ -597,13 +728,21 @@ function ProfileHome({
         </div>
       </header>
 
+      <div className="profile-governance-note">
+        <AlertTriangle size={17} aria-hidden="true" />
+        <span><strong>Κεντρική ρύθμιση workspace</strong><small>Επίλεξε όλα τα αντικείμενα που καλύπτει σταθερά η επιχείρηση. Τα προσωρινά λεκτικά αναζήτησης μπαίνουν στο Radar και δεν αλλάζουν το εταιρικό προφίλ.</small></span>
+        <Badge tone={dirty ? "amber" : "green"}>{dirty ? "Μη αποθηκευμένες αλλαγές" : "Αποθηκευμένο"}</Badge>
+      </div>
+
+      <SectorProfilePicker profile={profile} onApply={onProfileChange} />
+
       <section className="radar-builder" aria-labelledby="profile-builder-title">
         <div className="radar-editor">
           <div className="editor-heading">
             <span className="editor-icon" aria-hidden="true"><Sparkles size={18} /></span>
             <div>
               <h2 id="profile-builder-title">Προφίλ δραστηριότητας</h2>
-              <p>Γράψε προϊόντα, υπηρεσίες, κλάδους πελατών και περιοχές κάλυψης.</p>
+              <p>Γράψε προϊόντα και υπηρεσίες. Οι προτάσεις δεν ενεργοποιούνται χωρίς δική σου επιλογή.</p>
             </div>
           </div>
           <label className="profile-description">
@@ -631,6 +770,40 @@ function ProfileHome({
               </button>
             ))}
           </div>
+          <div className="profile-selection-editor">
+            <div>
+              <span className="selection-label">Επιλεγμένες κατηγορίες CPV</span>
+              <div className="profile-token-list" aria-label="Επιλεγμένοι κωδικοί CPV">
+                {profile.cpvPrefixes.map((prefix) => (
+                  <button key={prefix} type="button" onClick={() => removeCpv(prefix)} title={`Αφαίρεση CPV ${prefix}`}>
+                    CPV {prefix}<X size={13} aria-hidden="true" />
+                  </button>
+                ))}
+                {!profile.cpvPrefixes.length && <small>Δεν έχει επιλεγεί CPV.</small>}
+              </div>
+            </div>
+            <div className="manual-cpv-control">
+              <label htmlFor="manual-cpv">Προσθήκη CPV</label>
+              <div>
+                <input
+                  id="manual-cpv"
+                  inputMode="numeric"
+                  value={manualCpv}
+                  onChange={(event) => setManualCpv(event.target.value.replace(/[^\d]/g, "").slice(0, 8))}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      addManualCpv();
+                    }
+                  }}
+                  placeholder="π.χ. 77312000"
+                />
+                <button className="icon-button" type="button" onClick={addManualCpv} disabled={!manualCpv} aria-label="Προσθήκη CPV">
+                  <Plus size={16} aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <aside className="radar-target" aria-label="Στόχευση radar">
@@ -639,7 +812,7 @@ function ProfileHome({
             <Badge tone="green">live preview</Badge>
           </div>
           <label className="target-field">
-            <span>Keyword</span>
+            <span>Αντικείμενα / λέξεις-κλειδιά, χωρισμένα με κόμμα</span>
             <input
               aria-label="Keyword"
               value={profile.keyword}
@@ -653,7 +826,14 @@ function ProfileHome({
           </label>
           <label className="target-field">
             <span>Περιφέρεια</span>
-            <select value={resolveRegionCode(profile.nutsCode)} onChange={(event) => setField("nutsCode", event.target.value)}>
+            <select
+              value={resolveRegionCode(profile.nutsCode)}
+              onChange={(event) => onProfileChange({
+                ...profile,
+                nutsCode: event.target.value,
+                municipality: "",
+              })}
+            >
               <option value="">Όλη η Ελλάδα</option>
               {NUTS_REGIONS.map((region) => <option key={region.code} value={region.code}>{region.name}</option>)}
             </select>
@@ -663,18 +843,26 @@ function ProfileHome({
             <span><strong>{formatCurrency(profile.amountMin)}</strong><small>ελάχιστη αξία</small></span>
           </div>
           {profile.cpvPrefixes.length > 0 && (
-            <div className="active-cpv-list" aria-label="Ενεργοί κωδικοί CPV" tabIndex={0}>
-              {profile.cpvPrefixes.map((prefix) => <span key={prefix}>CPV {prefix}</span>)}
+            <div className="active-cpv-list" aria-label="Ενεργοί κωδικοί CPV">
+              {profile.cpvPrefixes.map((prefix) => (
+                <button key={prefix} type="button" onClick={() => removeCpv(prefix)}>
+                  CPV {prefix}<X size={12} aria-hidden="true" />
+                </button>
+              ))}
             </div>
           )}
           {activeKeywords(profile).length > 0 && (
-            <div className="active-cpv-list active-keyword-list" aria-label="Ενεργές λέξεις κλειδιά" tabIndex={0}>
-              {activeKeywords(profile).map((keyword) => <span key={keyword}>{keyword}</span>)}
+            <div className="active-cpv-list active-keyword-list" aria-label="Ενεργές λέξεις κλειδιά">
+              {activeKeywords(profile).map((keyword) => (
+                <button key={keyword} type="button" onClick={() => removeKeyword(keyword)}>
+                  {keyword}<X size={12} aria-hidden="true" />
+                </button>
+              ))}
             </div>
           )}
-          <button className="button button-primary radar-apply" type="button" onClick={onApply} disabled={updating || classifying}>
+          <button className="button button-primary radar-apply" type="button" onClick={onApply} disabled={updating || classifying || !dirty}>
             <Target size={17} aria-hidden="true" />
-            {updatePhase === "saving" ? "Αποθήκευση προφίλ…" : updatePhase === "scoring" ? "Ενημέρωση radar…" : "Αποθήκευση και ευκαιρίες"}
+            {updatePhase === "saving" ? "Αποθήκευση προφίλ…" : updatePhase === "scoring" ? "Ενημέρωση radar…" : dirty ? "Έλεγχος και εφαρμογή" : "Το προφίλ είναι ενημερωμένο"}
             <ChevronRight size={17} aria-hidden="true" />
           </button>
           {feedback && <small className={`profile-feedback is-${updatePhase}`} role={updatePhase === "error" ? "alert" : "status"}>{feedback}</small>}
@@ -685,16 +873,6 @@ function ProfileHome({
       <details className="advanced-profile">
         <summary><Filter size={16} aria-hidden="true" /> Προηγμένα φίλτρα αγοράς</summary>
         <div className="compact-fields">
-          <label className="field-control">
-            <span>CPV prefix</span>
-            <input
-              value={profile.cpvPrefix}
-              onChange={(event) => {
-                const value = event.target.value.replace(/[^\d]/g, "").slice(0, 8);
-                onProfileChange({ ...profile, cpvPrefix: value, cpvPrefixes: value ? [value] : [] });
-              }}
-            />
-          </label>
           <label className="field-control">
             <span>Ελάχιστο ποσό</span>
             <input inputMode="numeric" value={profile.amountMin} onChange={(event) => setField("amountMin", event.target.value)} />
@@ -714,6 +892,31 @@ function ProfileHome({
           <label className="field-control">
             <span>ΑΦΜ επιχείρησης</span>
             <input inputMode="numeric" maxLength={9} value={profile.companyAfm} onChange={(event) => setField("companyAfm", event.target.value.replace(/\D/g, ""))} placeholder="για head-to-head" />
+          </label>
+          <label className="field-control">
+            <span>Εξαιρούμενες λέξεις</span>
+            <input
+              value={profile.excludedKeywords.join(", ")}
+              onChange={(event) => onProfileChange({
+                ...profile,
+                excludedKeywords: event.target.value.split(",").map((value) => value.trim()).filter(Boolean),
+              })}
+              placeholder="π.χ. hardware, εκτυπωτές"
+            />
+          </label>
+          <label className="field-control">
+            <span>Εξαιρούμενοι CPV</span>
+            <input
+              value={profile.excludedCpvPrefixes.join(", ")}
+              onChange={(event) => onProfileChange({
+                ...profile,
+                excludedCpvPrefixes: event.target.value
+                  .split(",")
+                  .map((value) => value.replace(/\D/g, "").slice(0, 8))
+                  .filter(Boolean),
+              })}
+              placeholder="π.χ. 302, 480"
+            />
           </label>
         </div>
         <div className="profile-presets" aria-label="Έτοιμα προφίλ">
@@ -840,7 +1043,7 @@ function RegionActivityPanel({
       <div className="section-heading compact-heading">
         <div>
           <span className="eyebrow">Δραστηριότητα περιοχής</span>
-          <h2 id="region-activity-title">{selected?.name ?? focusCode} — τι υπάρχει εδώ</h2>
+          <h2 id="region-activity-title">{selected?.name ?? "Όλη η Ελλάδα"} — τι υπάρχει εδώ</h2>
         </div>
         <div className="segmented-control" aria-label="Τύπος πράξης">
           <button type="button" className={actType === "CONTRACT" ? "is-active" : ""} onClick={() => onActTypeChange("CONTRACT")}>Συμβάσεις</button>
@@ -1103,21 +1306,26 @@ export default function IntelligencePage() {
   const [activeView, setActiveView] = useState<WorkspaceView>(initialArchiveQuery ? "archive" : requestedView ?? "home");
   const [archiveInput, setArchiveInput] = useState(initialArchiveQuery);
   const [archiveQuery, setArchiveQuery] = useState(initialArchiveQuery);
+  const [hiddenSavedSearchIds, setHiddenSavedSearchIds] = useState<string[]>([]);
   const [companyDescription, setCompanyDescription] = useState("Αναπτύσσουμε λογισμικό GIS, cloud υπηρεσίες και data platforms για δημόσιους φορείς.");
+  const [appliedDescription, setAppliedDescription] = useState("");
+  const [appliedProfileVersion, setAppliedProfileVersion] = useState(1);
+  const [profileConfirmationOpen, setProfileConfirmationOpen] = useState(false);
   const [descriptionRevision, setDescriptionRevision] = useState(0);
   const [profileSuggestions, setProfileSuggestions] = useState<ProfileSuggestion[]>([]);
   const [profileClassifying, setProfileClassifying] = useState(false);
   const [profileUpdatePhase, setProfileUpdatePhase] = useState<ProfileUpdatePhase>("idle");
   const [profileFeedback, setProfileFeedback] = useState<string | null>(null);
   const [profileSavedAt, setProfileSavedAt] = useState<string | null>(null);
+  const [profileHydrated, setProfileHydrated] = useState(false);
   const [assistantLocations, setAssistantLocations] = useState<GeocodedLocationAnalyticsResponse[]>([]);
   const [assistantBusy, setAssistantBusy] = useState(false);
-  const [opportunityMode, setOpportunityMode] = useState<"radar" | "pipeline">("radar");
+  const [opportunityMode, setOpportunityMode] = useState<"radar" | "signals" | "pipeline">("radar");
   const [opportunitySearchInput, setOpportunitySearchInput] = useState("");
   const [opportunitySearch, setOpportunitySearch] = useState("");
-  const [analyticsMode, setAnalyticsMode] = useState<"market" | "geography" | "relationships" | "sources" | "exports">("geography");
+  const [analyticsMode, setAnalyticsMode] = useState<"market" | "geography" | "europe" | "relationships" | "sources" | "exports">("geography");
   const [archiveMode, setArchiveMode] = useState<"search" | "review">("search");
-  const [mapFocusCode, setMapFocusCode] = useState("EL30");
+  const [mapFocusCode, setMapFocusCode] = useState("");
   const [regionActivityActType, setRegionActivityActType] = useState<"CONTRACT" | "OPPORTUNITY" | "ALL">("CONTRACT");
   const [regionActivityQuery, setRegionActivityQuery] = useState("");
   const [chatInput, setChatInput] = useState("");
@@ -1141,10 +1349,14 @@ export default function IntelligencePage() {
     return query;
   }, [appliedProfile]);
   const activeScopeKey = useMemo(() => businessScopeFingerprint(appliedProfile), [appliedProfile]);
+  const profileDirty = useMemo(
+    () => (
+      businessScopeFingerprint(profileDraft) !== businessScopeFingerprint(appliedProfile)
+      || companyDescription.trim() !== appliedDescription.trim()
+    ),
+    [appliedDescription, appliedProfile, companyDescription, profileDraft],
+  );
   const profileCpvQuery = activeCpvPrefixes(appliedProfile).join(",");
-  const analyticsYear = appliedProfile.dateFrom.slice(0, 4) === appliedProfile.dateTo.slice(0, 4)
-    ? Number(appliedProfile.dateFrom.slice(0, 4))
-    : undefined;
 
   const health = useCustom<HealthResponse>({
     url: "/health",
@@ -1168,22 +1380,12 @@ export default function IntelligencePage() {
     queryOptions: { retry: 1 },
   });
 
-  const marketIntelligence = useCustom<MarketMetricIntelligenceResponse[]>({
-    url: "/v1/intelligence/markets",
-    method: "get",
-    config: { query: {
-      ...(profileCpvQuery ? { cpv_prefixes: profileCpvQuery } : {}),
-      ...(analyticsYear ? { period_year: analyticsYear } : {}),
-      limit: 25,
-    } },
-    queryOptions: { retry: 1, enabled: activeView === "analytics" },
-  });
   const marketDashboard = useCustom<MarketDashboardResponse>({
     url: "/v1/intelligence/market-dashboard",
     method: "get",
     config: { query: {
       ...(profileCpvQuery ? { cpv_prefixes: profileCpvQuery } : {}),
-      ...(analyticsYear ? { period_year: analyticsYear } : {}),
+      ...workspaceFilterQuery(appliedProfile),
     } },
     queryOptions: { retry: 1, enabled: activeView === "analytics" },
   });
@@ -1207,10 +1409,6 @@ export default function IntelligencePage() {
       retry: 1,
     },
   });
-  const overallRegionAnalytics = useCustom<RegionAnalyticsResponse[]>({
-    url: "/v1/analytics/regions", method: "get", queryOptions: { retry: 1, enabled: activeView === "analytics" },
-  });
-
   const locationAnalytics = useCustom<GeocodedLocationAnalyticsResponse[]>({
     url: "/v1/analytics/locations",
     method: "get",
@@ -1219,10 +1417,8 @@ export default function IntelligencePage() {
       retry: 1,
     },
   });
-  const overallLocationAnalytics = useCustom<GeocodedLocationAnalyticsResponse[]>({
-    url: "/v1/analytics/locations", method: "get", config: { query: { limit: 500 } },
-    queryOptions: { retry: 1, enabled: activeView === "analytics" },
-  });
+  const mapScopedRegions = Array.isArray(regionAnalytics.result.data) ? regionAnalytics.result.data : [];
+  const mapScopedLocations = Array.isArray(locationAnalytics.result.data) ? locationAnalytics.result.data : [];
 
   const topSuppliers = useCustom<TopSupplierResponse[]>({
     url: "/v1/analytics/top-suppliers",
@@ -1246,7 +1442,7 @@ export default function IntelligencePage() {
   const renewalWatch = useCustom<RenewalWatchResponse[]>({
     url: "/v1/intelligence/renewals",
     method: "get",
-    config: { query: { active_only: true, limit: 10 } },
+    config: { query: { active_only: true, ...workspaceFilterQuery(appliedProfile), limit: 10 } },
     queryOptions: {
       retry: 1,
       enabled: activeView === "analytics",
@@ -1263,7 +1459,11 @@ export default function IntelligencePage() {
   });
 
   const regionActivityQueryParams = useMemo(() => {
-    const params: Record<string, string | number> = { ...regionalQuery };
+    const params: Record<string, string | number> = {
+      ...regionalQuery,
+    };
+    delete params.nuts_code;
+    delete params.municipality;
     const trimmedQuickFilter = regionActivityQuery.trim();
     if (trimmedQuickFilter) {
       delete params.cpv_prefixes;
@@ -1276,7 +1476,7 @@ export default function IntelligencePage() {
         params.taxonomy_match = "KEYWORD_REQUIRED";
       }
     }
-    params.nuts_code = mapFocusCode;
+    if (mapFocusCode) params.nuts_code = mapFocusCode;
     params.limit = 30;
     if (regionActivityActType === "CONTRACT") params.act_types = "CONTRACT";
     else if (regionActivityActType === "OPPORTUNITY") params.act_types = "REQUEST,APPROVED_REQUEST,NOTICE";
@@ -1296,7 +1496,13 @@ export default function IntelligencePage() {
   const opportunityResults = useCustom<OpportunityIntelligenceResponse[]>({
     url: "/v1/intelligence/opportunities",
     method: "get",
-    config: { query: opportunitySearch ? { q: opportunitySearch } : {} },
+    config: {
+      query: {
+        profile_version: appliedProfileVersion,
+        ...workspaceFilterQuery(appliedProfile),
+        ...(opportunitySearch ? { q: opportunitySearch } : {}),
+      },
+    },
     queryOptions: {
       retry: 1,
       refetchInterval: 15_000,
@@ -1308,11 +1514,29 @@ export default function IntelligencePage() {
     method: "get",
     queryOptions: { retry: 1 },
   });
+  const relevanceFeedbackResults = useCustom<RelevanceFeedbackResponse[]>({
+    url: "/v1/business-profile/relevance-feedback",
+    method: "get",
+    queryOptions: { retry: 1 },
+  });
+  const procurementSignals = useCustom<ProcurementSignalResponse[]>({
+    url: "/v1/intelligence/signals",
+    method: "get",
+    config: { query: { ...workspaceFilterQuery(appliedProfile), limit: 60 } },
+    queryOptions: { retry: 1, enabled: activeView === "opportunities" && opportunityMode === "signals" },
+  });
 
   const archiveResults = useCustom<SearchResponse>({
     url: "/v1/search",
     method: "get",
-    config: { query: { q: archiveQuery, limit: 20, auto_fetch: false } },
+    config: {
+      query: {
+        q: archiveQuery,
+        ...(detectQueryKind(archiveQuery) === "TEXT" ? workspaceFilterQuery(appliedProfile) : {}),
+        limit: 20,
+        auto_fetch: false,
+      },
+    },
     queryOptions: {
       enabled: archiveQuery.trim().length > 0,
       retry: 1,
@@ -1326,11 +1550,8 @@ export default function IntelligencePage() {
   const allOverview = overallMarketOverview.query.isSuccess ? overallMarketOverview.result.data : null;
   const expandedArchive = Boolean(scopedOverview && scopedOverview.act_count === 0 && allOverview?.act_count);
   const overview = scopedOverview;
-  const scopedRegions = Array.isArray(regionAnalytics.result.data) ? regionAnalytics.result.data : [];
-  const allRegions = Array.isArray(overallRegionAnalytics.result.data) ? overallRegionAnalytics.result.data : [];
-  const regions = scopedRegions.length ? scopedRegions : allRegions;
-  const geocodedLocations = Array.isArray(locationAnalytics.result.data) ? locationAnalytics.result.data : [];
-  const allGeocodedLocations = Array.isArray(overallLocationAnalytics.result.data) ? overallLocationAnalytics.result.data : [];
+  const regions = mapScopedRegions;
+  const geocodedLocations = mapScopedLocations;
   const selectedSuppliers = Array.isArray(topSuppliers.result.data) ? topSuppliers.result.data : [];
   const suppliers = selectedSuppliers;
   const supplierScope = "Ενεργό προφίλ";
@@ -1348,26 +1569,21 @@ export default function IntelligencePage() {
   const regionActivityRows = Array.isArray(regionActivity.result.data) ? regionActivity.result.data : [];
   const regionActivityLoading = regionActivity.query.isLoading;
   const regionActivityError = regionActivity.query.isError;
-  const opportunities = Array.isArray(opportunityResults.result.data) ? opportunityResults.result.data : [];
+  const relevanceFeedback = Array.isArray(relevanceFeedbackResults.result.data) ? relevanceFeedbackResults.result.data : [];
+  const relevanceByProcess = new Map(relevanceFeedback.map((item) => [item.process_id, item.label]));
+  const opportunities = (Array.isArray(opportunityResults.result.data) ? opportunityResults.result.data : [])
+    .filter((item) => relevanceByProcess.get(item.process_id) !== "IRRELEVANT");
   const pipeline = Array.isArray(pipelineResults.result.data) ? pipelineResults.result.data : [];
+  const signals = Array.isArray(procurementSignals.result.data) ? procurementSignals.result.data : [];
   const pipelineByProcess = new Map(pipeline.map((item) => [item.process_id, item]));
   const archiveItems = archiveResults.query.isSuccess ? archiveResults.result.data.data : [];
-  const savedSearches = Array.isArray(savedSearchResults.result.data) ? savedSearchResults.result.data : [];
+  const savedSearches = (Array.isArray(savedSearchResults.result.data) ? savedSearchResults.result.data : [])
+    .filter((item) => !hiddenSavedSearchIds.includes(item.id));
   const healthStatus = health.query.isSuccess ? "online" : health.query.isLoading ? "checking" : "offline";
   const tenantName = meQuery.query.isSuccess ? meQuery.result.data.tenant_name : "Procintel workspace";
-  const scopedMarketRows = Array.isArray(marketIntelligence.result.data) ? marketIntelligence.result.data : [];
-  const marketRows = scopedMarketRows;
-  const strongestHhi = marketRows.reduce<MarketMetricIntelligenceResponse | null>((strongest, row) => {
-    if (!strongest) return row;
-    return Number(row.hhi ?? 0) > Number(strongest.hhi ?? 0) ? row : strongest;
-  }, null);
   const scopedDashboard = marketDashboard.query.isSuccess ? marketDashboard.result.data : null;
   const dashboard = scopedDashboard;
-  const mapUsesArchive = !assistantLocations.length && (
-    (!geocodedLocations.length && allGeocodedLocations.length > 0)
-    || (!scopedRegions.length && allRegions.length > 0)
-  );
-  const mapLocations = assistantLocations.length ? assistantLocations : geocodedLocations.length ? geocodedLocations : allGeocodedLocations;
+  const mapLocations = assistantLocations.length ? assistantLocations : geocodedLocations;
 
   useEffect(() => {
     if (descriptionRevision === 0) return;
@@ -1378,27 +1594,7 @@ export default function IntelligencePage() {
       void api.classifyBusinessProfile(description)
         .then((terms) => {
           if (!active) return;
-          const suggestions = suggestionsFromTerms(terms);
-          setProfileSuggestions(suggestions);
-          const primary = suggestions[0];
-          if (primary) {
-            const automaticPrefixes = suggestions
-              .filter((suggestion) => Number(suggestion.confidence ?? 0) >= 0.8)
-              .map((suggestion) => suggestion.cpvPrefix);
-            const automaticKeywords = Array.from(new Set(
-              terms
-                .filter((term) => term.term_type === "KEYWORD" && term.is_active)
-                .map((term) => term.value.trim())
-                .filter(Boolean),
-            ));
-            setProfileDraft((current) => ({
-              ...current,
-              cpvPrefix: automaticPrefixes[0] ?? primary.cpvPrefix,
-              cpvPrefixes: automaticPrefixes.length ? automaticPrefixes : [primary.cpvPrefix],
-              keyword: automaticKeywords.join(", ") || primary.keyword,
-              keywords: automaticKeywords.length ? automaticKeywords : [primary.keyword],
-            }));
-          }
+          setProfileSuggestions(suggestionsFromTerms(terms));
         })
         .catch(() => {
           if (active) setProfileSuggestions([]);
@@ -1414,6 +1610,10 @@ export default function IntelligencePage() {
   }, [companyDescription, descriptionRevision]);
 
   useEffect(() => {
+    if (persistedProfile.query.isError) {
+      queueMicrotask(() => setProfileHydrated(true));
+      return;
+    }
     if (!persistedProfile.query.isSuccess) return;
     const saved = persistedProfile.result.data;
     const preferences = loadScopePreferences();
@@ -1423,8 +1623,10 @@ export default function IntelligencePage() {
       keywords: saved.keywords,
       cpvPrefix: saved.cpv_prefixes[0] ?? "",
       cpvPrefixes: saved.cpv_prefixes,
-      nutsCode: saved.nuts_codes[0] ?? "",
-      municipality: saved.municipality ?? "",
+      excludedCpvPrefixes: saved.excluded_cpv_prefixes,
+      excludedKeywords: saved.excluded_keywords,
+      nutsCode: typeof preferences.nutsCode === "string" ? preferences.nutsCode : saved.nuts_codes[0] ?? "",
+      municipality: typeof preferences.municipality === "string" ? preferences.municipality : saved.municipality ?? "",
       amountMin: saved.amount_min === null ? "0" : String(saved.amount_min),
       dateFrom: typeof preferences.dateFrom === "string" ? preferences.dateFrom : DEFAULT_PROFILE.dateFrom,
       dateTo: typeof preferences.dateTo === "string" ? preferences.dateTo : DEFAULT_PROFILE.dateTo,
@@ -1434,28 +1636,56 @@ export default function IntelligencePage() {
     queueMicrotask(() => {
       if (!active) return;
       setCompanyDescription(saved.description);
+      setAppliedDescription(saved.description);
       setProfileDraft(next);
       setAppliedProfile(next);
+      setAppliedProfileVersion(saved.classification_version);
       setProfileSavedAt(saved.updated_at);
       setProfileSuggestions(suggestionsFromProfile(saved));
+      setMapFocusCode(resolveRegionCode(next.nutsCode));
+      setProfileHydrated(true);
     });
     return () => { active = false; };
-  }, [persistedProfile.query.isSuccess, persistedProfile.result.data]);
+  }, [persistedProfile.query.isError, persistedProfile.query.isSuccess, persistedProfile.result.data]);
 
   function changeCompanyDescription(value: string) {
     setCompanyDescription(value);
     setDescriptionRevision((revision) => revision + 1);
     setProfileSuggestions([]);
     setProfileClassifying(value.trim().length >= 3);
-    setProfileDraft((current) => ({
-      ...current,
-      cpvPrefix: "",
-      cpvPrefixes: [],
-      keyword: "",
-      keywords: [],
-    }));
     setProfileUpdatePhase("idle");
     setProfileFeedback(null);
+  }
+
+  function changeProfileDraft(next: BusinessProfile) {
+    setProfileDraft(next);
+    setProfileUpdatePhase("idle");
+    setProfileFeedback(null);
+  }
+
+  function applyWorkspaceScope(
+    scope: Pick<BusinessProfile, "nutsCode" | "municipality" | "dateFrom" | "dateTo">,
+  ) {
+    const normalizedScope = {
+      ...scope,
+      nutsCode: resolveRegionCode(scope.nutsCode),
+      municipality: scope.municipality.trim(),
+    };
+    const nextProfile = { ...appliedProfile, ...normalizedScope };
+    setAppliedProfile(nextProfile);
+    setProfileDraft((current) => ({ ...current, ...normalizedScope }));
+    setMapFocusCode(normalizedScope.nutsCode);
+    setAssistantLocations([]);
+    saveScopePreferences(nextProfile);
+  }
+
+  function applyMapFocus(code: string) {
+    applyWorkspaceScope({
+      nutsCode: code,
+      municipality: "",
+      dateFrom: appliedProfile.dateFrom,
+      dateTo: appliedProfile.dateTo,
+    });
   }
 
   async function waitForOpportunityScoring(profileUpdatedAt: string) {
@@ -1475,8 +1705,8 @@ export default function IntelligencePage() {
   }
 
   async function applyProfile() {
-    const inferredRegion = inferRegionCode(companyDescription);
-    const nextRegion = resolveRegionCode(profileDraft.nutsCode || inferredRegion);
+    setProfileConfirmationOpen(false);
+    const nextRegion = resolveRegionCode(profileDraft.nutsCode);
     setProfileUpdatePhase("saving");
     setProfileFeedback("Αποθηκεύεται το νέο εταιρικό προφίλ…");
     try {
@@ -1487,6 +1717,8 @@ export default function IntelligencePage() {
           ? profileDraft.cpvPrefixes
           : profileDraft.cpvPrefix ? [profileDraft.cpvPrefix] : [],
         keywords: activeKeywords(profileDraft),
+        excluded_cpv_prefixes: profileDraft.excludedCpvPrefixes,
+        excluded_keywords: profileDraft.excludedKeywords,
         nuts_codes: nextRegion ? [nextRegion] : [],
         municipality: profileDraft.municipality || null,
         buyer_types: [], procedure_types: [],
@@ -1500,10 +1732,15 @@ export default function IntelligencePage() {
         cpvPrefixes: saved.cpv_prefixes,
         keyword: saved.keywords.join(", "),
         keywords: saved.keywords,
+        excludedCpvPrefixes: saved.excluded_cpv_prefixes,
+        excludedKeywords: saved.excluded_keywords,
         nutsCode: saved.nuts_codes[0] ?? nextRegion,
+        municipality: saved.municipality ?? "",
       };
       setProfileDraft(nextProfile);
       setAppliedProfile(nextProfile);
+      setAppliedDescription(saved.description);
+      setAppliedProfileVersion(saved.classification_version);
       saveScopePreferences(nextProfile);
       setProfileSavedAt(saved.updated_at);
       setProfileSuggestions(suggestionsFromProfile(saved));
@@ -1512,10 +1749,11 @@ export default function IntelligencePage() {
       setProfileFeedback("Το προφίλ αποθηκεύτηκε. Επαναϋπολογίζονται οι ταιριαστές ευκαιρίες…");
       await waitForOpportunityScoring(saved.updated_at);
       const [refreshedOpportunities] = await Promise.all([
-        opportunityResults.query.refetch(),
+        api.getScoredOpportunities(undefined, opportunitySearch, saved.classification_version, nextProfile),
         pipelineResults.query.refetch(),
+        relevanceFeedbackResults.query.refetch(),
       ]);
-      const matchCount = refreshedOpportunities.data?.data.length ?? 0;
+      const matchCount = refreshedOpportunities.length;
       setProfileUpdatePhase("ready");
       setProfileFeedback(`Το radar ενημερώθηκε με ${matchCount} ταιριαστές ευκαιρίες για το νέο προφίλ.`);
       setActiveView("opportunities");
@@ -1555,6 +1793,16 @@ export default function IntelligencePage() {
     await savedSearchResults.query.refetch();
   }
 
+  async function deleteArchiveSearch(id: string) {
+    setHiddenSavedSearchIds((current) => current.includes(id) ? current : [...current, id]);
+    try {
+      await api.deleteSavedSearch(id);
+      await savedSearchResults.query.refetch();
+    } catch {
+      setHiddenSavedSearchIds((current) => current.filter((item) => item !== id));
+    }
+  }
+
   async function onChatSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const question = chatInput.trim();
@@ -1577,7 +1825,14 @@ export default function IntelligencePage() {
       } else {
         setAssistantLocations([]);
       }
-      if (region) setMapFocusCode(region);
+      if (region) {
+        applyWorkspaceScope({
+          nutsCode: region,
+          municipality: "",
+          dateFrom: appliedProfile.dateFrom,
+          dateTo: appliedProfile.dateTo,
+        });
+      }
     } catch {
       setChatMessages((current) => [...current, { id: Date.now() + 1, role: "system", text: "Δεν μπόρεσα να εκτελέσω την ανάλυση. Τα υπάρχοντα market panels παραμένουν διαθέσιμα." }]);
     } finally {
@@ -1589,6 +1844,17 @@ export default function IntelligencePage() {
     if (pipelineByProcess.has(item.process_id)) return;
     await api.saveToPipeline(item.process_id);
     await pipelineResults.query.refetch();
+  }
+
+  async function setOpportunityFeedback(
+    item: OpportunityIntelligenceResponse,
+    label: RelevanceFeedbackResponse["label"],
+  ) {
+    await api.setRelevanceFeedback(item.process_id, label);
+    await relevanceFeedbackResults.query.refetch();
+    if (label === "RELEVANT") {
+      await opportunityResults.query.refetch();
+    }
   }
 
   async function changePipelineStage(item: PipelineItemResponse, stage: string) {
@@ -1617,14 +1883,15 @@ export default function IntelligencePage() {
       <a href="#workspace-content" className="skip-link">
         Μετάβαση στο περιεχόμενο
       </a>
+      <OnboardingExperience onFinished={() => window.location.reload()} />
       <Sidebar active={activeView} onChange={setActiveView} healthStatus={healthStatus} onRefreshHealth={() => health.query.refetch()} />
 
       <main id="workspace-content" className="workspace-content">
         <header className="workspace-topbar">
-          <div className="workspace-account">
+          <Link className="workspace-account" href="/settings" title="Ρυθμίσεις workspace">
             <span className="account-mark" aria-hidden="true">DI</span>
             <div><strong>{tenantName}</strong><small>{meQuery.query.isSuccess ? `${meQuery.result.data.plan} · ${meQuery.result.data.role}` : "Public sector workspace"}</small></div>
-          </div>
+          </Link>
           <button className="global-lookup" type="button" onClick={openArchiveLookup}>
             <Search size={16} aria-hidden="true" />
             <span>Αναζήτηση ΑΔΑ, ΑΔΑΜ, ΑΦΜ…</span>
@@ -1641,11 +1908,18 @@ export default function IntelligencePage() {
           )}
         </header>
 
-        {!["home", "archive"].includes(activeView) && (
-          <WorkspaceScopeBar profile={appliedProfile} onEdit={() => setActiveView("home")} />
+        {!profileHydrated && <LoadingState label="Φόρτωση εταιρικού προφίλ" />}
+
+        {profileHydrated && activeView !== "home" && (
+          <WorkspaceScopeBar
+            key={`scope:${activeScopeKey}`}
+            profile={appliedProfile}
+            onApply={applyWorkspaceScope}
+            onEdit={() => setActiveView("home")}
+          />
         )}
 
-        {activeView === "home" && (
+        {profileHydrated && activeView === "home" && (
           <ProfileHome
             profile={profileDraft}
             appliedProfile={appliedProfile}
@@ -1655,24 +1929,52 @@ export default function IntelligencePage() {
             expandedArchive={expandedArchive}
             opportunities={opportunities}
             onDescriptionChange={changeCompanyDescription}
-            onProfileChange={setProfileDraft}
-            onApply={applyProfile}
+            onProfileChange={changeProfileDraft}
+            onApply={() => setProfileConfirmationOpen(true)}
             onOpenSources={() => { setActiveView("analytics"); setAnalyticsMode("sources"); }}
             updatePhase={profileUpdatePhase}
             classifying={profileClassifying}
             feedback={profileFeedback}
             savedAt={profileSavedAt}
+            dirty={profileDirty}
           />
         )}
 
-        {activeView === "opportunities" && (
+        {profileConfirmationOpen && (
+          <div className="profile-confirmation-backdrop" role="presentation">
+            <section className="profile-confirmation" role="dialog" aria-modal="true" aria-labelledby="profile-confirmation-title">
+              <header>
+                <span className="editor-icon" aria-hidden="true"><Target size={18} /></span>
+                <div>
+                  <span className="eyebrow">Εφαρμογή σε όλο το workspace</span>
+                  <h2 id="profile-confirmation-title">Επιβεβαίωση εταιρικού προφίλ</h2>
+                </div>
+              </header>
+              <p>Η αλλαγή θα επαναϋπολογίσει Ευκαιρίες, Ανταγωνισμό, Alerts και Analytics. Τα αποθηκευμένα pipeline items δεν διαγράφονται.</p>
+              <div className="profile-confirmation-scope">
+                <div><span>CPV</span><strong>{activeCpvPrefixes(profileDraft).join(", ") || "Χωρίς περιορισμό"}</strong></div>
+                <div><span>Αντικείμενα</span><strong>{activeKeywords(profileDraft).join(", ") || "Χωρίς περιορισμό"}</strong></div>
+                <div><span>Γεωγραφία</span><strong>{profileDraft.municipality || regionName(profileDraft.nutsCode)}</strong></div>
+              </div>
+              <footer>
+                <button className="button button-secondary" type="button" onClick={() => setProfileConfirmationOpen(false)}>Ακύρωση</button>
+                <button className="button button-primary" type="button" onClick={() => void applyProfile()}>
+                  <CheckCircle2 size={16} aria-hidden="true" />
+                  Επιβεβαίωση και επαναϋπολογισμός
+                </button>
+              </footer>
+            </section>
+          </div>
+        )}
+
+        {profileHydrated && activeView === "opportunities" && (
           <div className="view-stack">
             <div className="view-heading">
               <div>
                 <span className="eyebrow">Ευκαιρίες</span>
                 <h1>Ευκαιρίες radar</h1>
               </div>
-              <div className="view-heading-actions"><div className="segmented-control" aria-label="Προβολή ευκαιριών"><button type="button" className={opportunityMode === "radar" ? "is-active" : ""} onClick={() => setOpportunityMode("radar")}><Target size={15} />Radar</button><button type="button" className={opportunityMode === "pipeline" ? "is-active" : ""} onClick={() => setOpportunityMode("pipeline")}><ListTodo size={15} />Pipeline</button></div><button className="icon-button" type="button" onClick={() => opportunityResults.query.refetch()} aria-label="Ανανέωση ευκαιριών"><RefreshCw size={17} aria-hidden="true" /></button></div>
+              <div className="view-heading-actions"><div className="segmented-control" aria-label="Προβολή ευκαιριών"><button type="button" className={opportunityMode === "radar" ? "is-active" : ""} onClick={() => setOpportunityMode("radar")}><Target size={15} />Radar</button><button type="button" className={opportunityMode === "signals" ? "is-active" : ""} onClick={() => setOpportunityMode("signals")}><Activity size={15} />Πρώιμα σήματα</button><button type="button" className={opportunityMode === "pipeline" ? "is-active" : ""} onClick={() => setOpportunityMode("pipeline")}><ListTodo size={15} />Pipeline</button></div><button className="icon-button" type="button" onClick={() => opportunityMode === "signals" ? procurementSignals.query.refetch() : opportunityResults.query.refetch()} aria-label="Ανανέωση ευκαιριών"><RefreshCw size={17} aria-hidden="true" /></button></div>
             </div>
             {profileFeedback && profileUpdatePhase !== "idle" && <div className={`profile-update-notice is-${profileUpdatePhase}`} role={profileUpdatePhase === "error" ? "alert" : "status"}>{profileUpdatePhase === "ready" ? <CheckCircle2 size={16} /> : <RefreshCw size={16} className={profileUpdatePhase === "scoring" ? "is-spinning" : ""} />}<span>{profileFeedback}</span>{profileUpdatePhase === "ready" && <button type="button" onClick={() => setActiveView("home")}>Προβολή προφίλ</button>}</div>}
             {opportunityMode === "radar" && (
@@ -1697,15 +1999,44 @@ export default function IntelligencePage() {
                 </button>
               </form>
             )}
-            {opportunityMode === "radar" && opportunityResults.query.isError && <ErrorState error={opportunityResults.query.error} title="Δεν είναι διαθέσιμες οι ευκαιρίες" />}
-            {opportunityMode === "radar" && opportunityResults.query.isLoading && <LoadingState label="Ανάγνωση ευκαιριών" />}
-            {opportunityMode === "radar" && !opportunityResults.query.isLoading && !opportunities.length && (
+            {opportunityMode === "radar" && opportunityResults.query.isError && profileUpdatePhase !== "scoring" && <ErrorState error={opportunityResults.query.error} title="Δεν είναι διαθέσιμες οι ευκαιρίες" />}
+            {opportunityMode === "radar" && (opportunityResults.query.isLoading || profileUpdatePhase === "saving" || profileUpdatePhase === "scoring") && <LoadingState label="Επαναϋπολογισμός ευκαιριών για το ενεργό προφίλ" />}
+            {opportunityMode === "radar" && !opportunityResults.query.isLoading && !["saving", "scoring"].includes(profileUpdatePhase) && !opportunities.length && (
               <EmptyState title="Δεν υπάρχουν ακόμα ευκαιρίες για το προφίλ" detail={<IconLabel icon={Database}>Άλλαξε CPV/περιοχή ή επέκτεινε το διαθέσιμο dataset μήνα.</IconLabel>} />
             )}
-            {opportunityMode === "radar" && opportunities.length > 0 && (
+            {opportunityMode === "radar" && !["saving", "scoring"].includes(profileUpdatePhase) && opportunities.length > 0 && (
               <div className="opportunity-list compact-list-panel">
                 {opportunities.slice(0, 8).map((item) => (
-                  <OpportunityCard key={item.process_id} item={item} saved={pipelineByProcess.has(item.process_id)} onSave={() => void saveOpportunity(item)} />
+                  <OpportunityCard
+                    key={item.process_id}
+                    item={item}
+                    saved={pipelineByProcess.has(item.process_id)}
+                    feedback={relevanceByProcess.get(item.process_id)}
+                    onSave={() => void saveOpportunity(item)}
+                    onFeedback={(label) => void setOpportunityFeedback(item, label)}
+                  />
+                ))}
+              </div>
+            )}
+            {opportunityMode === "signals" && procurementSignals.query.isLoading && <LoadingState label="Ανάγνωση πρώιμων σημάτων" />}
+            {opportunityMode === "signals" && procurementSignals.query.isError && <ErrorState error={procurementSignals.query.error} title="Δεν είναι διαθέσιμα τα πρώιμα σήματα" />}
+            {opportunityMode === "signals" && !procurementSignals.query.isLoading && !signals.length && <EmptyState title="Δεν υπάρχουν πρώιμα σήματα για το ενεργό προφίλ" detail="Τα αιτήματα, οι εγκρίσεις και οι λήξεις συμβάσεων ενημερώνονται στον καθημερινό κύκλο." />}
+            {opportunityMode === "signals" && signals.length > 0 && (
+              <div className="signal-list">
+                {signals.map((signal) => (
+                  <article className="signal-row" key={signal.id}>
+                    <div className="signal-confidence"><strong>{Math.round(signal.confidence * 100)}</strong><small>confidence</small></div>
+                    <div>
+                      <div className="result-badges"><Badge tone="amber">{signal.signal_type.replaceAll("_", " ")}</Badge>{signal.cpv_codes.slice(0, 2).map((code) => <Badge key={code} tone="blue">CPV {code}</Badge>)}</div>
+                      <h3>{signal.title}</h3>
+                      <p>{signal.buyer_name ?? "Άγνωστος φορέας"} · εκτίμηση {formatCurrency(signal.estimated_value)}</p>
+                      <small>Αναμενόμενη ενέργεια: {formatDate(signal.expected_notice_date)}{signal.source_identifier ? ` · ${signal.source_identifier}` : ""}</small>
+                    </div>
+                    <div className="signal-actions">
+                      {signal.source_url && <a className="icon-button" href={signal.source_url} target="_blank" rel="noreferrer" title="Επίσημη πηγή" aria-label="Άνοιγμα επίσημης πηγής"><ExternalLink size={16} /></a>}
+                      {signal.process_id && <Link className="icon-button" href={`/processes/${signal.process_id}`} title="Άνοιγμα διαδικασίας" aria-label="Άνοιγμα διαδικασίας"><ArrowUpRight size={17} /></Link>}
+                    </div>
+                  </article>
                 ))}
               </div>
             )}
@@ -1715,11 +2046,11 @@ export default function IntelligencePage() {
           </div>
         )}
 
-        {activeView === "alerts" && <AlertsWorkspace key={activeScopeKey} profile={appliedProfile} />}
+        {profileHydrated && activeView === "alerts" && <AlertsWorkspace profile={appliedProfile} />}
 
-        {activeView === "competitors" && (
+        {profileHydrated && activeView === "competitors" && (
           <CompetitorsWorkspace
-            key={activeScopeKey}
+            key={`competitors:${activeScopeKey}`}
             query={competitionQuery}
             historicalQuery={historicalCompetitionQuery}
             globalQuery={{ limit: 30 }}
@@ -1728,7 +2059,9 @@ export default function IntelligencePage() {
           />
         )}
 
-        {activeView === "analytics" && (
+        {profileHydrated && activeView === "frameworks" && <FrameworksWorkspace key={`frameworks:${activeScopeKey}`} profile={appliedProfile} />}
+
+        {profileHydrated && activeView === "analytics" && (
           <div className="view-stack analytics-view">
             <div className="view-heading">
               <div>
@@ -1738,6 +2071,7 @@ export default function IntelligencePage() {
               <div className="segmented-control analytics-segments" aria-label="Προβολή analytics">
                 <button type="button" className={analyticsMode === "market" ? "is-active" : ""} onClick={() => setAnalyticsMode("market")}><BarChart3 size={14} />Αγορά</button>
                 <button type="button" className={analyticsMode === "geography" ? "is-active" : ""} onClick={() => setAnalyticsMode("geography")}><MapPinned size={14} />Χάρτης</button>
+                <button type="button" className={analyticsMode === "europe" ? "is-active" : ""} onClick={() => setAnalyticsMode("europe")}><Globe2 size={14} />Ευρώπη</button>
                 <button type="button" className={analyticsMode === "relationships" ? "is-active" : ""} onClick={() => setAnalyticsMode("relationships")}><UsersRound size={14} />Σχέσεις</button>
                 <button type="button" className={analyticsMode === "sources" ? "is-active" : ""} onClick={() => setAnalyticsMode("sources")}><Activity size={14} />Πηγές</button>
                 <button type="button" className={analyticsMode === "exports" ? "is-active" : ""} onClick={() => setAnalyticsMode("exports")}><Database size={14} />Exports</button>
@@ -1751,10 +2085,10 @@ export default function IntelligencePage() {
                 <MetricCard label="Ακριβής γεωγραφία" value={formatNumber(overview?.acts_with_precise_geo)} detail={`${formatNumber(overview?.acts_with_geo)} με NUTS ή τόπο`} icon={MapPinned} tone="neutral" />
               </section>
               <section className="market-method-strip" aria-label="Market concentration methodology">
-                <div><span>HHI συγκέντρωσης</span><strong>{strongestHhi?.hhi ? formatNumber(strongestHhi.hhi) : "χωρίς επαρκές δείγμα"}</strong></div>
-                <div><span>Προμηθευτές</span><strong>{formatNumber(strongestHhi?.supplier_count)}</strong></div>
-                <div><span>Διάμεση σύμβαση</span><strong>{formatCurrency(strongestHhi?.median_value)}</strong></div>
-                <p>Υπολογισμός με καταγεγραμμένη καθαρή αξία. Ο δείκτης συγκέντρωσης δεν αποτελεί ένδειξη εύνοιας. <MetricMethodologyDrawer metric="hhi" /></p>
+                <div><span>HHI συγκέντρωσης</span><strong>{dashboard?.concentration.maximum_hhi ? formatNumber(dashboard.concentration.maximum_hhi) : "χωρίς επαρκές δείγμα"}</strong></div>
+                <div><span>Προμηθευτές</span><strong>{formatNumber(dashboard?.concentration.supplier_observations)}</strong></div>
+                <div><span>Διάμεση σύμβαση</span><strong>{formatCurrency(dashboard?.summary.median_contract_value)}</strong></div>
+                <div className="market-method-note">Υπολογισμός με καταγεγραμμένη καθαρή αξία. Ο δείκτης συγκέντρωσης δεν αποτελεί ένδειξη εύνοιας. <MetricMethodologyDrawer metric="hhi" /></div>
               </section>
               <div className="analytics-market-grid">
                 <section className="analytics-card supplier-intelligence" aria-labelledby="supplier-title">
@@ -1783,7 +2117,7 @@ export default function IntelligencePage() {
               </div>
             </>}
             {analyticsMode === "geography" && <>
-              <div className="analytics-command-grid"><GreeceMap focusCode={mapFocusCode} locations={mapLocations} overview={mapUsesArchive ? allOverview : overview} regions={regions} expandedArchive={mapUsesArchive} onFocus={setMapFocusCode} /><AnalyticsCopilot messages={chatMessages} input={chatInput} onInputChange={setChatInput} onSubmit={onChatSubmit} busy={assistantBusy} /></div>
+              <div className="analytics-command-grid"><GreeceMap focusCode={mapFocusCode} locations={mapLocations} overview={overview} regions={regions} expandedArchive={false} onFocus={applyMapFocus} /><AnalyticsCopilot messages={chatMessages} input={chatInput} onInputChange={setChatInput} onSubmit={onChatSubmit} busy={assistantBusy} /></div>
               <RegionActivityPanel
                 focusCode={mapFocusCode}
                 rows={regionActivityRows}
@@ -1795,13 +2129,14 @@ export default function IntelligencePage() {
                 onQuickFilterChange={setRegionActivityQuery}
               />
             </>}
-            {analyticsMode === "relationships" && <RelationshipExplorer key={activeScopeKey} profile={appliedProfile} />}
+            {analyticsMode === "europe" && <EuropeanIntelligence key={`europe:${activeScopeKey}`} profile={appliedProfile} />}
+            {analyticsMode === "relationships" && <RelationshipExplorer key={`relationships:${activeScopeKey}`} profile={appliedProfile} />}
             {analyticsMode === "sources" && <DataCoveragePanel />}
-            {analyticsMode === "exports" && <ExportsPanel key={activeScopeKey} profile={appliedProfile} />}
+            {analyticsMode === "exports" && <ExportsPanel key={`exports:${activeScopeKey}`} profile={appliedProfile} />}
           </div>
         )}
 
-        {activeView === "archive" && (
+        {profileHydrated && activeView === "archive" && (
           <div className="view-stack archive-view">
             <div className="view-heading">
               <div>
@@ -1822,7 +2157,7 @@ export default function IntelligencePage() {
                 Έλεγχος
               </button>
             </form>
-            {savedSearches.length > 0 && <div className="saved-search-strip" aria-label="Αποθηκευμένες αναζητήσεις">{savedSearches.slice(0, 8).map((saved) => <span key={saved.id}><button type="button" onClick={() => runArchiveSearch(String(saved.query.q ?? saved.name))}>{saved.name}</button><button type="button" aria-label={`Διαγραφή ${saved.name}`} onClick={() => void api.deleteSavedSearch(saved.id).then(() => savedSearchResults.query.refetch())}>×</button></span>)}</div>}
+            {savedSearches.length > 0 && <div className="saved-search-strip" aria-label="Αποθηκευμένες αναζητήσεις">{savedSearches.slice(0, 8).map((saved) => <span key={saved.id}><button type="button" onClick={() => runArchiveSearch(String(saved.query.q ?? saved.name))}>{saved.name}</button><button type="button" aria-label={`Διαγραφή ${saved.name}`} onClick={() => void deleteArchiveSearch(saved.id)}>×</button></span>)}</div>}
             <div className="archive-grid">
               <section>
                 {health.query.isError && <ErrorState title="Το API δεν είναι διαθέσιμο" error={health.query.error} />}

@@ -146,10 +146,10 @@ invalidation) once query volume actually requires it. Do this reactively, not
 speculatively — matches the spec's own "Postgres is enough for MVP" stance
 (§10-11).
 
-## 5. Known limitation of this design pass
+## 5. Runtime validation
 
-There is no live PostgreSQL/PostGIS instance in this environment, so the SQL
-in `db/migrations/` and `db/marts/` has been reviewed by hand for consistency
-(FK targets exist, types line up) rather than executed. Running it end-to-end
-against a real database — and fixing anything `psql`/`sqlfluff` catches — is
-the first task of Στάδιο 1 (§44).
+All migrations and marts are executed idempotently against PostgreSQL 16 +
+PostGIS in Docker. Integration tests cover canonical ingestion, identity
+resolution, RLS/audit behavior, marts and product workflows; Playwright
+exercises the desktop and mobile application against the real FastAPI and
+PostgreSQL services.

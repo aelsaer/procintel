@@ -56,10 +56,23 @@ async def test_dispatch_routes_facilities_with_optional_capacity_metric(monkeypa
         id=uuid.uuid4(),
         catalog_dataset_id="sxoleia-2024",
         adapter_name="facilities",
-        config={"facility_type": "SCHOOL", "capacity_metric": "STUDENTS"},
+        config={
+            "facility_type": "SCHOOL",
+            "capacity_metric": "STUDENTS",
+            "capacity_field": "students_total",
+        },
     )
     await _dispatch(row, database_url="postgresql://x", raw_root="./raw")
-    assert calls == [("sxoleia-2024", "SCHOOL", "STUDENTS", None, "postgresql://x", "./raw")]
+    assert calls == [
+        (
+            "sxoleia-2024",
+            "SCHOOL",
+            "STUDENTS",
+            "students_total",
+            "postgresql://x",
+            "./raw",
+        )
+    ]
 
 
 async def test_dispatch_raises_on_unknown_adapter_name():

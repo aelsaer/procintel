@@ -91,8 +91,8 @@ async def test_zero_then_one_then_merge_process_assignment(tmp_path):
             )
             assert process_id_1 is not None
 
-            # 2. ingest the CONTRACT act separately -> zero existing processes for
-            # *it* -> gets its own new process, until its chain links it to the request.
+            # 2. Ingest the CONTRACT independently and simulate a legacy importer
+            # having already grouped it into a separate process.
             await ingest_khmdhs_record(
                 conn,
                 resource="contract",
@@ -105,6 +105,30 @@ async def test_zero_then_one_then_merge_process_assignment(tmp_path):
             await conn.commit()
 
             request_act_id = await get_act_id_by_adam(conn, request_adam)
+            contract_act_id = await get_act_id_by_adam(conn, contract_adam)
+            separate_process_id = uuid.uuid4()
+            await conn.execute(
+                procurement_processes.insert().values(
+                    id=separate_process_id,
+                    public_id=f"proc_{uuid.uuid4().hex[:20]}",
+                    first_observed_at=datetime.now(timezone.utc),
+                )
+            )
+            await conn.execute(
+                process_members.insert().values(
+                    id=uuid.uuid4(),
+                    process_id=separate_process_id,
+                    act_id=contract_act_id,
+                    added_via="MANUAL",
+                )
+            )
+            await conn.execute(
+                procurement_acts.update()
+                .where(procurement_acts.c.id == contract_act_id)
+                .values(process_id=separate_process_id)
+            )
+            await conn.commit()
+
             pre_merge_process = (
                 await conn.execute(
                     select(process_members.c.process_id).where(process_members.c.act_id == request_act_id)
@@ -119,7 +143,6 @@ async def test_zero_then_one_then_merge_process_assignment(tmp_path):
             )
             assert process_id_2 == process_id_1  # request's (earlier) process survives
 
-            contract_act_id = await get_act_id_by_adam(conn, contract_adam)
             link_row = (
                 await conn.execute(
                     select(act_links).where(

@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
 import sqlalchemy as sa
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.auth.jwt_verifier import AuthenticatedUser
-from packages.domain.tables import business_profile_terms, business_profiles, opportunity_score_jobs
+from packages.domain.tables import (
+    business_profile_terms,
+    business_profiles,
+    opportunity_relevance_feedback,
+    opportunity_score_jobs,
+    procurement_processes,
+)
 from services.analytics.profile_classification import CpvCatalogEntry, ClassifiedTerm, classify_business_description
 from services.analytics.scoring_worker import process_scoring_job_by_tenant
 
@@ -26,6 +34,29 @@ router = APIRouter(prefix="/v1/business-profile", tags=["workspace"])
 _WRITE_ROLES = ("OWNER", "ADMIN", "ANALYST", "SALES", "BID_MANAGER")
 _cpv_catalog_cache: tuple[CpvCatalogEntry, ...] = ()
 _cpv_catalog_count = -1
+_scoring_tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
+logger = logging.getLogger(__name__)
+
+
+async def _drain_scoring_jobs(tenant_id: uuid.UUID) -> None:
+    try:
+        await process_scoring_job_by_tenant(tenant_id)
+    except Exception:  # noqa: BLE001 - the durable job row records the failure
+        logger.exception("tenant opportunity scoring failed for %s", tenant_id)
+
+
+def _schedule_scoring(tenant_id: uuid.UUID) -> None:
+    existing = _scoring_tasks.get(tenant_id)
+    if existing is not None and not existing.done():
+        return
+    task = asyncio.create_task(_drain_scoring_jobs(tenant_id))
+    _scoring_tasks[tenant_id] = task
+
+    def remove_finished(finished: asyncio.Task[None]) -> None:
+        if _scoring_tasks.get(tenant_id) is finished:
+            _scoring_tasks.pop(tenant_id, None)
+
+    task.add_done_callback(remove_finished)
 
 
 class ProfileTermResponse(BaseModel):
@@ -45,6 +76,8 @@ class BusinessProfileResponse(BaseModel):
     description: str
     cpv_prefixes: list[str]
     keywords: list[str]
+    excluded_cpv_prefixes: list[str]
+    excluded_keywords: list[str]
     nuts_codes: list[str]
     municipality: str | None = None
     buyer_types: list[str]
@@ -62,6 +95,8 @@ class BusinessProfileUpdate(BaseModel):
     description: str = Field(default="", max_length=10_000)
     cpv_prefixes: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
+    excluded_cpv_prefixes: list[str] = Field(default_factory=list)
+    excluded_keywords: list[str] = Field(default_factory=list)
     nuts_codes: list[str] = Field(default_factory=list)
     municipality: str | None = Field(default=None, max_length=160)
     buyer_types: list[str] = Field(default_factory=list)
@@ -82,6 +117,20 @@ class OpportunityScoringStatusResponse(BaseModel):
 
 class ClassificationRequest(BaseModel):
     description: str = Field(min_length=3, max_length=10_000)
+
+
+class RelevanceFeedbackRequest(BaseModel):
+    process_id: uuid.UUID
+    label: str
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class RelevanceFeedbackResponse(BaseModel):
+    id: str
+    process_id: str
+    label: str
+    reason: str | None = None
+    updated_at: datetime
 
 
 def _term_response(term: ClassifiedTerm) -> ProfileTermResponse:
@@ -143,6 +192,8 @@ async def _serialize(conn: AsyncConnection, profile_id: uuid.UUID) -> BusinessPr
         description=row.description,
         cpv_prefixes=row.cpv_prefixes or [],
         keywords=row.keywords or [],
+        excluded_cpv_prefixes=row.excluded_cpv_prefixes or [],
+        excluded_keywords=row.excluded_keywords or [],
         nuts_codes=row.nuts_codes or [],
         municipality=row.municipality,
         buyer_types=row.buyer_types or [],
@@ -212,14 +263,169 @@ async def get_opportunity_scoring_status(
     )
 
 
+@router.get("/relevance-feedback", response_model=list[RelevanceFeedbackResponse])
+async def list_relevance_feedback(
+    conn: AsyncConnection = Depends(get_tenant_scoped_conn),
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> list[RelevanceFeedbackResponse]:
+    rows = (
+        await conn.execute(
+            sa.select(opportunity_relevance_feedback)
+            .select_from(
+                opportunity_relevance_feedback.join(
+                    business_profiles,
+                    business_profiles.c.tenant_id
+                    == opportunity_relevance_feedback.c.tenant_id,
+                )
+            )
+            .where(
+                opportunity_relevance_feedback.c.tenant_id == tenant_uuid(user),
+                opportunity_relevance_feedback.c.profile_version
+                == business_profiles.c.classification_version,
+            )
+            .order_by(opportunity_relevance_feedback.c.updated_at.desc())
+        )
+    ).all()
+    return [
+        RelevanceFeedbackResponse(
+            id=str(row.id),
+            process_id=str(row.process_id),
+            label=row.label,
+            reason=row.reason,
+            updated_at=row.updated_at,
+        )
+        for row in rows
+    ]
+
+
+@router.put("/relevance-feedback", response_model=RelevanceFeedbackResponse)
+async def set_relevance_feedback(
+    body: RelevanceFeedbackRequest,
+    conn: AsyncConnection = Depends(get_tenant_scoped_conn),
+    user: AuthenticatedUser = Depends(require_role(*_WRITE_ROLES)),
+) -> RelevanceFeedbackResponse:
+    label = body.label.strip().upper()
+    if label not in {"RELEVANT", "IRRELEVANT"}:
+        raise HTTPException(status_code=422, detail="label must be RELEVANT or IRRELEVANT")
+    exists = (
+        await conn.execute(
+            sa.select(procurement_processes.c.id).where(procurement_processes.c.id == body.process_id)
+        )
+    ).scalar_one_or_none()
+    if exists is None:
+        raise HTTPException(status_code=404, detail="procurement process not found")
+
+    tenant_id = tenant_uuid(user)
+    user_id = await ensure_workspace_user(conn, user)
+    profile_version = (
+        await conn.execute(
+            sa.select(business_profiles.c.classification_version).where(
+                business_profiles.c.tenant_id == tenant_id
+            )
+        )
+    ).scalar_one_or_none() or 1
+    now = datetime.now(timezone.utc)
+    feedback_id = uuid.uuid4()
+    row = (
+        await conn.execute(
+            pg_insert(opportunity_relevance_feedback)
+            .values(
+                id=feedback_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                process_id=body.process_id,
+                profile_version=profile_version,
+                label=label,
+                reason=body.reason,
+                updated_at=now,
+            )
+            .on_conflict_do_update(
+                index_elements=[
+                    opportunity_relevance_feedback.c.tenant_id,
+                    opportunity_relevance_feedback.c.process_id,
+                ],
+                set_={
+                    "user_id": user_id,
+                    "profile_version": profile_version,
+                    "label": label,
+                    "reason": body.reason,
+                    "updated_at": now,
+                },
+            )
+            .returning(opportunity_relevance_feedback)
+        )
+    ).one()
+    await conn.execute(
+        pg_insert(opportunity_score_jobs)
+        .values(
+            tenant_id=tenant_id,
+            status="QUEUED",
+            reason="RELEVANCE_FEEDBACK_CHANGED",
+            requested_at=now,
+        )
+        .on_conflict_do_update(
+            index_elements=[opportunity_score_jobs.c.tenant_id],
+            set_={
+                "status": "QUEUED",
+                "reason": "RELEVANCE_FEEDBACK_CHANGED",
+                "requested_at": now,
+                "error": None,
+            },
+        )
+    )
+    await conn.commit()
+    _schedule_scoring(tenant_id)
+    return RelevanceFeedbackResponse(
+        id=str(row.id),
+        process_id=str(row.process_id),
+        label=row.label,
+        reason=row.reason,
+        updated_at=row.updated_at,
+    )
+
+
+@router.delete("/relevance-feedback/{process_id}", status_code=204)
+async def delete_relevance_feedback(
+    process_id: uuid.UUID,
+    conn: AsyncConnection = Depends(get_tenant_scoped_conn),
+    user: AuthenticatedUser = Depends(require_role(*_WRITE_ROLES)),
+) -> None:
+    tenant_id = tenant_uuid(user)
+    await conn.execute(
+        opportunity_relevance_feedback.delete().where(
+            opportunity_relevance_feedback.c.tenant_id == tenant_id,
+            opportunity_relevance_feedback.c.process_id == process_id,
+        )
+    )
+    await conn.execute(
+        pg_insert(opportunity_score_jobs)
+        .values(
+            tenant_id=tenant_id,
+            status="QUEUED",
+            reason="RELEVANCE_FEEDBACK_REMOVED",
+            requested_at=sa.func.now(),
+        )
+        .on_conflict_do_update(
+            index_elements=[opportunity_score_jobs.c.tenant_id],
+            set_={
+                "status": "QUEUED",
+                "reason": "RELEVANCE_FEEDBACK_REMOVED",
+                "requested_at": sa.func.now(),
+                "error": None,
+            },
+        )
+    )
+    await conn.commit()
+    _schedule_scoring(tenant_id)
+
+
 @router.put("", response_model=BusinessProfileResponse)
 async def update_business_profile(
-    body: BusinessProfileUpdate, background_tasks: BackgroundTasks,
+    body: BusinessProfileUpdate,
     conn: AsyncConnection = Depends(get_tenant_scoped_conn),
     user: AuthenticatedUser = Depends(require_role(*_WRITE_ROLES)),
 ) -> BusinessProfileResponse:
     if body.amount_min is not None and body.amount_max is not None and body.amount_min > body.amount_max:
-        from fastapi import HTTPException
         raise HTTPException(status_code=422, detail="amount_min must not exceed amount_max")
 
     tenant_id = tenant_uuid(user)
@@ -241,6 +447,8 @@ async def update_business_profile(
             id=profile_id, tenant_id=tenant_id, created_by=user_id,
             company_name=body.company_name, description=body.description,
             cpv_prefixes=cpv_prefixes, keywords=keywords, nuts_codes=body.nuts_codes,
+            excluded_cpv_prefixes=body.excluded_cpv_prefixes,
+            excluded_keywords=body.excluded_keywords,
             municipality=body.municipality, buyer_types=body.buyer_types,
             procedure_types=body.procedure_types, amount_min=body.amount_min,
             amount_max=body.amount_max, classified_at=now, updated_at=now,
@@ -250,6 +458,8 @@ async def update_business_profile(
             set_={
                 "company_name": body.company_name, "description": body.description,
                 "cpv_prefixes": cpv_prefixes, "keywords": keywords, "nuts_codes": body.nuts_codes,
+                "excluded_cpv_prefixes": body.excluded_cpv_prefixes,
+                "excluded_keywords": body.excluded_keywords,
                 "municipality": body.municipality, "buyer_types": body.buyer_types,
                 "procedure_types": body.procedure_types, "amount_min": body.amount_min,
                 "amount_max": body.amount_max, "classified_at": now, "updated_at": now,
@@ -283,5 +493,5 @@ async def update_business_profile(
     )
     response = await _serialize(conn, actual_profile_id)
     await conn.commit()
-    background_tasks.add_task(process_scoring_job_by_tenant, tenant_id)
+    _schedule_scoring(tenant_id)
     return response

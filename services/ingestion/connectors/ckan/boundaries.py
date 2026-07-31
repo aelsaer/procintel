@@ -2,13 +2,9 @@
 "διοικητικά όρια") — parses a GeoJSON FeatureCollection resource into
 `administrative_boundaries` rows.
 
-Property names below are a best-effort guess — no sample administrative-
-boundaries dataset from data.gov.gr was available at build time; fix here
-once one is confirmed (docs/source-contracts/ckan-datagov.md). GeoJSON is
-assumed as the resource format (data.gov.gr's own announcement lists CSV/
-JSON/XML/XLSX bulk downloads; GeoJSON is standard JSON, the natural choice
-for geospatial data, and needs no Shapefile-parsing dependency) — confirm
-against the live dataset before relying on this.
+The default national municipal-unit layer was live-validated against
+data.gov.gr. It uses ``kalcode``/``lektiko`` properties and EPSG:2100;
+other standard aliases remain supported for operator-onboarded datasets.
 
 Cadastral parcels are explicitly out of scope (§3.7) — this adapter is for
 municipal/regional boundaries, postal codes, and similar area layers only.
@@ -29,6 +25,7 @@ class NormalizedBoundary:
     name: str | None
     nuts_code: str | None
     wkt: str
+    source_srid: int = 4326
 
 
 def _first(properties: dict[str, Any], *keys: str) -> str | None:
@@ -46,6 +43,10 @@ def normalize_boundaries_geojson(geojson_bytes: bytes) -> list[NormalizedBoundar
     parser."""
     document = json.loads(geojson_bytes.decode("utf-8"))
     features = document.get("features", [])
+    crs_name = str(
+        ((document.get("crs") or {}).get("properties") or {}).get("name") or ""
+    )
+    source_srid = 2100 if "2100" in crs_name else 4326
 
     boundaries: list[NormalizedBoundary] = []
     for feature in features:
@@ -60,10 +61,17 @@ def normalize_boundaries_geojson(geojson_bytes: bytes) -> list[NormalizedBoundar
         properties = feature.get("properties") or {}
         boundaries.append(
             NormalizedBoundary(
-                code=_first(properties, "kallikratis_code", "code", "boundary_code"),
-                name=_first(properties, "name", "boundary_name"),
+                code=_first(
+                    properties,
+                    "kalcode",
+                    "kallikratis_code",
+                    "code",
+                    "boundary_code",
+                ),
+                name=_first(properties, "lektiko", "name", "boundary_name"),
                 nuts_code=_first(properties, "nuts_code", "nuts3"),
                 wkt=wkt,
+                source_srid=source_srid,
             )
         )
     return boundaries

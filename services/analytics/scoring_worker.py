@@ -32,11 +32,15 @@ async def process_next_scoring_job(conn: AsyncConnection) -> OpportunityScoreRun
     except Exception as exc:
         await conn.execute(opportunity_score_jobs.update().where(
             opportunity_score_jobs.c.tenant_id == row.tenant_id,
+            opportunity_score_jobs.c.requested_at == row.requested_at,
+            opportunity_score_jobs.c.status == "RUNNING",
         ).values(status="FAILED", finished_at=datetime.now(timezone.utc), error={"message": str(exc)}))
         await conn.commit()
         raise
     await conn.execute(opportunity_score_jobs.update().where(
         opportunity_score_jobs.c.tenant_id == row.tenant_id,
+        opportunity_score_jobs.c.requested_at == row.requested_at,
+        opportunity_score_jobs.c.status == "RUNNING",
     ).values(status="SUCCEEDED", finished_at=datetime.now(timezone.utc), error=None))
     await conn.commit()
     return result
@@ -65,14 +69,22 @@ async def process_scoring_job_for_tenant(
     except Exception as exc:
         await conn.execute(
             opportunity_score_jobs.update()
-            .where(opportunity_score_jobs.c.tenant_id == tenant_id)
+            .where(
+                opportunity_score_jobs.c.tenant_id == tenant_id,
+                opportunity_score_jobs.c.requested_at == row.requested_at,
+                opportunity_score_jobs.c.status == "RUNNING",
+            )
             .values(status="FAILED", finished_at=datetime.now(timezone.utc), error={"message": str(exc)})
         )
         await conn.commit()
         raise
     await conn.execute(
         opportunity_score_jobs.update()
-        .where(opportunity_score_jobs.c.tenant_id == tenant_id)
+        .where(
+            opportunity_score_jobs.c.tenant_id == tenant_id,
+            opportunity_score_jobs.c.requested_at == row.requested_at,
+            opportunity_score_jobs.c.status == "RUNNING",
+        )
         .values(status="SUCCEEDED", finished_at=datetime.now(timezone.utc), error=None)
     )
     await conn.commit()
@@ -86,6 +98,7 @@ async def process_scoring_job_by_tenant(tenant_id: uuid.UUID) -> None:
     engine = create_async_engine(database_url)
     try:
         async with engine.connect() as conn:
-            await process_scoring_job_for_tenant(conn, tenant_id)
+            while await process_scoring_job_for_tenant(conn, tenant_id) is not None:
+                pass
     finally:
         await engine.dispose()

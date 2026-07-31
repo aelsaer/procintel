@@ -1,21 +1,4 @@
-"""OIDC resource-server configuration — description.txt §40.1's "OIDC
-authentication".
-
-No specific IdP (Keycloak/Auth0/Okta/...) is chosen or assumed — this is a
-generic, standards-compliant OIDC *resource server*: it verifies bearer
-JWTs against whatever issuer's JWKS endpoint `OIDC_ISSUER_URL` points at,
-the same way any RFC 7519/8414-compliant relying party would. Picking a
-specific IdP product is a real infrastructure decision (self-hosted
-Keycloak via `infra/docker/`? a managed provider?) that hasn't been made —
-this module works with any of them unchanged.
-
-`role_claim`/`tenant_claim` are configurable rather than hardcoded because
-where an IdP puts app-specific claims varies by provider (some require a
-URL-namespaced custom claim, e.g. `https://procintel.example/tenant_id`) —
-confirm the real shape against whichever IdP is chosen, same
-"confirm against the live system" posture as every ingestion connector's
-`*_API_BASE_URL`.
-"""
+"""OIDC resource-server configuration for FastAPI."""
 
 from __future__ import annotations
 
@@ -30,9 +13,11 @@ DEFAULT_ROLE = "VIEWER"  # least privilege if the token carries no role claim
 class OidcConfig:
     issuer: str
     audience: str
-    jwks_url: str
+    jwks_url: str | None = None
     role_claim: str = "role"
     tenant_claim: str = "tenant_id"
+    mfa_claim: str = "amr"
+    require_mfa_roles: tuple[str, ...] = ("OWNER", "ADMIN")
     leeway_seconds: int = 30
 
     @classmethod
@@ -44,11 +29,18 @@ class OidcConfig:
                 "OIDC_ISSUER_URL and OIDC_AUDIENCE must both be set — no default IdP is "
                 "assumed. See packages/auth/README.md."
             )
-        jwks_url = os.environ.get("OIDC_JWKS_URL", issuer.rstrip("/") + "/.well-known/jwks.json")
         return cls(
             issuer=issuer,
             audience=audience,
-            jwks_url=jwks_url,
+            # When omitted, JwtVerifier follows the provider's standard
+            # discovery document and reads `jwks_uri` from there.
+            jwks_url=os.environ.get("OIDC_JWKS_URL") or None,
             role_claim=os.environ.get("OIDC_ROLE_CLAIM", "role"),
             tenant_claim=os.environ.get("OIDC_TENANT_CLAIM", "tenant_id"),
+            mfa_claim=os.environ.get("OIDC_MFA_CLAIM", "amr"),
+            require_mfa_roles=tuple(
+                role.strip().upper()
+                for role in os.environ.get("OIDC_REQUIRE_MFA_ROLES", "OWNER,ADMIN").split(",")
+                if role.strip()
+            ),
         )

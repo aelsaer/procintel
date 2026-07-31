@@ -1,14 +1,15 @@
 """Risk/anomaly indicators (spec §28) against a real Postgres instance.
 
-Only exercises the indicators that read base tables directly
+Fixture assertions exercise the indicators that read base tables directly
 (`high_buyer_concentration`, `repeat_same_contractor`,
-`company_inactive_in_later_snapshot`) — the other four
+`company_inactive_in_later_snapshot`). Mart-backed indicators
 (`few_distinct_suppliers`, `repeated_modifications`, `large_value_increase`,
 `unusual_award_to_contract_delay`) depend on materialized views that need a
 full `refresh_all_marts` pass to reflect newly inserted fixture rows, which
 this codebase's other mart-dependent endpoints (e.g. `/v1/intelligence/
-market-dashboard`) also don't have a dedicated fixture-driven integration
-test for — consistent depth, not a gap introduced here.
+market-dashboard`) exercise against the migrated database. The remaining
+five base-table indicators and the all-twelve aggregator are covered by
+their focused query/response tests.
 """
 
 import os
@@ -29,6 +30,7 @@ from packages.domain.tables import (
 )
 from services.analytics.risk_indicators import (
     company_inactive_in_later_snapshot,
+    compute_risk_indicators,
     high_buyer_concentration,
     repeat_same_contractor,
 )
@@ -40,6 +42,18 @@ pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="DATABASE_URL is not se
 def _async_url() -> str:
     assert DATABASE_URL
     return DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+
+async def test_all_twelve_indicator_queries_execute_on_migrated_schema():
+    engine = create_async_engine(_async_url())
+    try:
+        async with engine.connect() as conn:
+            instances = await compute_risk_indicators(conn, limit_per_indicator=1)
+        assert all(instance.message for instance in instances)
+        assert all(instance.definition for instance in instances)
+        assert all(instance.limitations for instance in instances)
+    finally:
+        await engine.dispose()
 
 
 async def test_high_buyer_concentration_respects_minimum_sample_gate():

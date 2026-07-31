@@ -67,7 +67,11 @@ class _FakeSmtp:
         _FakeSmtp.sent.append(message)
 
 
-async def _seed_rule_with_targets(conn) -> tuple[uuid.UUID, uuid.UUID]:
+async def _seed_rule_with_targets(
+    conn,
+    *,
+    entity_id: uuid.UUID | None = None,
+) -> tuple[uuid.UUID, uuid.UUID]:
     tenant_id, user_id = uuid.uuid4(), uuid.uuid4()
     await conn.execute(tenants.insert().values(id=tenant_id, name="Test Tenant"))
     await conn.execute(users.insert().values(id=user_id, email=f"{uuid.uuid4()}@example.test"))
@@ -79,7 +83,11 @@ async def _seed_rule_with_targets(conn) -> tuple[uuid.UUID, uuid.UUID]:
             user_id=user_id,
             name="delivery channel test",
             event_types=["company.status_changed"],
-            filters={},
+            filters=(
+                {"supplier_id": str(entity_id)}
+                if entity_id is not None
+                else {}
+            ),
             schedule="IMMEDIATE",
             delivery_channels=["EMAIL", "WEBHOOK"],
         )
@@ -117,16 +125,28 @@ async def test_multiplexing_channel_delivers_email_and_webhook_and_records_webho
     )
     try:
         async with engine.connect() as conn:
-            tenant_id, rule_id = await _seed_rule_with_targets(conn)
+            entity_id = uuid.uuid4()
+            tenant_id, rule_id = await _seed_rule_with_targets(
+                conn,
+                entity_id=entity_id,
+            )
             try:
                 fired = await evaluate_company_status_change_and_fire(
                     conn,
-                    entity_id=uuid.uuid4(),
+                    entity_id=entity_id,
                     old_status="ACTIVE",
                     new_status="IN_LIQUIDATION",
                     delivery_channel=channel,
                 )
-                assert fired == 1
+                assert fired >= 1
+                own_events = (
+                    await conn.execute(
+                        select(alert_events).where(
+                            alert_events.c.alert_rule_id == rule_id
+                        )
+                    )
+                ).all()
+                assert len(own_events) == 1
 
                 assert len(_FakeSmtp.sent) == 1
                 assert _FakeSmtp.sent[0]["To"] == "analyst@example.test"

@@ -67,6 +67,36 @@ def test_rule_matches_keywords_case_and_accent_insensitive():
     assert rule_matches({"keywords": ["καθαρισμός"]}, context) is False
 
 
+def test_rule_excluded_keyword_overrides_positive_match():
+    context = {
+        "cpv_codes": ["72200000"],
+        "title": "Υπηρεσίες λογισμικού GIS για στρατιωτική χρήση",
+    }
+
+    assert rule_matches(
+        {
+            "keywords": ["λογισμικό"],
+            "excluded_keywords": ["στρατιωτική"],
+        },
+        context,
+    ) is False
+
+
+def test_rule_excluded_cpv_prefix_overrides_broader_positive_prefix():
+    context = {
+        "cpv_codes": ["72700000"],
+        "title": "Υπηρεσίες δικτύων",
+    }
+
+    assert rule_matches(
+        {
+            "cpv_prefixes": ["72"],
+            "excluded_cpv_prefixes": ["727"],
+        },
+        context,
+    ) is False
+
+
 def test_profile_taxonomy_matches_cpv_or_morphological_title_keyword():
     missing_cpv_context = {
         "cpv_codes": [],

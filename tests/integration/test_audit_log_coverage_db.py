@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from apps.api.auth import DEV_TENANT_ID
-from packages.domain.tables import audit_log, entities, entity_match_candidates
+from packages.domain.tables import audit_log, entities, entity_match_candidates, entity_merge_log
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="DATABASE_URL not set — see module docstring")
@@ -118,6 +118,9 @@ async def test_login_and_entity_merge_split_are_audited(monkeypatch):
             async with engine.connect() as conn:
                 await conn.execute(
                     audit_log.delete().where(audit_log.c.tenant_id == uuid.UUID(DEV_TENANT_ID))
+                )
+                await conn.execute(
+                    entity_merge_log.delete().where(entity_merge_log.c.match_candidate_id == candidate_id)
                 )
                 await conn.execute(
                     entity_match_candidates.delete().where(entity_match_candidates.c.id == candidate_id)

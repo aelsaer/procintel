@@ -2,14 +2,49 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time, timezone
 from decimal import Decimal, InvalidOperation
+import re
 from typing import Any
 from xml.etree import ElementTree
 
 from pydantic import BaseModel
 
-PARSER_VERSION = "ted-normalize-v1"
+PARSER_VERSION = "ted-normalize-v2"
+
+_ISO3_TO_ISO2 = {
+    "AUT": "AT",
+    "BEL": "BE",
+    "BGR": "BG",
+    "HRV": "HR",
+    "CYP": "CY",
+    "CZE": "CZ",
+    "DEU": "DE",
+    "DNK": "DK",
+    "EST": "EE",
+    "ESP": "ES",
+    "FIN": "FI",
+    "FRA": "FR",
+    "GRC": "GR",
+    "HUN": "HU",
+    "IRL": "IE",
+    "ISL": "IS",
+    "ITA": "IT",
+    "LIE": "LI",
+    "LTU": "LT",
+    "LUX": "LU",
+    "LVA": "LV",
+    "MLT": "MT",
+    "NLD": "NL",
+    "NOR": "NO",
+    "POL": "PL",
+    "PRT": "PT",
+    "ROU": "RO",
+    "SWE": "SE",
+    "SVN": "SI",
+    "SVK": "SK",
+}
+_NUTS_CODE = re.compile(r"^[A-Z]{2}[A-Z0-9]{1,3}$")
 
 
 def _to_date(value: Any) -> date | None:
@@ -82,7 +117,61 @@ def _country_code(value: Any) -> str | None:
     code = _first_text(value)
     if not code:
         return None
-    return {"GRC": "GR"}.get(code.upper(), code.upper()[:2])
+    normalized = code.upper()
+    return _ISO3_TO_ISO2.get(normalized, normalized[:2])
+
+
+def _to_datetime(value: Any, *, fallback_time: time = time(23, 59, 59)) -> datetime | None:
+    text = _first_text(value)
+    if not text:
+        return None
+    normalized = text.strip().replace("Z", "+00:00")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized):
+        parsed_date = _to_date(normalized)
+        return (
+            datetime.combine(parsed_date, fallback_time).replace(tzinfo=timezone.utc)
+            if parsed_date is not None
+            else None
+        )
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        parsed_date = _to_date(normalized)
+        if parsed_date is None:
+            return None
+        parsed = datetime.combine(parsed_date, fallback_time)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _submission_deadline(raw: dict[str, Any]) -> datetime | None:
+    direct_values = _flatten_strings(raw.get("deadline-receipt-request"))
+    candidates = [
+        parsed
+        for value in direct_values
+        if (parsed := _to_datetime(value)) is not None
+    ]
+
+    date_values = (
+        _flatten_strings(raw.get("deadline-receipt-tender-date-lot"))
+        + _flatten_strings(raw.get("deadline-receipt-request-date-lot"))
+    )
+    time_values = (
+        _flatten_strings(raw.get("deadline-receipt-tender-time-lot"))
+        + _flatten_strings(raw.get("deadline-receipt-request-time-lot"))
+    )
+    for index, date_value in enumerate(date_values):
+        deadline_time = time(23, 59, 59)
+        if index < len(time_values):
+            try:
+                deadline_time = time.fromisoformat(time_values[index].strip().replace("Z", "+00:00"))
+            except ValueError:
+                pass
+        parsed = _to_datetime(date_value, fallback_time=deadline_time)
+        if parsed is not None:
+            candidates.append(parsed)
+    return min(candidates) if candidates else None
 
 
 def _party_vat(value: Any) -> str | None:
@@ -101,6 +190,13 @@ def _detect_eforms_version(raw: dict[str, Any]) -> tuple[str | None, float]:
     codebase quarantines: keep the data, flag it, don't drop it)."""
     if "eformsVersion" in raw and raw["eformsVersion"]:
         return str(raw["eformsVersion"]), 1.0
+    customization_id = _first_text(
+        raw.get("customization-id")
+        or raw.get("customizationId")
+        or raw.get("CustomizationID")
+    )
+    if customization_id and "eforms-sdk-" in customization_id.casefold():
+        return customization_id.casefold().split("eforms-sdk-", 1)[1], 1.0
     if raw.get("notice-identifier") or raw.get("publication-number"):
         return None, 0.85
     if "legacyFormType" in raw or raw.get("formType") == "legacy":
@@ -134,7 +230,13 @@ class NormalizedTedNotice(BaseModel):
     country_code: str | None = None
     nuts_codes: list[str] = []
     publication_date: date | None = None
+    submission_deadline: datetime | None = None
     related_notice_ids: list[str] = []
+    procedure_identifier: str | None = None
+    notice_version: str | None = None
+    sdk_customization_id: str | None = None
+    previous_notice_ids: list[str] = []
+    change_notice_version_identifier: str | None = None
 
 
 def _normalize_party(raw: dict[str, Any] | None) -> NormalizedTedParty | None:
@@ -164,6 +266,18 @@ def normalize_ted_notice(raw: dict[str, Any], *, ted_notice_id: str) -> Normaliz
     if not supplier.name and not supplier.vat:
         supplier = None
     places = _flatten_strings(raw.get("place-of-performance") or raw.get("nutsCodes"))
+    previous_notice_ids = list(
+        dict.fromkeys(
+            _flatten_strings(raw.get("previous-notice-id-proc"))
+            + _flatten_strings(raw.get("modification-previous-notice-identifier"))
+            + _flatten_strings(raw.get("relatedNoticeIds"))
+        )
+    )
+    customization_id = _first_text(
+        raw.get("customization-id")
+        or raw.get("customizationId")
+        or raw.get("CustomizationID")
+    )
 
     return NormalizedTedNotice(
         ted_notice_id=ted_notice_id,
@@ -179,9 +293,27 @@ def normalize_ted_notice(raw: dict[str, Any], *, ted_notice_id: str) -> Normaliz
         awarded_value=_to_decimal(raw.get("result-value-notice") or raw.get("awardedValue")),
         procedure_type=_first_text(raw.get("procedure-type")) or raw.get("procedureType"),
         country_code=_country_code(raw.get("buyer-country")) or raw.get("countryCode") or raw.get("country"),
-        nuts_codes=list(dict.fromkeys(code for code in places if code.upper().startswith("EL") and len(code) >= 4)),
+        nuts_codes=list(
+            dict.fromkeys(
+                normalized
+                for code in places
+                if (normalized := code.strip().upper())
+                and _NUTS_CODE.fullmatch(normalized)
+            )
+        ),
         publication_date=_to_date(raw.get("publication-date") or raw.get("publicationDate")),
-        related_notice_ids=_as_list(raw.get("relatedNoticeIds")),
+        submission_deadline=_submission_deadline(raw),
+        related_notice_ids=previous_notice_ids,
+        procedure_identifier=_first_text(raw.get("procedure-identifier"))
+        or raw.get("procedureIdentifier"),
+        notice_version=_first_text(raw.get("notice-version"))
+        or raw.get("noticeVersion"),
+        sdk_customization_id=customization_id,
+        previous_notice_ids=previous_notice_ids,
+        change_notice_version_identifier=_first_text(
+            raw.get("change-notice-version-identifier")
+        )
+        or raw.get("changeNoticeVersionIdentifier"),
     )
 
 
@@ -192,30 +324,132 @@ def _element_text(el: ElementTree.Element | None) -> str | None:
     return text or None
 
 
+def _local_name(element: ElementTree.Element) -> str:
+    return element.tag.rsplit("}", 1)[-1].split(":")[-1]
+
+
+def _direct(element: ElementTree.Element, *names: str) -> ElementTree.Element | None:
+    expected = set(names)
+    return next((child for child in element if _local_name(child) in expected), None)
+
+
+def _descendant(element: ElementTree.Element, *names: str) -> ElementTree.Element | None:
+    expected = set(names)
+    return next((child for child in element.iter() if _local_name(child) in expected), None)
+
+
+def _descendant_text(element: ElementTree.Element, *names: str) -> str | None:
+    return _element_text(_descendant(element, *names))
+
+
+def _descendant_texts(element: ElementTree.Element, *names: str) -> list[str]:
+    expected = set(names)
+    return [
+        text
+        for child in element.iter()
+        if _local_name(child) in expected
+        if (text := _element_text(child))
+    ]
+
+
 def _party_element_to_dict(party_el: ElementTree.Element | None) -> dict[str, Any] | None:
     if party_el is None:
         return None
     return {
-        "name": _element_text(party_el.find("Name")),
-        "vatNumber": _element_text(party_el.find("VatNumber")),
-        "countryCode": _element_text(party_el.find("CountryCode")),
+        "name": _element_text(_direct(party_el, "Name"))
+        or _descendant_text(party_el, "Name", "RegistrationName"),
+        "vatNumber": _element_text(_direct(party_el, "VatNumber"))
+        or _descendant_text(party_el, "CompanyID", "EndpointID"),
+        "countryCode": _element_text(_direct(party_el, "CountryCode"))
+        or _descendant_text(party_el, "IdentificationCode", "CountrySubentityCode"),
     }
 
 
 def _notice_element_to_raw_dict(notice_el: ElementTree.Element) -> dict[str, Any]:
+    buyer_element = _direct(notice_el, "Buyer")
+    if buyer_element is None:
+        buyer_element = _descendant(notice_el, "ContractingParty")
+    supplier_element = _direct(notice_el, "Supplier")
+    if supplier_element is None:
+        supplier_element = _descendant(
+            notice_el, "WinningParty", "TendererParty", "EconomicOperatorParty"
+        )
+    notice_id = (
+        _element_text(_direct(notice_el, "NoticeId", "NoticeID"))
+        or _element_text(_direct(notice_el, "ID"))
+        or _descendant_text(notice_el, "NoticeIdentifier")
+    )
+    project_element = _descendant(notice_el, "ProcurementProject")
+    project_title = (
+        _element_text(_direct(project_element, "Name", "Title"))
+        or _descendant_text(project_element, "Name", "Title", "Description")
+        if project_element is not None
+        else None
+    )
     return {
-        "noticeId": _element_text(notice_el.find("NoticeId")),
-        "publicationNumber": _element_text(notice_el.find("PublicationNumber")),
-        "title": _element_text(notice_el.find("Title")),
-        "buyer": _party_element_to_dict(notice_el.find("Buyer")),
-        "supplier": _party_element_to_dict(notice_el.find("Supplier")),
-        "cpvCodes": [t for t in (_element_text(e) for e in notice_el.findall("CpvCodes/CpvCode")) if t],
-        "estimatedValue": _element_text(notice_el.find("EstimatedValue")),
-        "awardedValue": _element_text(notice_el.find("AwardedValue")),
-        "procedureType": _element_text(notice_el.find("ProcedureType")),
-        "countryCode": _element_text(notice_el.find("CountryCode")),
-        "nutsCodes": [t for t in (_element_text(e) for e in notice_el.findall("NutsCodes/NutsCode")) if t],
-        "publicationDate": _element_text(notice_el.find("PublicationDate")),
+        "noticeId": notice_id,
+        "notice-identifier": notice_id,
+        "publicationNumber": _element_text(_direct(notice_el, "PublicationNumber"))
+        or _descendant_text(notice_el, "PublicationNumber"),
+        "title": _element_text(_direct(notice_el, "Title"))
+        or project_title
+        or _descendant_text(notice_el, "Name", "Description"),
+        "buyer": _party_element_to_dict(buyer_element),
+        "supplier": _party_element_to_dict(supplier_element),
+        "cpvCodes": list(
+            dict.fromkeys(_descendant_texts(notice_el, "CpvCode", "ItemClassificationCode"))
+        ),
+        "estimatedValue": _descendant_text(
+            notice_el,
+            "EstimatedValue",
+            "EstimatedOverallContractAmount",
+            "EstimatedOverallContractAmountValue",
+        ),
+        "awardedValue": _descendant_text(
+            notice_el,
+            "AwardedValue",
+            "PayableAmount",
+            "TaxExclusiveAmount",
+            "TotalAmount",
+        ),
+        "procedureType": _descendant_text(notice_el, "ProcedureType", "ProcedureCode"),
+        "countryCode": _element_text(_direct(notice_el, "CountryCode"))
+        or _descendant_text(notice_el, "IdentificationCode"),
+        "nutsCodes": list(
+            dict.fromkeys(
+                _descendant_texts(
+                    notice_el,
+                    "NutsCode",
+                    "CountrySubentityCode",
+                    "Region",
+                )
+            )
+        ),
+        "publicationDate": _element_text(_direct(notice_el, "PublicationDate"))
+        or _element_text(_direct(notice_el, "IssueDate"))
+        or _descendant_text(notice_el, "PublicationDate"),
+        "customization-id": _element_text(_direct(notice_el, "CustomizationID"))
+        or _descendant_text(notice_el, "CustomizationID"),
+        "notice-version": _descendant_text(
+            notice_el,
+            "NoticeVersion",
+            "NoticeVersionCode",
+        ),
+        "procedure-identifier": _descendant_text(
+            notice_el,
+            "ProcedureIdentifier",
+            "ProcedureID",
+        ),
+        "previous-notice-id-proc": _descendant_texts(
+            notice_el,
+            "PreviousNoticeID",
+            "PreviousNoticeIdentifier",
+            "ReferencedNoticeID",
+        ),
+        "change-notice-version-identifier": _descendant_text(
+            notice_el,
+            "ChangeNoticeVersionIdentifier",
+        ),
     }
 
 
@@ -226,11 +460,20 @@ def parse_bulk_xml_package(xml_bytes: bytes) -> list[dict[str, Any]]:
     §21.1's "raw XML ή JSON" wording; nothing downstream of this function
     needs to know which source a notice came from.
 
-    Element names (`<Notice>`/`<Buyer>`/`<CpvCodes>`/...) are a best-effort
-    guess — no real bulk-export sample was available at build time; confirm
-    against the live export before relying on this (docs/source-contracts/
-    ted.md). A malformed/unparseable package raises `ElementTree.ParseError`
-    rather than silently returning nothing — the caller decides how to
-    handle a genuinely broken package, same as an HTTP error elsewhere."""
+    The parser is namespace-agnostic and supports both the compact operator
+    package shape and UBL/eForms notice roots. A malformed package raises
+    ``ElementTree.ParseError`` rather than silently returning no records."""
     root = ElementTree.fromstring(xml_bytes)
-    return [_notice_element_to_raw_dict(notice_el) for notice_el in root.findall(".//Notice")]
+    notice_names = {
+        "Notice",
+        "ContractNotice",
+        "ContractAwardNotice",
+        "PriorInformationNotice",
+        "QualificationSystemNotice",
+        "BusinessRegistrationInformationNotice",
+        "ContractModificationNotice",
+    }
+    notice_elements = [
+        element for element in root.iter() if _local_name(element) in notice_names
+    ]
+    return [_notice_element_to_raw_dict(notice_el) for notice_el in notice_elements]

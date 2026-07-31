@@ -7,21 +7,27 @@ contracts published EU-wide (§21).
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Any
 
+import httpx
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.source_clients.raw_store import LocalFilesystemRawStore
 from services.ingestion.connectors.vies.client import ViesClient
 from services.ingestion.connectors.vies.config import ViesConnectorConfig
 from services.ingestion.connectors.vies.resolve import check_and_record_vies
+from services.search_index.config import OpenSearchConfig
+from services.search_index.indexer import index_single_act
 
 from .client import TedClient
 from .config import TedConnectorConfig
 from .db_writer import TedIngestResult
 from .pipeline import ingest_ted_partition
 from .resolve import resolve_notice_process_link
+
+_logger = logging.getLogger("procintel.ted.scheduled")
 
 
 async def run_scheduled_window(
@@ -33,9 +39,15 @@ async def run_scheduled_window(
     raw_root: str = "./raw",
     vies_config: ViesConnectorConfig | None = None,
     vies_lookup_budget: int | None = None,
+    opensearch_config: OpenSearchConfig | None = None,
 ) -> dict[str, Any]:
     client = TedClient(TedConnectorConfig.from_env())
     vies_client = ViesClient(vies_config) if vies_config is not None else None
+    opensearch_http_client = (
+        httpx.AsyncClient(timeout=opensearch_config.request_timeout_seconds)
+        if opensearch_config is not None
+        else None
+    )
     raw_store = LocalFilesystemRawStore(raw_root)
     enrichment_attempts: dict[str, int] = {}
     enrichment_succeeded: dict[str, int] = {}
@@ -78,6 +90,17 @@ async def run_scheduled_window(
                 amount=notice.amount,
             ),
         )
+        if opensearch_http_client is not None and opensearch_config is not None:
+            await _attempt(
+                "OPENSEARCH",
+                notice_label,
+                lambda: index_single_act(
+                    inner_conn,
+                    opensearch_http_client,
+                    opensearch_config,
+                    notice.act_id,
+                ),
+            )
         if (
             vies_client is not None
             and notice.supplier_entity_id is not None
@@ -117,6 +140,8 @@ async def run_scheduled_window(
         await client.aclose()
         if vies_client is not None:
             await vies_client.aclose()
+        if opensearch_http_client is not None:
+            await opensearch_http_client.aclose()
 
     return {
         "pages_fetched": result.pages_fetched,

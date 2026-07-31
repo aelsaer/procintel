@@ -26,7 +26,13 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from packages.domain.tables import entity_company_snapshots, entity_identifiers, source_records
+from packages.domain.tables import (
+    entity_addresses,
+    entity_company_snapshots,
+    entity_contacts,
+    entity_identifiers,
+    source_records,
+)
 
 from .normalize import NormalizedCompany
 
@@ -39,6 +45,19 @@ _SNAPSHOT_COMPARISON_FIELDS = (
     "gemi_office",
     "municipality",
     "region",
+    "address_line",
+    "postal_code",
+    "city",
+    "email",
+    "website",
+    "objective",
+    "last_status_change",
+    "is_branch",
+    "auto_registered",
+    "kad_details",
+    "persons",
+    "capital",
+    "source_documents",
 )
 
 
@@ -105,6 +124,19 @@ async def upsert_company_snapshot(
         gemi_office=normalized.gemi_office,
         municipality=normalized.municipality,
         region=normalized.region,
+        address_line=normalized.address_line,
+        postal_code=normalized.postal_code,
+        city=normalized.city,
+        email=normalized.email,
+        website=normalized.website,
+        objective=normalized.objective,
+        last_status_change=normalized.last_status_change,
+        is_branch=normalized.is_branch,
+        auto_registered=normalized.auto_registered,
+        kad_details=normalized.kad_details,
+        persons=normalized.persons,
+        capital=normalized.capital,
+        source_documents=normalized.source_documents,
     )
 
     if current is not None and all(
@@ -135,6 +167,67 @@ async def upsert_company_snapshot(
             **new_values,
         )
     )
+
+    if normalized.address_line or normalized.postal_code or normalized.municipality:
+        await conn.execute(
+            entity_addresses.update()
+            .where(
+                entity_addresses.c.entity_id == entity_id,
+                entity_addresses.c.is_current.is_(True),
+            )
+            .values(is_current=False, valid_to=observed_at)
+        )
+        await conn.execute(
+            entity_addresses.insert().values(
+                id=uuid.uuid4(),
+                entity_id=entity_id,
+                address_line=normalized.address_line,
+                postal_code=normalized.postal_code,
+                municipality=normalized.municipality or normalized.city,
+                region=normalized.region,
+                country_code="GR",
+                source_record_id=source_record_id,
+                valid_from=observed_at,
+                is_current=True,
+            )
+        )
+
+    contacts = (
+        ("EMAIL", normalized.email),
+        ("DOMAIN", normalized.website),
+    )
+    for contact_type, raw_value in contacts:
+        if not raw_value:
+            continue
+        normalized_value = str(raw_value).strip().casefold()
+        if contact_type == "DOMAIN":
+            normalized_value = (
+                normalized_value.removeprefix("https://")
+                .removeprefix("http://")
+                .removeprefix("www.")
+                .split("/", 1)[0]
+            )
+        await conn.execute(
+            entity_contacts.update()
+            .where(
+                entity_contacts.c.entity_id == entity_id,
+                entity_contacts.c.contact_type == contact_type,
+                entity_contacts.c.is_current.is_(True),
+            )
+            .values(is_current=False, valid_to=observed_at)
+        )
+        await conn.execute(
+            entity_contacts.insert().values(
+                id=uuid.uuid4(),
+                entity_id=entity_id,
+                contact_type=contact_type,
+                value_raw=str(raw_value),
+                value_normalized=normalized_value,
+                source_record_id=source_record_id,
+                valid_from=observed_at,
+                is_current=True,
+            )
+        )
 
     if normalized.gemi_number:
         await _attach_gemi_identifier(

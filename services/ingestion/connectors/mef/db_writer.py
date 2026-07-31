@@ -111,7 +111,7 @@ async def ingest_expense_record(
             payload_uri=payload_uri,
             fetched_at=fetched_at,
             http_status=http_status,
-            license_code="CC-BY-4.0",  # TODO(confirm): ΜΕΦ's exact reuse terms
+            license_code="UNCONFIRMED",
             parse_status="PARSED",
         )
     )

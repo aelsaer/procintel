@@ -4,11 +4,9 @@ Implements the three operations description.txt names explicitly —
 `package_search`, `package_show`, `resource_search` — plus a plain resource
 downloader (`fetch_resource_bytes`) needed to actually read a dataset's CSV/
 JSON/XML/XLSX content once a `package_show` response points at it. These are
-CKAN's own standard Action API paths (`/api/3/action/<name>`), stable across
-any CKAN deployment — but the exact query-parameter names/limits still need
-confirming against the live data.gov.gr deployment (description.txt's own
-caveat), so treat the request shape here as a well-known-but-unconfirmed
-baseline, same as VIES's public WSDL.
+CKAN's standard Action API paths (`/api/3/action/<name>`), validated against
+the live data.gov.gr deployment. Resource downloads follow its signed
+object-storage redirects.
 """
 
 from __future__ import annotations
@@ -99,7 +97,6 @@ class CkanClient:
         return body["result"]
 
     async def package_search(self, query: str, rows: int = 100) -> PackageSearchResponse:
-        # TODO(confirm against live deployment): query param name (`q`) and page size cap.
         result = await self._get_action("package_search", {"q": query, "rows": rows})
         return PackageSearchResponse(query=query, count=result.get("count", 0), results=result.get("results", []))
 
@@ -115,8 +112,6 @@ class CkanClient:
         )
 
     async def resource_search(self, query: str) -> ResourceSearchResponse:
-        # TODO(confirm against live deployment): query syntax (CKAN's docs
-        # describe `field:value` pairs, e.g. `format:CSV`).
         result = await self._get_action("resource_search", {"query": query})
         return ResourceSearchResponse(query=query, count=result.get("count", 0), results=result.get("results", []))
 
@@ -125,5 +120,9 @@ class CkanClient:
         Action API call; `resource_url` is whatever `package_show` reported
         for the resource, an absolute URL that may live on a different host
         than the Action API base."""
-        response = await self._request(self._http.get, resource_url)
+        response = await self._request(
+            self._http.get,
+            resource_url,
+            follow_redirects=True,
+        )
         return ResourceBytesResponse(content=response.content, http_status=response.status_code)

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.domain.tables import documents, procurement_acts
+from packages.source_clients.rate_limit import TokenBucket
 from services.documents.pipeline import ProcessDocumentResult, process_document
 from services.documents.storage import LocalFilesystemDocumentBlobStore
 from services.intelligence.tender_brief import khmdhs_attachment_url
@@ -50,6 +51,7 @@ async def process_khmdhs_attachment(
     act_id: uuid.UUID,
     title: str | None = None,
     http_client: httpx.AsyncClient | None = None,
+    rate_limiter: TokenBucket | None = None,
 ) -> ProcessDocumentResult | None:
     """Download one provider-owned PDF once, then run extraction/OCR."""
     if await has_khmdhs_attachment(conn, act_id=act_id, resource=resource):
@@ -67,6 +69,7 @@ async def process_khmdhs_attachment(
         document_type=khmdhs_document_type(resource),
         title=title or adam,
         http_client=http_client,
+        download_rate_limiter=rate_limiter,
         blob_store=LocalFilesystemDocumentBlobStore(
             os.environ.get("DOCUMENT_STORE_ROOT", "./data/documents")
         ),

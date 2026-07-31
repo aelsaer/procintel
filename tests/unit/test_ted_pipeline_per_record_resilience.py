@@ -24,7 +24,9 @@ class _FakeClient:
     def __init__(self, pages: list[TedSearchPage]) -> None:
         self._pages = pages
 
-    async def search_notices(self, *, country, date_from, date_to, page):
+    async def search_notices(
+        self, *, country, date_from, date_to, page, iteration_next_token=None
+    ):
         return self._pages[page]
 
 

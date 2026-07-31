@@ -14,8 +14,12 @@ Not a company profile source. Never used to populate `entity_company_snapshots`
 
 ## Access
 
-WSDL `checkVat` operation; validates VAT numbers through the member-state
-systems.
+European Commission SOAP service:
+
+- WSDL: `https://ec.europa.eu/taxation_customs/vies/services/checkVatService.wsdl`
+- endpoint: `https://ec.europa.eu/taxation_customs/vies/services/checkVatService`
+
+`VIES_API_BASE_URL` is only an override for testing or an approved proxy.
 
 ## Fields stored (`entity_vies_checks`)
 

@@ -11,7 +11,8 @@ this environment could not perform (no Docker/Postgres available here).
 
 import json
 import os
-from datetime import date
+import uuid
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -24,6 +25,7 @@ from packages.domain.tables import act_cpv_codes, act_identifiers, act_parties, 
 from packages.source_clients.raw_store import LocalFilesystemRawStore
 from services.ingestion.connectors.khmdhs.client import KhmdhsClient
 from services.ingestion.connectors.khmdhs.config import KhmdhsConnectorConfig
+from services.ingestion.connectors.khmdhs.db_writer import ingest_khmdhs_record
 from services.ingestion.connectors.khmdhs.pipeline import ingest_khmdhs_partition
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -43,7 +45,14 @@ def _asyncpg_url() -> str:
 
 @respx.mock
 async def test_ingest_partition_writes_canonical_rows_and_is_idempotent(tmp_path):
-    respx.post(f"{BASE_URL}/khmdhs-opendata/contract").mock(return_value=httpx.Response(200, json=SAMPLE_BODY))
+    sample_body = json.loads(json.dumps(SAMPLE_BODY))
+    run_suffix = uuid.uuid4().hex[:12].upper()
+    first_adam = f"25SYMV{run_suffix}"
+    for index, record in enumerate(sample_body["data"]):
+        record["referenceNumber"] = first_adam if index == 0 else f"25SYMV{uuid.uuid4().hex[:12].upper()}"
+    respx.post(f"{BASE_URL}/khmdhs-opendata/contract").mock(
+        return_value=httpx.Response(200, json=sample_body)
+    )
 
     config = KhmdhsConnectorConfig(base_url=BASE_URL, rate_limit_per_minute=6000)
     client = KhmdhsClient(config)
@@ -65,7 +74,7 @@ async def test_ingest_partition_writes_canonical_rows_and_is_idempotent(tmp_path
                         procurement_acts.c.id.in_(
                             select(act_identifiers.c.act_id).where(
                                 act_identifiers.c.scheme == "ADAM",
-                                act_identifiers.c.value_normalized == "25SYMV012345678",
+                                act_identifiers.c.value_normalized == first_adam,
                             )
                         )
                     )
@@ -96,11 +105,52 @@ async def test_ingest_partition_writes_canonical_rows_and_is_idempotent(tmp_path
                 await conn.execute(
                     select(source_records).where(
                         source_records.c.source_system == "KHMDHS",
-                        source_records.c.source_native_id == "25SYMV012345678",
+                        source_records.c.source_native_id == first_adam,
                     )
                 )
             ).all()
             assert len(source_record_count) == 1
     finally:
         await client.aclose()
+        await engine.dispose()
+
+
+async def test_live_contract_consortium_writes_every_supplier_party():
+    engine = create_async_engine(_asyncpg_url())
+    record = {
+        "referenceNumber": "26SYMV099999991",
+        "title": "Consortium persistence test",
+        "contractSignedDate": "2026-07-20",
+        "totalCostWithoutVAT": 1000,
+        "totalCostWithVAT": 1240,
+        "contractingDataDetails": {
+            "contractingMembersDataList": [
+                {"name": "Supplier A", "vatNumber": "090000045"},
+                {"name": "Supplier B", "vatNumber": "094019245"},
+            ]
+        },
+    }
+    try:
+        async with engine.connect() as conn:
+            result = await ingest_khmdhs_record(
+                conn,
+                resource="contract",
+                raw_record=record,
+                payload_uri="memory://khmdhs/consortium.json",
+                content_sha256="f" * 64,
+                http_status=200,
+                fetched_at=datetime.now(timezone.utc),
+            )
+            assert result.act_upsert is not None
+            assert len(result.act_upsert.contractor_entities) == 2
+            supplier_rows = (
+                await conn.execute(
+                    select(act_parties.c.entity_id).where(
+                        act_parties.c.act_id == result.act_upsert.act_id,
+                        act_parties.c.party_role == "SUPPLIER",
+                    )
+                )
+            ).all()
+            assert len(supplier_rows) == 2
+    finally:
         await engine.dispose()

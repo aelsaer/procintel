@@ -6,12 +6,9 @@ same identity rule instead of re-implementing it. Deliberately takes plain
 ΑΦΜ fields rather than any one connector's normalized-record type, so this
 module has no dependency on `services/ingestion/connectors/*`.
 
-Only exact-ΑΦΜ resolution (§8 level 2, confidence 0.995-1.000) is
-implemented so far. Candidate blocking/scoring for cases without a shared
-exact identifier (§25.1-25.3) — name/address/postal/domain/phone similarity,
-`entity_match_candidates` review queue — is not yet needed by any connector
-built so far and is deferred until one requires it, rather than built
-speculatively.
+Exact-ΑΦΜ resolution remains automatic. Records without a shared exact
+identifier are handled by ``candidates.py`` using explainable multi-field
+blocking/scoring and the persisted review/merge workflow.
 """
 
 from __future__ import annotations
@@ -32,7 +29,7 @@ async def find_or_create_entity_by_afm(
     afm_checksum_valid: bool,
     name: str | None,
     entity_type: str,
-    source_record_id: uuid.UUID,
+    source_record_id: uuid.UUID | None,
 ) -> uuid.UUID:
     """Exact-ΑΦΜ identity resolution. Never creates a second entity for an
     ΑΦΜ that already has a current identifier row — the DB's unique index

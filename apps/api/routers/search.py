@@ -58,6 +58,8 @@ async def search(
     amount_min: Decimal | None = Query(default=None, ge=0),
     amount_max: Decimal | None = Query(default=None, ge=0),
     cpv_prefix: str | None = Query(default=None, max_length=12),
+    nuts_code: str | None = Query(default=None, max_length=8),
+    municipality: str | None = Query(default=None, max_length=160),
     conn: AsyncConnection = Depends(get_conn),
 ) -> SearchResponse:
     raw_query = q.strip()
@@ -150,6 +152,26 @@ async def search(
                         AND filter_cpv.cpv_code LIKE CAST(:cpv_like AS TEXT)
                   )
               )
+              AND (
+                  CAST(:nuts_like AS TEXT) IS NULL
+                  OR EXISTS (
+                      SELECT 1 FROM act_locations location_filter
+                      WHERE location_filter.act_id = a.id
+                        AND UPPER(location_filter.nuts_code) LIKE CAST(:nuts_like AS TEXT)
+                  )
+              )
+              AND (
+                  CAST(:municipality_like AS TEXT) IS NULL
+                  OR EXISTS (
+                      SELECT 1 FROM act_locations municipality_filter
+                      WHERE municipality_filter.act_id = a.id
+                        AND (
+                            municipality_filter.municipality_name ILIKE CAST(:municipality_like AS TEXT)
+                            OR municipality_filter.place_text ILIKE CAST(:municipality_like AS TEXT)
+                            OR municipality_filter.regional_unit_name ILIKE CAST(:municipality_like AS TEXT)
+                        )
+                  )
+              )
         ),
         result_page AS (
             SELECT *
@@ -206,6 +228,8 @@ async def search(
         "amount_min": amount_min,
         "amount_max": amount_max,
         "cpv_like": cpv_like,
+        "nuts_like": f"{nuts_code.strip().upper()}%" if nuts_code and nuts_code.strip() else None,
+        "municipality_like": f"%{municipality.strip()}%" if municipality and municipality.strip() else None,
         "offset": offset,
         "fetch_limit": limit + 1,
     }

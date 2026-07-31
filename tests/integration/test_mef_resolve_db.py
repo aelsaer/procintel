@@ -12,6 +12,7 @@ and re-resolving is idempotent (dedup on content hash, no duplicate
 mef_expenses rows, link untouched).
 """
 
+import copy
 import json
 import os
 import uuid
@@ -66,18 +67,67 @@ def _asyncpg_url() -> str:
     return url
 
 
+def _valid_afm(seed: int) -> str:
+    prefix = f"{10_000_000 + seed % 89_999_999:08d}"
+    checksum = (
+        sum(int(prefix[index]) * (2 ** (8 - index)) for index in range(8))
+        % 11
+    ) % 10
+    return f"{prefix}{checksum}"
+
+
 @respx.mock
 async def test_tier1_link_and_tier4_candidate_and_idempotent(tmp_path):
-    respx.get(f"{DIAVGEIA_BASE_URL}/decisions/{ADA}").mock(return_value=httpx.Response(200, json=DECISION_BODY))
+    unique_seed = uuid.uuid4().int
+    suffix = f"{unique_seed % 1_000_000_000:09d}"
+    contractor_afm = _valid_afm(unique_seed)
+    adam = f"25SYMV{suffix}"
+    ada = f"TESTADA-{suffix}"
+    contract_record = copy.deepcopy(CONTRACT_RECORD)
+    contract_record["referenceNumber"] = adam
+    contract_record["contractRelatedAda"] = ada
+    contract_record["awardees"][0]["vatNumber"] = contractor_afm
+    decision_body = copy.deepcopy(DECISION_BODY)
+    decision_body["ada"] = ada
+    expenses_body = copy.deepcopy(EXPENSES_BODY)
+    expenses_body["items"][0]["uid"] = f"MEF-SPENDING-{suffix}-1"
+    expenses_body["items"][0]["adas"] = ada
+    expenses_body["items"][0]["issuer_afm"] = contractor_afm
+    expenses_body["items"][1]["uid"] = f"MEF-SPENDING-{suffix}-2"
+    expenses_body["items"][1]["issuer_afm"] = contractor_afm
+
+    respx.get(f"{DIAVGEIA_BASE_URL}/decisions/{ada}").mock(
+        return_value=httpx.Response(200, json=decision_body)
+    )
+    respx.get(
+        f"{MEF_BASE_URL}/api/spendings",
+        params={"year": "2025", "limit": "1", "offset": "0"},
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"items": [{}], "count": len(expenses_body["items"])},
+        )
+    )
     expenses_route = respx.get(
         f"{MEF_BASE_URL}/api/spendings",
-        params={"searchTerm": CONTRACTOR_AFM, "limit": "200", "offset": "0"},
+        params={
+            "year": "2025",
+            "searchTerm": contractor_afm,
+            "limit": "200",
+            "offset": "0",
+        },
     ).mock(
-        return_value=httpx.Response(200, json=EXPENSES_BODY)
+        return_value=httpx.Response(200, json=expenses_body)
     )
 
     diavgeia_client = DiavgeiaClient(DiavgeiaConnectorConfig(base_url=DIAVGEIA_BASE_URL, rate_limit_per_minute=6000))
-    mef_client = MefClient(MefConnectorConfig(base_url=MEF_BASE_URL, rate_limit_per_minute=6000))
+    mef_client = MefClient(
+        MefConnectorConfig(
+            base_url=MEF_BASE_URL,
+            rate_limit_per_minute=6000,
+            lookup_years=(2025,),
+        )
+    )
     raw_store = LocalFilesystemRawStore(tmp_path / "raw")
     engine = create_async_engine(_asyncpg_url())
 
@@ -86,7 +136,7 @@ async def test_tier1_link_and_tier4_candidate_and_idempotent(tmp_path):
             ingest_result = await ingest_khmdhs_record(
                 conn,
                 resource="contract",
-                raw_record=CONTRACT_RECORD,
+                raw_record=contract_record,
                 payload_uri="mem://contract",
                 content_sha256=f"sha-{uuid.uuid4()}",
                 http_status=200,
@@ -98,7 +148,7 @@ async def test_tier1_link_and_tier4_candidate_and_idempotent(tmp_path):
             assert contractor_entity_id is not None
 
             decision_act_id = await resolve_decision_for_ada(
-                conn, client=diavgeia_client, raw_store=raw_store, ada=ADA, origin_act_id=origin_act_id
+                conn, client=diavgeia_client, raw_store=raw_store, ada=ada, origin_act_id=origin_act_id
             )
             assert decision_act_id is not None
 
@@ -107,14 +157,16 @@ async def test_tier1_link_and_tier4_candidate_and_idempotent(tmp_path):
                 client=mef_client,
                 raw_store=raw_store,
                 contractor_entity_id=contractor_entity_id,
-                afm_normalized=CONTRACTOR_AFM,
+                afm_normalized=contractor_afm,
             )
             assert ingested_count == 2
             assert expenses_route.call_count == 1
 
             expense_rows = (
                 await conn.execute(
-                    select(mef_expenses).order_by(mef_expenses.c.amount.desc())
+                    select(mef_expenses)
+                    .where(mef_expenses.c.recipient_entity_id == contractor_entity_id)
+                    .order_by(mef_expenses.c.amount.desc())
                 )
             ).all()
             assert len(expense_rows) == 2
@@ -144,10 +196,16 @@ async def test_tier1_link_and_tier4_candidate_and_idempotent(tmp_path):
                 client=mef_client,
                 raw_store=raw_store,
                 contractor_entity_id=contractor_entity_id,
-                afm_normalized=CONTRACTOR_AFM,
+                afm_normalized=contractor_afm,
             )
             assert ingested_again == 0
-            all_rows_again = (await conn.execute(select(mef_expenses))).all()
+            all_rows_again = (
+                await conn.execute(
+                    select(mef_expenses).where(
+                        mef_expenses.c.recipient_entity_id == contractor_entity_id
+                    )
+                )
+            ).all()
             assert len(all_rows_again) == 2
     finally:
         await diavgeia_client.aclose()

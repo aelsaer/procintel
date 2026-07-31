@@ -213,7 +213,9 @@ async def create_alert_rule(
         action="alert_rule.created", object_type="alert_rule", object_id=rule_id,
         details={"schedule": body.schedule, "channels": body.delivery_channels},
     ))
-    return await _serialize_rule(conn, tenant_id, rule_id)
+    response = await _serialize_rule(conn, tenant_id, rule_id)
+    await conn.commit()
+    return response
 
 
 @router.get("/events", response_model=list[AlertEventResponse])
@@ -255,12 +257,14 @@ async def mark_event_read(
     if row is None:
         raise HTTPException(status_code=404, detail="Alert event not found")
     rule_name = (await conn.execute(sa.select(alert_rules.c.name).where(alert_rules.c.id == row.alert_rule_id))).scalar_one()
-    return AlertEventResponse(
+    response = AlertEventResponse(
         id=str(row.id), alert_rule_id=str(row.alert_rule_id), rule_name=rule_name,
         canonical_object_type=row.canonical_object_type, canonical_object_id=str(row.canonical_object_id),
         event_type=row.event_type, payload=row.payload, triggered_at=row.triggered_at,
         delivered_at=row.delivered_at, read_at=row.read_at,
     )
+    await conn.commit()
+    return response
 
 
 @router.get("/delivery-history", response_model=list[DeliveryHistoryResponse])
@@ -335,7 +339,9 @@ async def update_alert_rule(
         action="alert_rule.updated", object_type="alert_rule", object_id=target_id,
         details={"schedule": body.schedule, "channels": body.delivery_channels},
     ))
-    return await _serialize_rule(conn, tenant_id, target_id)
+    response = await _serialize_rule(conn, tenant_id, target_id)
+    await conn.commit()
+    return response
 
 
 @router.delete("/{rule_id}", status_code=204)
@@ -357,6 +363,7 @@ async def delete_alert_rule(
         id=uuid.uuid4(), tenant_id=tenant_id, actor_user_id=user_id,
         action="alert_rule.archived", object_type="alert_rule", object_id=target_id,
     ))
+    await conn.commit()
     return Response(status_code=204)
 
 

@@ -31,11 +31,53 @@ TED_SEARCH_FIELDS = (
     "estimated-value-lot",
     "result-value-notice",
     "procedure-type",
+    "procedure-identifier",
     "place-of-performance",
     "publication-date",
+    "deadline-receipt-request",
+    "deadline-receipt-tender-date-lot",
+    "deadline-receipt-tender-time-lot",
+    "deadline-receipt-request-date-lot",
+    "deadline-receipt-request-time-lot",
+    "notice-version",
+    "customization-id",
+    "previous-notice-id-proc",
+    "modification-previous-notice-identifier",
+    "change-notice-version-identifier",
 )
 
-TED_COUNTRY_CODES = {"GR": "GRC"}
+TED_COUNTRY_CODES = {
+    "AT": "AUT",
+    "BE": "BEL",
+    "BG": "BGR",
+    "HR": "HRV",
+    "CY": "CYP",
+    "CZ": "CZE",
+    "DE": "DEU",
+    "DK": "DNK",
+    "EE": "EST",
+    "ES": "ESP",
+    "FI": "FIN",
+    "FR": "FRA",
+    "GR": "GRC",
+    "HU": "HUN",
+    "IE": "IRL",
+    "IS": "ISL",
+    "IT": "ITA",
+    "LI": "LIE",
+    "LT": "LTU",
+    "LU": "LUX",
+    "LV": "LVA",
+    "MT": "MLT",
+    "NL": "NLD",
+    "NO": "NOR",
+    "PL": "POL",
+    "PT": "PRT",
+    "RO": "ROU",
+    "SE": "SWE",
+    "SI": "SVN",
+    "SK": "SVK",
+}
 
 
 @dataclass(frozen=True)
@@ -44,6 +86,7 @@ class TedSearchPage:
     is_last_page: bool
     raw_body: bytes
     http_status: int
+    iteration_next_token: str | None = None
 
 
 class TedClient:
@@ -65,7 +108,13 @@ class TedClient:
             await self._http.aclose()
 
     async def search_notices(
-        self, *, country: str, date_from: date, date_to: date, page: int
+        self,
+        *,
+        country: str,
+        date_from: date,
+        date_to: date,
+        page: int = 0,
+        iteration_next_token: str | None = None,
     ) -> TedSearchPage:
         self._circuit_breaker.raise_if_open()
         await self._rate_limiter.acquire()
@@ -78,17 +127,20 @@ class TedClient:
                 f"AND publication-date >= {date_from:%Y%m%d} "
                 f"AND publication-date <= {date_to:%Y%m%d}"
             )
+            request_body: dict[str, Any] = {
+                "query": expert_query,
+                "fields": list(TED_SEARCH_FIELDS),
+                "limit": 250,
+                "scope": "ALL",
+                "checkQuerySyntax": False,
+                "paginationMode": "ITERATION",
+                "onlyLatestVersions": False,
+            }
+            if iteration_next_token:
+                request_body["iterationNextToken"] = iteration_next_token
             response = await self._http.post(
                 "/v3/notices/search",
-                json={
-                    "query": expert_query,
-                    "fields": list(TED_SEARCH_FIELDS),
-                    "page": page + 1,
-                    "limit": 250,
-                    "scope": "ALL",
-                    "checkQuerySyntax": False,
-                    "paginationMode": "PAGE_NUMBER",
-                },
+                json=request_body,
             )
             raise_for_retryable_status(response)
             return response
@@ -103,12 +155,13 @@ class TedClient:
         response.raise_for_status()
         body = response.json()
         notices = body.get("notices") or []
-        total_count = int(body.get("totalNoticeCount") or 0)
-        is_last_page = not notices or (page + 1) * 250 >= total_count
+        next_token = body.get("iterationNextToken")
+        is_last_page = not notices or not next_token
 
         return TedSearchPage(
             notices=notices,
             is_last_page=is_last_page,
             raw_body=response.content,
             http_status=response.status_code,
+            iteration_next_token=str(next_token) if next_token else None,
         )

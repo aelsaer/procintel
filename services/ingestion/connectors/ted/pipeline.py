@@ -39,8 +39,8 @@ def _describe_exception(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
 
 _NOTICE_ID_FALLBACK_KEYS = (
-    "publication-number",
     "notice-identifier",
+    "publication-number",
     "noticeId",
     "id",
     "publicationNumber",
@@ -53,6 +53,12 @@ def _extract_notice_id(notice: dict) -> str:
         if value:
             if isinstance(value, list):
                 return str(value[0]) if value else "UNKNOWN"
+            if isinstance(value, dict):
+                for nested in value.values():
+                    if isinstance(nested, list) and nested:
+                        return str(nested[0])
+                    if nested:
+                        return str(nested)
             return str(value)
     return "UNKNOWN"
 
@@ -82,6 +88,7 @@ async def ingest_ted_partition(
     enrich_deduplicated: bool = False,
 ) -> TedPartitionIngestResult:
     page = 0
+    iteration_next_token: str | None = None
     pages_fetched = 0
     notices_seen = 0
     notices_ingested = 0
@@ -89,7 +96,13 @@ async def ingest_ted_partition(
     failed_notices: list[dict[str, Any]] = []
 
     while True:
-        page_result = await client.search_notices(country=country, date_from=date_from, date_to=date_to, page=page)
+        page_result = await client.search_notices(
+            country=country,
+            date_from=date_from,
+            date_to=date_to,
+            page=page,
+            iteration_next_token=iteration_next_token,
+        )
         pages_fetched += 1
 
         for notice in page_result.notices:
@@ -141,6 +154,7 @@ async def ingest_ted_partition(
 
         if page_result.is_last_page:
             break
+        iteration_next_token = page_result.iteration_next_token
         page += 1
 
     return TedPartitionIngestResult(

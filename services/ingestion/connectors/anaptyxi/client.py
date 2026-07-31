@@ -1,15 +1,9 @@
-"""HTTP client for ΑΝΑΠΤΥΞΗ.gov.gr (spec §3.4, §19).
+"""HTTP client for the official ΑΝΑΠΤΥΞΗ ``GetData.ashx`` API.
 
-Endpoint path is a best-effort guess (`GET /projects?misCode=`, a common
-REST convention for this kind of lookup) — description.txt confirms the
-*resource types* the 2014-2020 Open Data API exposes (projects, subprojects,
-beneficiaries, contractors, budgets, payments) but not the exact request
-shape. Isolated to `find_project_by_mis` so fixing it against the real API
-is a one-line change, same discipline as every other connector.
-
-Only lookup-by-MIS is implemented — this connector supports join hierarchy
-Level 1 (§19.2) only; see `resolve.py`'s module docstring for what's
-deferred.
+The public service is query-string based rather than REST-shaped. Project
+details expose the complete hierarchy (subprojects, bodies, geographic
+allocations, indicators and files); project lists support exact code searches
+for contractors and beneficiaries through ``searchField``.
 """
 
 from __future__ import annotations
@@ -40,11 +34,50 @@ class AnaptyxiProjectResponse:
 
 
 @dataclass(frozen=True)
+class AnaptyxiSubprojectResponse:
+    mis_code: str
+    subproject_index: int
+    body: dict[str, Any]
+    raw_body: bytes
+    http_status: int
+
+
+@dataclass(frozen=True)
 class AnaptyxiBeneficiarySearchResponse:
     afm: str
     results: list[dict[str, Any]]
     raw_body: bytes
     http_status: int
+
+
+def _list_query_type(program_period: str) -> str:
+    return "projects" if program_period == "ANAPTYXI_2007_2013" else "projects_v2"
+
+
+def _result_rows(body: Any) -> list[dict[str, Any]]:
+    if isinstance(body, list):
+        return [row for row in body if isinstance(row, dict)]
+    if not isinstance(body, dict):
+        return []
+    for key in ("Records", "results", "data", "projects", "rows"):
+        value = body.get(key)
+        if isinstance(value, list):
+            return [row for row in value if isinstance(row, dict)]
+    # Some deployments return a map keyed by the MIS code.
+    return [value for value in body.values() if isinstance(value, dict)]
+
+
+def _project_json_or_not_found(
+    response: httpx.Response,
+    identifier: str,
+) -> dict[str, Any]:
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise ProjectNotFoundError(identifier) from exc
+    if not isinstance(body, dict) or not body:
+        raise ProjectNotFoundError(identifier)
+    return body
 
 
 class AnaptyxiClient:
@@ -66,16 +99,13 @@ class AnaptyxiClient:
         if self._owns_http_client:
             await self._http.aclose()
 
-    async def find_project_by_mis(self, mis_code: str) -> AnaptyxiProjectResponse:
+    async def _get(self, params: dict[str, str | int]) -> httpx.Response:
         self._circuit_breaker.raise_if_open()
         await self._rate_limiter.acquire()
 
         @retrying(max_attempts=self._config.max_retry_attempts)
         async def _do_request() -> httpx.Response:
-            # TODO(confirm against live API): exact endpoint path/params.
-            response = await self._http.get("/projects", params={"misCode": mis_code})
-            if response.status_code == 404:
-                return response
+            response = await self._http.get("/GetData.ashx", params=params)
             raise_for_retryable_status(response)
             return response
 
@@ -85,46 +115,121 @@ class AnaptyxiClient:
             self._circuit_breaker.record_failure()
             raise
         self._circuit_breaker.record_success()
-
-        if response.status_code == 404:
-            raise ProjectNotFoundError(mis_code)
-
         response.raise_for_status()
+        return response
+
+    async def find_project_by_mis(self, mis_code: str) -> AnaptyxiProjectResponse:
+        try:
+            response = await self._get(
+                {
+                    "queryType": "projectDetails",
+                    "queryArgument": mis_code,
+                    "projectDetails": "all",
+                    "outputFormat": "json",
+                }
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise ProjectNotFoundError(mis_code) from exc
+            raise
+        body = _project_json_or_not_found(response, mis_code)
+        if (
+            not body.get("title")
+            and not body.get("projectTitle")
+        ):
+            raise ProjectNotFoundError(mis_code)
         return AnaptyxiProjectResponse(
             mis_code=mis_code,
-            body=response.json(),
+            body=body,
             raw_body=response.content,
             http_status=response.status_code,
         )
 
+    async def hydrate_project_summary(
+        self,
+        summary: dict[str, Any],
+    ) -> AnaptyxiProjectResponse:
+        """Resolve a list/search row to the complete project hierarchy."""
+        mis_code = str(
+            summary.get("kodikos")
+            or summary.get("misCode")
+            or summary.get("mis_ops_code")
+            or summary.get("projectCode")
+            or ""
+        ).strip()
+        if not mis_code:
+            raise ProjectNotFoundError("")
+        return await self.find_project_by_mis(mis_code)
+
+    async def find_subproject(
+        self,
+        mis_code: str,
+        subproject_index: int,
+    ) -> AnaptyxiSubprojectResponse:
+        response = await self._get(
+            {
+                "queryType": "subProjectDetails",
+                "queryArgument": mis_code,
+                "queryFilter": subproject_index,
+                "outputFormat": "json",
+            }
+        )
+        body = _project_json_or_not_found(
+            response,
+            f"{mis_code}/{subproject_index}",
+        )
+        return AnaptyxiSubprojectResponse(
+            mis_code=mis_code,
+            subproject_index=subproject_index,
+            body=body,
+            raw_body=response.content,
+            http_status=response.status_code,
+        )
+
+    async def _search_company_field(self, afm: str, search_field: int) -> httpx.Response:
+        return await self._get(
+            {
+                "queryType": _list_query_type(self.program_period),
+                "outputFormat": "json",
+                "searchField": search_field,
+                "searchValue": afm,
+                "pagesize": 1000,
+                "pagenum": 0,
+                "replaceEnum": "TRUE",
+            }
+        )
+
     async def find_projects_by_beneficiary_afm(self, afm: str) -> AnaptyxiBeneficiarySearchResponse:
-        """Join hierarchy Level 2 support (§19.2) — search by beneficiary/
-        contractor ΑΦΜ, returning every matching project (unlike
-        `find_project_by_mis`'s single-record lookup). No results is a
-        legitimate empty list, not a 404 — unlike a specific MIS code not
-        existing, "this ΑΦΜ has no ΑΝΑΠΤΥΞΗ projects" is an ordinary
-        outcome. Endpoint path/params are a best-effort guess — same
-        discipline as `find_project_by_mis`."""
-        self._circuit_breaker.raise_if_open()
-        await self._rate_limiter.acquire()
+        """Search the official contractor and beneficiary code fields.
 
-        @retrying(max_attempts=self._config.max_retry_attempts)
-        async def _do_request() -> httpx.Response:
-            # TODO(confirm against live API): exact endpoint path/params.
-            response = await self._http.get("/projects/search", params={"beneficiaryVatNumber": afm})
-            raise_for_retryable_status(response)
-            return response
-
-        try:
-            response = await _do_request()
-        except Exception:
-            self._circuit_breaker.record_failure()
-            raise
-        self._circuit_breaker.record_success()
-
-        response.raise_for_status()
-        body = response.json()
-        results = body.get("results") or body.get("data") or []
+        ``searchField=4`` is contractor and ``searchField=6`` is beneficiary.
+        The source treats a code search as exact, while names remain partial.
+        """
+        normalized_afm = "".join(character for character in afm if character.isdigit())
+        responses = [
+            await self._search_company_field(normalized_afm, 4),
+            await self._search_company_field(normalized_afm, 6),
+        ]
+        results: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for response in responses:
+            for row in _result_rows(response.json()):
+                identifier = str(
+                    row.get("kodikos")
+                    or row.get("misCode")
+                    or row.get("mis_ops_code")
+                    or row.get("projectCode")
+                    or ""
+                )
+                dedupe_key = identifier or repr(sorted(row.items()))
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                results.append(row)
+        raw_body = b"\n".join(response.content for response in responses)
         return AnaptyxiBeneficiarySearchResponse(
-            afm=afm, results=results, raw_body=response.content, http_status=response.status_code
+            afm=normalized_afm,
+            results=results,
+            raw_body=raw_body,
+            http_status=max(response.status_code for response in responses),
         )

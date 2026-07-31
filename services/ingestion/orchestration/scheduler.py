@@ -198,15 +198,32 @@ async def run_due_jobs(
                 )
                 continue
 
-            partial_failures = int(result.get("records_failed", 0)) + int(result.get("enrichment_failed", 0))
+            core_failures = int(result.get("records_failed", 0))
+            enrichment_failures = int(result.get("enrichment_failed", 0)) + int(
+                result.get("enrichment_callbacks_failed", 0)
+            )
+            partial_failures = core_failures + enrichment_failures
             run_status = "PARTIAL" if partial_failures else "SUCCEEDED"
             run_error = None
             if partial_failures:
                 run_error = {
                     "message": f"{partial_failures} record/enrichment operation(s) failed",
-                    "failures": result.get("enrichment_failures", [])[:10],
+                    "core_failures": core_failures,
+                    "enrichment_failures": enrichment_failures,
+                    "failures": (
+                        result.get("record_failures", [])
+                        + result.get("enrichment_failures", [])
+                    )[:10],
                 }
 
+            cursor_values: dict[str, Any] = {
+                "last_error": run_error,
+            }
+            if core_failures == 0:
+                cursor_values.update(
+                    cursor_value={"last_ingested_date": date_to.isoformat()},
+                    last_success_at=now,
+                )
             await conn.execute(
                 source_cursors.update()
                 .where(
@@ -214,11 +231,7 @@ async def run_due_jobs(
                     source_cursors.c.resource_type == job.resource_type,
                     source_cursors.c.partition_key == job.partition_key,
                 )
-                .values(
-                    cursor_value={"last_ingested_date": date_to.isoformat()},
-                    last_success_at=now,
-                    last_error=None,
-                )
+                .values(**cursor_values)
             )
             await conn.execute(
                 connector_runs.update()
@@ -228,7 +241,27 @@ async def run_due_jobs(
                     finished_at=datetime.now(timezone.utc),
                     records_fetched=result.get("records_fetched", 0),
                     records_upserted=result.get("records_upserted", 0),
+                    records_unchanged=result.get("records_unchanged", 0),
+                    records_failed=core_failures,
+                    enrichment_succeeded=sum(
+                        int(value)
+                        for value in result.get("enrichment_succeeded", {}).values()
+                    ),
+                    enrichment_failed=enrichment_failures,
+                    enrichment_deferred=sum(
+                        int(value)
+                        for value in result.get("enrichment_deferred", {}).values()
+                    ),
                     pages_fetched=result.get("pages_fetched", 0),
+                    metrics={
+                        key: value
+                        for key, value in result.items()
+                        if key
+                        not in {
+                            "record_failures",
+                            "enrichment_failures",
+                        }
+                    },
                     error=run_error,
                 )
             )

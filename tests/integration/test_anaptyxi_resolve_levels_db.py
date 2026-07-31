@@ -31,7 +31,12 @@ import respx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from packages.domain.tables import funding_links
+from packages.domain.tables import (
+    funding_links,
+    funding_project_bodies,
+    funding_project_participations,
+    funding_projects,
+)
 from packages.source_clients.raw_store import LocalFilesystemRawStore
 from services.ingestion.connectors.anaptyxi.client import AnaptyxiClient
 from services.ingestion.connectors.anaptyxi.config import AnaptyxiConnectorConfig
@@ -49,6 +54,7 @@ KHMDHS_FIXTURE = json.loads(
 CONTRACT_RECORD = KHMDHS_FIXTURE["data"][0]  # ADAM 25SYMV012345678, buyer AFM 094259216, submissionDate 2025-01-10
 BASE_URL = "https://anaptyxi.example.test"
 BUYER_AFM = "094259216"
+CONTRACTOR_AFM = "090000045"
 
 
 def _asyncpg_url() -> str:
@@ -72,24 +78,49 @@ async def _seed_origin_act(conn):
     return ingest_result.act_upsert
 
 
+def _mock_official_lookup(
+    search_body: dict,
+    *,
+    exact_lookup: bool = True,
+) -> None:
+    route = respx.get(f"{BASE_URL}/GetData.ashx")
+    response = httpx.Response(200, json=search_body)
+    summary = search_body["results"][0]
+    detail = {
+        **summary,
+        "subprojects": [
+            {
+                "index": 1,
+                "title": f"{summary['title']} - υποέργο",
+                "budget": summary.get("budget"),
+            }
+        ],
+        "bodies": summary.get("bodies", []),
+        "geoamounts": [],
+    }
+    # One exact-MIS lookup followed by the two documented beneficiary
+    # search fields used for projects_v2, then the mandatory full detail.
+    route.side_effect = (
+        [httpx.Response(404)]
+        if exact_lookup
+        else []
+    ) + [response, response, httpx.Response(200, json=detail)]
+
+
 @respx.mock
 async def test_level2_afm_title_period_match(tmp_path):
-    respx.get(f"{BASE_URL}/projects", params={"misCode": "OPS-0001"}).mock(return_value=httpx.Response(404))
-    respx.get(f"{BASE_URL}/projects/search", params={"beneficiaryVatNumber": BUYER_AFM}).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "results": [
-                    {
-                        "misCode": "OPS-LEVEL2",
-                        "title": "Παροχή υπηρεσιών καθαρισμού δημοσίων κτιρίων - Έργο ΕΣΠΑ",
-                        "startDate": "2024-06-01",
-                        "endDate": "2026-06-01",
-                        "budget": 124000.00,
-                    }
-                ]
-            },
-        )
+    _mock_official_lookup(
+        {
+            "results": [
+                {
+                    "misCode": "OPS-LEVEL2",
+                    "title": "Παροχή υπηρεσιών καθαρισμού δημοσίων κτιρίων - Έργο ΕΣΠΑ",
+                    "startDate": "2024-06-01",
+                    "endDate": "2026-06-01",
+                    "budget": 124000.00,
+                }
+            ]
+        }
     )
 
     client = AnaptyxiClient(AnaptyxiConnectorConfig(base_url=BASE_URL, rate_limit_per_minute=6000))
@@ -128,20 +159,16 @@ async def test_level2_afm_title_period_match(tmp_path):
 
 @respx.mock
 async def test_level3_ada_in_metadata_match(tmp_path):
-    respx.get(f"{BASE_URL}/projects", params={"misCode": "OPS-0001"}).mock(return_value=httpx.Response(404))
-    respx.get(f"{BASE_URL}/projects/search", params={"beneficiaryVatNumber": BUYER_AFM}).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "results": [
-                    {
-                        "misCode": "OPS-LEVEL3",
-                        "title": "Εντελώς Άσχετος Τίτλος Έργου Αποχέτευσης",
-                        "relatedAda": "6Ω0Ζ465ΦΘΘ-ΔΕΖ",
-                    }
-                ]
-            },
-        )
+    _mock_official_lookup(
+        {
+            "results": [
+                {
+                    "misCode": "OPS-LEVEL3",
+                    "title": "Εντελώς Άσχετος Τίτλος Έργου Αποχέτευσης",
+                    "relatedAda": "6Ω0Ζ465ΦΘΘ-ΔΕΖ",
+                }
+            ]
+        }
     )
 
     client = AnaptyxiClient(AnaptyxiConnectorConfig(base_url=BASE_URL, rate_limit_per_minute=6000))
@@ -183,20 +210,16 @@ async def test_level3_ada_in_metadata_match(tmp_path):
 
 @respx.mock
 async def test_level4_fuzzy_match_is_flagged_for_review(tmp_path):
-    respx.get(f"{BASE_URL}/projects", params={"misCode": "OPS-0001"}).mock(return_value=httpx.Response(404))
-    respx.get(f"{BASE_URL}/projects/search", params={"beneficiaryVatNumber": BUYER_AFM}).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "results": [
-                    {
-                        "misCode": "OPS-LEVEL4",
-                        "title": "Καθαρισμός Δημοτικών Κτιρίων",  # no startDate/endDate at all -> Level 2 rejects on missing period, not title
-                        "budget": 120000.00,  # within 15% of 124000.00
-                    }
-                ]
-            },
-        )
+    _mock_official_lookup(
+        {
+            "results": [
+                {
+                    "misCode": "OPS-LEVEL4",
+                    "title": "Καθαρισμός Δημοτικών Κτιρίων",
+                    "budget": 120000.00,
+                }
+            ]
+        }
     )
 
     client = AnaptyxiClient(AnaptyxiConnectorConfig(base_url=BASE_URL, rate_limit_per_minute=6000))
@@ -231,6 +254,97 @@ async def test_level4_fuzzy_match_is_flagged_for_review(tmp_path):
             assert float(link_row.confidence) == 0.60
             assert link_row.reviewed_by is None
             assert link_row.evidence["needs_review"] is True
+    finally:
+        await client.aclose()
+        await engine.dispose()
+
+
+@respx.mock
+async def test_unlinked_contractor_project_still_enriches_supplier_profile(
+    tmp_path,
+):
+    _mock_official_lookup(
+        {
+            "results": [
+                {
+                    "misCode": "OPS-SUPPLIER-HISTORY",
+                    "title": "Απολύτως διαφορετικό χρηματοδοτούμενο έργο",
+                    "budget": 900000.00,
+                    "bodies": [
+                        {
+                            "bodyCategory": "ΑΝΑΔΟΧΟΣ",
+                            "name": "Supplier from funding source",
+                        }
+                    ],
+                }
+            ]
+        },
+        exact_lookup=False,
+    )
+
+    client = AnaptyxiClient(
+        AnaptyxiConnectorConfig(
+            base_url=BASE_URL,
+            rate_limit_per_minute=6000,
+        )
+    )
+    raw_store = LocalFilesystemRawStore(tmp_path / "raw")
+    engine = create_async_engine(_asyncpg_url())
+
+    try:
+        async with engine.connect() as conn:
+            act_upsert = await _seed_origin_act(conn)
+            funding_project_id = await resolve_funding_link_for_act(
+                conn,
+                client=client,
+                raw_store=raw_store,
+                act_id=act_upsert.act_id,
+                mis_candidates=[],
+                beneficiary_afm=BUYER_AFM,
+                contractor_afm=CONTRACTOR_AFM,
+                act_title=CONTRACT_RECORD["title"],
+            )
+            assert funding_project_id is None
+
+            project_id = (
+                await conn.execute(
+                    select(funding_projects.c.id).where(
+                        funding_projects.c.mis_ops_code
+                        == "OPS-SUPPLIER-HISTORY"
+                    )
+                )
+            ).scalar_one()
+            body = (
+                await conn.execute(
+                    select(funding_project_bodies).where(
+                        funding_project_bodies.c.funding_project_id
+                        == project_id
+                    )
+                )
+            ).one()
+            assert body.body_category == "ΑΝΑΔΟΧΟΣ"
+            participation = (
+                await conn.execute(
+                    select(funding_project_participations).where(
+                        funding_project_participations.c.funding_project_id
+                        == project_id,
+                        funding_project_participations.c.entity_id
+                        == act_upsert.contractor_entity_id,
+                    )
+                )
+            ).one()
+            assert participation.role == "CONTRACTOR"
+            assert participation.link_method == "ANAPTYXI_AFM_QUERY"
+            assert float(participation.confidence) == 1.0
+            assert participation.evidence["queried_afm"] == CONTRACTOR_AFM
+            assert not (
+                await conn.execute(
+                    select(funding_links.c.id).where(
+                        funding_links.c.funding_project_id == project_id,
+                        funding_links.c.act_id == act_upsert.act_id,
+                    )
+                )
+            ).first()
     finally:
         await client.aclose()
         await engine.dispose()

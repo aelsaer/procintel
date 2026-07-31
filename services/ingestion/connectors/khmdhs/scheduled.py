@@ -41,8 +41,18 @@ from packages.source_clients.raw_store import LocalFilesystemRawStore
 from services.alerts.delivery import DeliveryChannel
 from services.alerts.evaluate import evaluate_and_fire, evaluate_company_status_change_and_fire
 from services.alerts.factory import build_delivery_channel
+from services.ingestion.enrichment_queue import (
+    complete_enrichment,
+    defer_enrichment,
+    enqueue_enrichment,
+    fail_enrichment,
+    start_enrichment,
+)
 from services.ingestion.connectors.anaptyxi.client import AnaptyxiClient
-from services.ingestion.connectors.anaptyxi.config import AnaptyxiConnectorConfig
+from services.ingestion.connectors.anaptyxi.config import (
+    SUPPORTED_PROGRAM_PERIODS,
+    AnaptyxiConnectorConfig,
+)
 from services.ingestion.connectors.anaptyxi.resolve import resolve_funding_link_for_act
 from services.ingestion.connectors.diavgeia.client import DiavgeiaClient
 from services.ingestion.connectors.diavgeia.config import DiavgeiaConnectorConfig
@@ -164,6 +174,10 @@ async def run_scheduled_window(
     mef_config: MefConnectorConfig | None = None,
     provider_lookup_budgets: dict[str, int] | None = None,
     process_documents: bool = False,
+    inline_enrichment_providers: set[str] | None = None,
+    queue_unconfigured_providers: bool = False,
+    max_pages_per_resource: int | None = None,
+    max_records_per_resource: int | None = None,
 ) -> dict[str, Any]:
     config = KhmdhsConnectorConfig.from_env()
     client = KhmdhsClient(config)
@@ -184,7 +198,10 @@ async def run_scheduled_window(
         "pages_fetched": 0,
         "records_fetched": 0,
         "records_upserted": 0,
+        "records_unchanged": 0,
         "records_failed": 0,
+        "enrichment_callbacks_failed": 0,
+        "record_failures": [],
         "enrichment_attempts": {},
         "enrichment_succeeded": {},
         "enrichment_failed": 0,
@@ -192,16 +209,65 @@ async def run_scheduled_window(
         "enrichment_failures": [],
     }
 
-    async def _attempt(provider: str, adam: str, operation):
+    async def _attempt(
+        provider: str,
+        adam: str,
+        operation,
+        *,
+        payload: dict[str, Any] | None = None,
+        object_type: str | None = None,
+        object_id: Any | None = None,
+        source_record_id: Any | None = None,
+        durable: bool = True,
+    ):
+        job = None
+        if durable and hasattr(conn, "execute"):
+            job = await enqueue_enrichment(
+                conn,
+                provider=provider,
+                idempotency_key=adam,
+                payload=payload or {"reference": adam},
+                object_type=object_type,
+                object_id=object_id,
+                source_record_id=source_record_id,
+            )
+            if job.status == "SUCCEEDED":
+                totals["enrichment_succeeded"][provider] = (
+                    totals["enrichment_succeeded"].get(provider, 0) + 1
+                )
+                return None, True
+            if (
+                inline_enrichment_providers is not None
+                and provider not in inline_enrichment_providers
+            ):
+                totals["enrichment_deferred"][provider] = (
+                    totals["enrichment_deferred"].get(provider, 0) + 1
+                )
+                await defer_enrichment(conn, job.id)
+                return None, False
         budget = (provider_lookup_budgets or {}).get(provider)
         attempted = totals["enrichment_attempts"].get(provider, 0)
         if budget is not None and attempted >= budget:
             totals["enrichment_deferred"][provider] = totals["enrichment_deferred"].get(provider, 0) + 1
+            if job is not None:
+                await defer_enrichment(conn, job.id)
+            return None, False
+        if job is not None and not await start_enrichment(conn, job.id):
+            totals["enrichment_deferred"][provider] = (
+                totals["enrichment_deferred"].get(provider, 0) + 1
+            )
             return None, False
         totals["enrichment_attempts"][provider] = totals["enrichment_attempts"].get(provider, 0) + 1
         try:
             value = await operation()
         except Exception as exc:  # noqa: BLE001 - each provider is an independent failure boundary
+            error = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "reference": adam,
+            }
+            if job is not None:
+                await fail_enrichment(conn, job.id, error=error)
             totals["enrichment_failed"] += 1
             if len(totals["enrichment_failures"]) < _MAX_RECORDED_ENRICHMENT_FAILURES:
                 totals["enrichment_failures"].append(
@@ -213,6 +279,8 @@ async def run_scheduled_window(
                 )
             _logger.exception("%s enrichment failed for %s", provider, adam)
             return None, False
+        if job is not None:
+            await complete_enrichment(conn, job.id)
         totals["enrichment_succeeded"][provider] = totals["enrichment_succeeded"].get(provider, 0) + 1
         return value, True
 
@@ -234,7 +302,16 @@ async def run_scheduled_window(
                     resource=resource,
                     adam=result.adam_normalized,
                     act_id=result.act_upsert.act_id,
+                    rate_limiter=client.request_rate_limiter,
                 ),
+                payload={
+                    "resource": resource,
+                    "adam": result.adam_normalized,
+                    "act_id": str(result.act_upsert.act_id),
+                },
+                object_type="procurement_act",
+                object_id=result.act_upsert.act_id,
+                source_record_id=result.source_record_id,
             )
 
         await _attempt(
@@ -247,6 +324,10 @@ async def run_scheduled_window(
                 seed_adam_normalized=result.adam_normalized,
                 delivery_channel=delivery_channel,
             ),
+            payload={"adam": result.adam_normalized},
+            object_type="procurement_act",
+            object_id=result.act_upsert.act_id if result.act_upsert is not None else None,
+            source_record_id=result.source_record_id,
         )
         if result.act_upsert is not None:
             await _attempt(
@@ -257,6 +338,7 @@ async def run_scheduled_window(
                     act_upsert=result.act_upsert,
                     delivery_channel=delivery_channel,
                 ),
+                durable=False,
             )
 
         if diavgeia_client is not None and result.act_upsert is not None:
@@ -276,7 +358,7 @@ async def run_scheduled_window(
                     attempted_diavgeia_adas.add(ada)
                     decision_act_id, succeeded = await _attempt(
                         "DIAVGEIA",
-                        result.adam_normalized,
+                        f"{ada}:{result.act_upsert.act_id}",
                         lambda ada=ada: resolve_decision_for_ada(
                             inner_conn,
                             client=diavgeia_client,
@@ -285,6 +367,13 @@ async def run_scheduled_window(
                             origin_act_id=result.act_upsert.act_id,
                             process_documents=False,
                         ),
+                        payload={
+                            "ada": ada,
+                            "origin_act_id": str(result.act_upsert.act_id),
+                        },
+                        object_type="procurement_act",
+                        object_id=result.act_upsert.act_id,
+                        source_record_id=result.source_record_id,
                     )
                     any_direct_link = any_direct_link or (succeeded and decision_act_id is not None)
             if diavgeia_search and not any_direct_link:
@@ -292,7 +381,7 @@ async def run_scheduled_window(
                 if title and buyer_name:
                     await _attempt(
                         "DIAVGEIA_SEARCH",
-                        result.adam_normalized,
+                        str(result.act_upsert.act_id),
                         lambda: resolve_decision_via_search(
                             inner_conn,
                             client=diavgeia_client,
@@ -302,83 +391,159 @@ async def run_scheduled_window(
                             title_query=title,
                             process_documents=False,
                         ),
+                        payload={
+                            "origin_act_id": str(result.act_upsert.act_id),
+                            "organization_query": buyer_name,
+                            "title_query": title,
+                        },
+                        object_type="procurement_act",
+                        object_id=result.act_upsert.act_id,
+                        source_record_id=result.source_record_id,
                     )
 
-        if (
-            gemi_provider is not None
-            and result.act_upsert is not None
-            and result.act_upsert.contractor_entity_id is not None
-            and result.act_upsert.contractor_afm_normalized
-            and result.act_upsert.contractor_afm_normalized not in attempted_gemi_afms
-        ):
-            attempted_gemi_afms.add(result.act_upsert.contractor_afm_normalized)
-            snapshot_result, succeeded = await _attempt(
-                "GEMI",
-                result.adam_normalized,
-                lambda: resolve_company_snapshot(
-                    inner_conn,
-                    provider=gemi_provider,
-                    raw_store=raw_store,
-                    afm_normalized=result.act_upsert.contractor_afm_normalized,
-                    entity_id=result.act_upsert.contractor_entity_id,
-                ),
-            )
-            if succeeded and snapshot_result is not None and snapshot_result.wrote_new_snapshot:
-                await _attempt(
-                    "COMPANY_STATUS_ALERTS",
-                    result.adam_normalized,
-                    lambda: evaluate_company_status_change_and_fire(
-                        inner_conn,
-                        entity_id=result.act_upsert.contractor_entity_id,
-                        old_status=snapshot_result.old_status,
-                        new_status=snapshot_result.new_status,
-                        delivery_channel=delivery_channel,
-                    ),
-                )
+        contractor_entities = (
+            result.act_upsert.contractor_entities
+            if result.act_upsert is not None
+            else []
+        )
+        if gemi_provider is not None or queue_unconfigured_providers:
+            for contractor_entity_id, contractor_afm in contractor_entities:
+                if not contractor_afm or contractor_afm in attempted_gemi_afms:
+                    continue
+                attempted_gemi_afms.add(contractor_afm)
 
-        if anaptyxi_clients and result.act_upsert is not None and (
-            result.act_upsert.funding_ref_candidates or result.act_upsert.contractor_afm_normalized
+                async def _resolve_gemi(
+                    entity_id=contractor_entity_id,
+                    afm=contractor_afm,
+                ):
+                    if gemi_provider is None:
+                        raise RuntimeError("GEMI_API_KEY is not configured")
+                    return await resolve_company_snapshot(
+                        inner_conn,
+                        provider=gemi_provider,
+                        raw_store=raw_store,
+                        afm_normalized=afm,
+                        entity_id=entity_id,
+                    )
+
+                snapshot_result, succeeded = await _attempt(
+                    "GEMI",
+                    contractor_afm,
+                    _resolve_gemi,
+                    payload={
+                        "entity_id": str(contractor_entity_id),
+                        "afm": contractor_afm,
+                    },
+                    object_type="entity",
+                    object_id=contractor_entity_id,
+                    source_record_id=result.source_record_id,
+                )
+                if succeeded and snapshot_result is not None and snapshot_result.wrote_new_snapshot:
+                    await _attempt(
+                        "COMPANY_STATUS_ALERTS",
+                        f"{result.adam_normalized}:{contractor_afm}",
+                        lambda contractor_entity_id=contractor_entity_id, snapshot_result=snapshot_result: evaluate_company_status_change_and_fire(
+                            inner_conn,
+                            entity_id=contractor_entity_id,
+                            old_status=snapshot_result.old_status,
+                            new_status=snapshot_result.new_status,
+                            delivery_channel=delivery_channel,
+                        ),
+                        durable=False,
+                    )
+
+        anaptyxi_by_period = {
+            provider_client.program_period: provider_client
+            for provider_client in anaptyxi_clients
+        }
+        anaptyxi_periods = list(anaptyxi_by_period)
+        if queue_unconfigured_providers:
+            anaptyxi_periods = list(SUPPORTED_PROGRAM_PERIODS)
+        if anaptyxi_periods and result.act_upsert is not None and (
+            result.act_upsert.funding_ref_candidates
+            or result.act_upsert.related_ada
         ):
             act_details = await _fetch_act_details_for_anaptyxi(inner_conn, result.act_upsert.act_id)
-            for anaptyxi_client in anaptyxi_clients:
-                await _attempt(
-                    anaptyxi_client.program_period,
-                    result.adam_normalized,
-                    lambda anaptyxi_client=anaptyxi_client: resolve_funding_link_for_act(
-                        inner_conn,
-                        client=anaptyxi_client,
-                        raw_store=raw_store,
-                        act_id=result.act_upsert.act_id,
-                        mis_candidates=result.act_upsert.funding_ref_candidates,
-                        beneficiary_afm=act_details["buyer_afm"],
-                        contractor_afm=result.act_upsert.contractor_afm_normalized,
-                        act_title=act_details["title"],
-                        act_date=act_details["date"],
-                        related_ada_candidates=result.act_upsert.related_ada,
-                        act_amount=act_details["amount"],
-                        act_region=act_details["region"],
-                    ),
-                )
+            contractor_afms = [afm for _, afm in contractor_entities if afm] or [None]
+            for program_period in anaptyxi_periods:
+                anaptyxi_client = anaptyxi_by_period.get(program_period)
+                for contractor_afm in contractor_afms:
 
-        if (
-            mef_client is not None
-            and result.act_upsert is not None
-            and result.act_upsert.contractor_entity_id is not None
-            and result.act_upsert.contractor_afm_normalized
-            and result.act_upsert.contractor_afm_normalized not in attempted_mef_afms
-        ):
-            attempted_mef_afms.add(result.act_upsert.contractor_afm_normalized)
-            await _attempt(
-                "MEF",
-                result.adam_normalized,
-                lambda: resolve_expenses_for_contractor(
-                    inner_conn,
-                    client=mef_client,
-                    raw_store=raw_store,
-                    contractor_entity_id=result.act_upsert.contractor_entity_id,
-                    afm_normalized=result.act_upsert.contractor_afm_normalized,
-                ),
-            )
+                    async def _resolve_anaptyxi(
+                        client=anaptyxi_client,
+                        afm=contractor_afm,
+                        period=program_period,
+                    ):
+                        if client is None:
+                            raise RuntimeError(f"{period}_API_BASE_URL is not configured")
+                        return await resolve_funding_link_for_act(
+                            inner_conn,
+                            client=client,
+                            raw_store=raw_store,
+                            act_id=result.act_upsert.act_id,
+                            mis_candidates=result.act_upsert.funding_ref_candidates,
+                            beneficiary_afm=act_details["buyer_afm"],
+                            contractor_afm=afm,
+                            act_title=act_details["title"],
+                            act_date=act_details["date"],
+                            related_ada_candidates=result.act_upsert.related_ada,
+                            act_amount=act_details["amount"],
+                            act_region=act_details["region"],
+                        )
+
+                    await _attempt(
+                        program_period,
+                        (
+                            f"{result.act_upsert.act_id}:"
+                            f"{contractor_afm or 'buyer'}"
+                        ),
+                        _resolve_anaptyxi,
+                        payload={
+                            "act_id": str(result.act_upsert.act_id),
+                            "contractor_afm": contractor_afm,
+                            "funding_ref_candidates": [
+                                list(candidate)
+                                for candidate in result.act_upsert.funding_ref_candidates
+                            ],
+                            "related_ada": result.act_upsert.related_ada,
+                        },
+                        object_type="procurement_act",
+                        object_id=result.act_upsert.act_id,
+                        source_record_id=result.source_record_id,
+                    )
+
+        if mef_client is not None or queue_unconfigured_providers:
+            for contractor_entity_id, contractor_afm in contractor_entities:
+                if not contractor_afm or contractor_afm in attempted_mef_afms:
+                    continue
+                attempted_mef_afms.add(contractor_afm)
+
+                async def _resolve_mef(
+                    entity_id=contractor_entity_id,
+                    afm=contractor_afm,
+                ):
+                    if mef_client is None:
+                        raise RuntimeError("MEF connector is not configured")
+                    return await resolve_expenses_for_contractor(
+                        inner_conn,
+                        client=mef_client,
+                        raw_store=raw_store,
+                        contractor_entity_id=entity_id,
+                        afm_normalized=afm,
+                    )
+
+                await _attempt(
+                    "MEF",
+                    contractor_afm,
+                    _resolve_mef,
+                    payload={
+                        "entity_id": str(contractor_entity_id),
+                        "afm": contractor_afm,
+                    },
+                    object_type="entity",
+                    object_id=contractor_entity_id,
+                    source_record_id=result.source_record_id,
+                )
 
         if opensearch_http_client is not None and opensearch_config is not None and result.act_upsert is not None:
             await _attempt(
@@ -390,10 +555,19 @@ async def run_scheduled_window(
                     opensearch_config,
                     result.act_upsert.act_id,
                 ),
+                payload={"act_id": str(result.act_upsert.act_id)},
+                object_type="procurement_act",
+                object_id=result.act_upsert.act_id,
+                source_record_id=result.source_record_id,
             )
 
     try:
         for resource in sorted(ALL_RESOURCES):
+            partition_budgets: dict[str, int] = {}
+            if max_pages_per_resource is not None:
+                partition_budgets["max_pages"] = max_pages_per_resource
+            if max_records_per_resource is not None:
+                partition_budgets["max_records"] = max_records_per_resource
             partition_result = await ingest_khmdhs_partition(
                 client=client,
                 raw_store=raw_store,
@@ -403,11 +577,29 @@ async def run_scheduled_window(
                 date_to=date_to,
                 on_ingest_result=_on_ingest_result,
                 enrich_deduplicated=True,
+                **partition_budgets,
             )
             totals["pages_fetched"] += partition_result.pages_fetched
             totals["records_fetched"] += partition_result.records_seen
             totals["records_upserted"] += partition_result.records_ingested
-            totals["records_failed"] += partition_result.records_failed
+            totals["records_unchanged"] += getattr(partition_result, "records_unchanged", 0)
+            totals["records_failed"] += getattr(
+                partition_result,
+                "core_records_failed",
+                partition_result.records_failed,
+            )
+            totals["enrichment_callbacks_failed"] += getattr(
+                partition_result,
+                "enrichment_callbacks_failed",
+                0,
+            )
+            remaining_failure_slots = (
+                _MAX_RECORDED_ENRICHMENT_FAILURES - len(totals["record_failures"])
+            )
+            if remaining_failure_slots > 0:
+                totals["record_failures"].extend(
+                    getattr(partition_result, "failed_records", [])[:remaining_failure_slots]
+                )
     finally:
         await client.aclose()
         if diavgeia_client is not None:

@@ -18,7 +18,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from packages.domain.tables import facilities
+from packages.domain.tables import external_datasets, facilities
 from services.ingestion.connectors.ckan.db_writer import ingest_facilities_dataset
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -44,6 +44,16 @@ async def test_schools_ingested_with_and_without_geometry_and_replaced_on_change
 
     try:
         async with engine.connect() as conn:
+            await conn.execute(
+                external_datasets.insert().values(
+                    id=external_dataset_id,
+                    catalog_source="TEST",
+                    catalog_dataset_id=f"schools-{external_dataset_id}",
+                    title="Schools fixture",
+                    ingestion_status="ONBOARDED",
+                    adapter_name="facilities",
+                )
+            )
             result = await ingest_facilities_dataset(
                 conn,
                 external_dataset_id=external_dataset_id,

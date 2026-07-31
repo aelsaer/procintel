@@ -3,7 +3,7 @@
 Open Data ΓΕΜΗ connector (spec §3.3, §18). Company identity enrichment keyed
 by ΑΦΜ.
 
-## Status: implemented (find-by-ΑΦΜ enrichment)
+## Status: implemented
 
 | Module | Purpose |
 |---|---|
@@ -40,12 +40,10 @@ company-law terminology, not a guess about ΓΕΜΗ's API specifically — what'
 still unconfirmed is exactly which raw string spelling ΓΕΜΗ's API sends
 for each, hence the handful of variants mapped per code.
 
-## Not yet implemented
+## Resolution and UI
 
-`find_by_gemi` wiring into `resolve.py` (only ΑΦΜ-triggered lookup is used
-so far — `search()` is implemented but has no caller yet either; it's a
-capability for future use cases like entity-resolution disambiguation or a
-manual lookup UI, not something the ΑΦΜ-triggered enrichment flow needs),
-and a query UI for attribute searches. Public documents and announcements
-are already retrieved with each refreshed company and preserved in the raw
-snapshot.
+`resolve_company_by_gemi()` supports exact ΓΕΜΗ-number resolution.
+`GET /v1/companies/registry/search` exposes name, KAD, status, prefecture
+and municipality searches, and the source-operations workspace provides
+the corresponding manual lookup UI. Public documents and announcements
+are retained with every refreshed snapshot.

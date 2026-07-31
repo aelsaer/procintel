@@ -30,9 +30,34 @@ from services.alerts.webhook_delivery import retry_pending_deliveries
 from services.analytics.opportunity_scoring import score_opportunities_for_tenant
 from services.analytics.refresh import refresh_all_marts
 from services.competitors.participation import backfill_winner_participations
+from services.data_quality.service import run_data_quality_checks
+from services.data_quality.completeness import persist_source_completeness_snapshots
+from services.bids.reminders import deliver_due_reminders
+from services.exports.generate import cleanup_expired_exports
 from services.geospatial.config import GeocoderConfig
 from services.geospatial.service import run_pending_jobs
-from services.ingestion.connectors.ckan.scheduled import refresh_due_ckan_datasets
+from services.ingestion.connectors.ckan.scheduled import (
+    onboard_default_ckan_datasets,
+    refresh_due_ckan_datasets,
+)
+from services.ingestion.connectors.inspire.scheduled import (
+    refresh_inspire_reference_sources,
+)
+from services.ingestion.connectors.anaptyxi.config import SUPPORTED_PROGRAM_PERIODS
+from services.ingestion.enrichment_worker import run_pending_enrichment_jobs
+from services.ingestion.enrichment_reconciliation import (
+    enqueue_process_diavgeia_search_jobs,
+)
+from services.intelligence.pre_tender import refresh_derived_procurement_signals
+from services.intelligence.decision_makers import refresh_decision_makers
+from services.intelligence.frameworks import refresh_framework_memberships
+from services.intelligence.eu_benchmarking import (
+    refresh_all_cross_border_matches,
+    refresh_eu_benchmark_snapshots,
+)
+from services.product.document_tools import evaluate_all_phrase_monitors
+from services.search_index.catalog import reindex_catalogs
+from services.search_index.config import OpenSearchConfig
 
 from .jobs import default_jobs
 from .scheduler import run_due_jobs
@@ -84,7 +109,7 @@ async def _run_once(
     with_geospatial: bool = True,
     with_competition: bool = True,
     with_opportunity_scoring: bool = True,
-    geospatial_max_jobs: int = 500,
+    geospatial_max_jobs: int = 12000,
     scoring_lookback_days: int = 120,
     logical_timezone: str = DEFAULT_DAILY_TIMEZONE,
 ) -> None:
@@ -109,8 +134,97 @@ async def _run_once(
             else:
                 print("no ingestion jobs configured")
 
+            try:
+                enrichment_limit = int(
+                    os.environ.get("DAILY_ENRICHMENT_MAX_JOBS", "30000")
+                )
+                adamchain_budget = int(
+                    os.environ.get("DAILY_ADAMCHAIN_MAX_LOOKUPS", "12000")
+                )
+                adamchain_result = await run_pending_enrichment_jobs(
+                    conn,
+                    raw_root=raw_root,
+                    limit=max(enrichment_limit, adamchain_budget * 10),
+                    providers={"KHMDHS_ADAMCHAIN"},
+                    provider_budgets={
+                        "KHMDHS_ADAMCHAIN": adamchain_budget,
+                    },
+                )
+                diavgeia_search_jobs = (
+                    await enqueue_process_diavgeia_search_jobs(conn)
+                )
+                enrichment_result = await run_pending_enrichment_jobs(
+                    conn,
+                    raw_root=raw_root,
+                    limit=enrichment_limit,
+                    providers={
+                        "KHMDHS_DOCUMENT",
+                        "DIAVGEIA",
+                        "DIAVGEIA_SEARCH",
+                        "GEMI",
+                        "MEF",
+                        *SUPPORTED_PROGRAM_PERIODS,
+                    },
+                    provider_budgets={
+                        "KHMDHS_DOCUMENT": int(
+                            os.environ.get("DAILY_DOCUMENT_MAX_DOWNLOADS", "10000")
+                        ),
+                        "DIAVGEIA": int(
+                            os.environ.get("DAILY_DIAVGEIA_MAX_LOOKUPS", "1000")
+                        ),
+                        "DIAVGEIA_SEARCH": int(
+                            os.environ.get("DAILY_DIAVGEIA_MAX_LOOKUPS", "1000")
+                        ),
+                        "GEMI": int(
+                            os.environ.get("DAILY_GEMI_MAX_LOOKUPS", "500")
+                        ),
+                        "MEF": int(
+                            os.environ.get("DAILY_MEF_MAX_LOOKUPS", "500")
+                        ),
+                        **{
+                            period: int(
+                                os.environ.get(
+                                    "DAILY_ANAPTYXI_MAX_LOOKUPS_PER_PERIOD",
+                                    "500",
+                                )
+                            )
+                            for period in SUPPORTED_PROGRAM_PERIODS
+                        },
+                    },
+                )
+                print(
+                    "adamChain enrichment queue: "
+                    f"claimed={adamchain_result.claimed} "
+                    f"succeeded={adamchain_result.succeeded} "
+                    f"failed={adamchain_result.failed} "
+                    f"deferred={adamchain_result.deferred}; "
+                    "process Διαύγεια searches queued="
+                    f"{diavgeia_search_jobs}"
+                )
+                print(
+                    "provider enrichment queue: "
+                    f"claimed={enrichment_result.claimed} "
+                    f"succeeded={enrichment_result.succeeded} "
+                    f"failed={enrichment_result.failed} "
+                    f"blocked_config={enrichment_result.blocked_config} "
+                    f"blocked_upstream={enrichment_result.blocked_upstream} "
+                    f"deferred={enrichment_result.deferred} "
+                    f"providers={enrichment_result.by_provider}"
+                )
+            except Exception as exc:  # noqa: BLE001 - downstream stages must still run
+                await conn.rollback()
+                print(
+                    "provider enrichment queue: FAILED -> "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
             if with_ckan_refresh:
                 try:
+                    onboarded = await onboard_default_ckan_datasets(
+                        conn, database_url=database_url, raw_root=raw_root
+                    )
+                    for dataset_id in onboarded:
+                        print(f"CKAN/default/{dataset_id}: onboarded and validated")
                     ckan_outcomes = await refresh_due_ckan_datasets(
                         conn, database_url=database_url, raw_root=raw_root
                     )
@@ -125,6 +239,23 @@ async def _run_once(
                 except Exception as exc:  # noqa: BLE001 - downstream stages must still run
                     await conn.rollback()
                     print(f"CKAN refresh sweep: FAILED -> {type(exc).__name__}: {exc}")
+
+            try:
+                inspire_result = await refresh_inspire_reference_sources(
+                    conn,
+                    raw_root=raw_root,
+                )
+                print(
+                    "INSPIRE references: "
+                    f"ktimatologio={inspire_result.ktimatologio.status} "
+                    f"http={inspire_result.ktimatologio.http_status} "
+                    f"layers={inspire_result.ktimatologio.layer_count} "
+                    f"nuts_rows={inspire_result.nuts.rows_written} "
+                    f"postal_codes={inspire_result.postal_nuts.postal_codes}"
+                )
+            except Exception as exc:  # noqa: BLE001 - downstream stages must still run
+                await conn.rollback()
+                print(f"INSPIRE reference sweep: FAILED -> {type(exc).__name__}: {exc}")
 
             if with_competition:
                 try:
@@ -150,6 +281,81 @@ async def _run_once(
                     await conn.rollback()
                     print(f"geospatial queue: FAILED -> {type(exc).__name__}: {exc}")
 
+            try:
+                quality_result = await run_data_quality_checks(
+                    conn,
+                    date_from=(
+                        datetime.now(ZoneInfo(logical_timezone)).date()
+                        - timedelta(days=7)
+                    ),
+                    date_to=datetime.now(ZoneInfo(logical_timezone)).date(),
+                )
+                print(
+                    "data quality: "
+                    f"opened={quality_result.issues_opened} "
+                    f"resolved={quality_result.issues_resolved} "
+                    f"invalid_dates_repaired={quality_result.invalid_dates_repaired} "
+                    f"by_code={quality_result.by_code}"
+                )
+            except Exception as exc:  # noqa: BLE001 - marts can still refresh from existing data
+                await conn.rollback()
+                print(f"data quality: FAILED -> {type(exc).__name__}: {exc}")
+
+            try:
+                completeness = await persist_source_completeness_snapshots(conn)
+                statuses = {
+                    assessment.source_system: assessment.status
+                    for assessment in completeness
+                }
+                print(f"source completeness: {statuses}")
+            except Exception as exc:  # noqa: BLE001 - marts can still refresh from existing data
+                await conn.rollback()
+                print(f"source completeness: FAILED -> {type(exc).__name__}: {exc}")
+
+            try:
+                stakeholder_counts = await refresh_decision_makers(conn)
+                print(f"buyer stakeholders: {stakeholder_counts}")
+            except Exception as exc:  # noqa: BLE001 - marts can still refresh from existing data
+                await conn.rollback()
+                print(f"buyer stakeholders: FAILED -> {type(exc).__name__}: {exc}")
+
+            try:
+                framework_memberships = await refresh_framework_memberships(conn)
+                print(f"framework memberships: upserted={framework_memberships}")
+            except Exception as exc:  # noqa: BLE001 - marts can still refresh from existing data
+                await conn.rollback()
+                print(f"framework memberships: FAILED -> {type(exc).__name__}: {exc}")
+
+            try:
+                phrase_results = await evaluate_all_phrase_monitors(conn)
+                print(f"document phrase monitors: {phrase_results}")
+            except Exception as exc:  # noqa: BLE001 - marts can still refresh from existing data
+                await conn.rollback()
+                print(f"document phrase monitors: FAILED -> {type(exc).__name__}: {exc}")
+
+            try:
+                benchmark_days = int(os.environ.get("TED_BENCHMARK_LOOKBACK_DAYS", "365"))
+                today = datetime.now(ZoneInfo(logical_timezone)).date()
+                benchmark_count = await refresh_eu_benchmark_snapshots(
+                    conn,
+                    date_from=today - timedelta(days=benchmark_days),
+                    date_to=today,
+                    snapshot_date=today,
+                )
+                cross_border_runs = await refresh_all_cross_border_matches(
+                    conn,
+                    as_of=today,
+                )
+                print(
+                    "European intelligence: "
+                    f"cohorts={benchmark_count} "
+                    f"tenants={len(cross_border_runs)} "
+                    f"matches={sum(run.matches_written for run in cross_border_runs)}"
+                )
+            except Exception as exc:  # noqa: BLE001 - marts can still refresh from existing data
+                await conn.rollback()
+                print(f"European intelligence: FAILED -> {type(exc).__name__}: {exc}")
+
             if with_marts:
                 try:
                     mart_outcomes = await refresh_all_marts(conn)
@@ -161,6 +367,17 @@ async def _run_once(
                 except Exception as exc:  # noqa: BLE001 - scoring and delivery must still run
                     await conn.rollback()
                     print(f"mart refresh: FAILED -> {type(exc).__name__}: {exc}")
+
+            try:
+                signal_result = await refresh_derived_procurement_signals(conn)
+                print(
+                    "pre-tender signals: "
+                    f"early={signal_result.early_requests} "
+                    f"expiring={signal_result.expiring_contracts}"
+                )
+            except Exception as exc:  # noqa: BLE001 - scoring and delivery must still run
+                await conn.rollback()
+                print(f"pre-tender signals: FAILED -> {type(exc).__name__}: {exc}")
 
             if with_opportunity_scoring:
                 try:
@@ -178,14 +395,45 @@ async def _run_once(
                     await conn.rollback()
                     print(f"tenant opportunity scoring: FAILED -> {type(exc).__name__}: {exc}")
 
+            try:
+                search_config = OpenSearchConfig.from_env()
+            except RuntimeError as exc:
+                print(f"search catalog refresh: inactive -> {exc}")
+            else:
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=search_config.request_timeout_seconds
+                    ) as search_client:
+                        catalog_result = await reindex_catalogs(
+                            conn,
+                            search_client,
+                            search_config,
+                        )
+                    print(f"search catalogs: indexed={catalog_result.counts}")
+                except Exception as exc:  # noqa: BLE001 - delivery must still run
+                    await conn.rollback()
+                    print(
+                        "search catalog refresh: FAILED -> "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+
             if with_webhook_retries:
                 try:
                     async with httpx.AsyncClient(timeout=10.0) as client:
                         retried = await retry_pending_deliveries(conn, client)
+                        reminder_counts = await deliver_due_reminders(conn, client)
                     print(f"webhook delivery retries: processed={retried}")
+                    print(f"bid reminders: {reminder_counts}")
                 except Exception as exc:  # noqa: BLE001 - report without hiding the completed ingestion
                     await conn.rollback()
                     print(f"webhook delivery retries: FAILED -> {type(exc).__name__}: {exc}")
+
+            try:
+                expired_exports = await cleanup_expired_exports(conn)
+                print(f"expired exports: cleaned={expired_exports}")
+            except Exception as exc:  # noqa: BLE001 - maintenance must not hide completed ingestion
+                await conn.rollback()
+                print(f"expired exports: FAILED -> {type(exc).__name__}: {exc}")
     finally:
         await engine.dispose()
 
@@ -289,7 +537,7 @@ def main() -> None:
         sub.add_argument(
             "--geospatial-max-jobs",
             type=int,
-            default=int(os.environ.get("DAILY_GEOSPATIAL_MAX_JOBS", "500")),
+            default=int(os.environ.get("DAILY_GEOSPATIAL_MAX_JOBS", "12000")),
         )
         sub.add_argument(
             "--scoring-lookback-days",
