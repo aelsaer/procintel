@@ -121,4 +121,5 @@ back out. Confidence tiers reference the hierarchy in `description.txt` §8.
 |---|---|---|
 | `package_search` / `package_show` / `resource_search` results | `external_datasets` | catalogue registry, not an operational store (§3.6) |
 | onboarded dataset resources (administrative boundaries, population, schools, hospitals, regional indicators, environmental layers) | `administrative_boundaries`, `geo_denominators`, `nuts_areas.geom` | one `adapter_name` + `config` per onboarded dataset in `external_datasets`, applied per-dataset (§22.2) |
-| INSPIRE geometries | `administrative_boundaries.geom` / `nuts_areas.geom` | first cut: administrative boundaries, NUTS, postal codes only — no cadastral parcels in v1 (§3.7) |
+| INSPIRE administrative geometry | `administrative_boundaries.geom` / `nuts_areas.geom` | NUTS 2024 regions and regional units are locally loaded; postal codes are mappings, not fabricated polygons; no cadastral parcels in v1 (§3.7) |
+| Selected INSPIRE thematic WMS | `external_datasets` / `spatial_service_capabilities` and Analytics map proxy | flood hazard, nitrate-vulnerable and nationally protected overlays; `REMOTE_RENDERING_ONLY` while official WFS feature catalogs remain broken |

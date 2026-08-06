@@ -76,10 +76,10 @@ class AnaptyxiConnectorConfig:
             )
 
         env_var = _ENV_VAR_BY_PERIOD[program_period]
-        base_url = os.environ.get(env_var)
+        base_url = (os.environ.get(env_var) or "").strip() or None
         if base_url is None and program_period == DEFAULT_PROGRAM_PERIOD:
             # backward-compatible alias — see module docstring
-            base_url = os.environ.get("ANAPTYXI_API_BASE_URL")
+            base_url = (os.environ.get("ANAPTYXI_API_BASE_URL") or "").strip() or None
         if base_url is None:
             base_url = PUBLIC_API_BASE_URL_BY_PERIOD.get(program_period)
 

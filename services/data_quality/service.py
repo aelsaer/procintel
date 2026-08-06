@@ -105,6 +105,51 @@ async def _resolve_stale_issues(
     return int(result.rowcount or 0)
 
 
+async def _sync_invalid_afm_issues(conn: AsyncConnection) -> tuple[int, int]:
+    opened = await conn.execute(
+        sa.text(
+            """
+            INSERT INTO data_quality_issues (
+                id, source_record_id, object_type, object_id,
+                issue_code, severity, details
+            )
+            SELECT gen_random_uuid(), identifier.source_record_id, 'ENTITY',
+                   identifier.entity_id, 'INVALID_AFM_CHECKSUM', 'ERROR',
+                   jsonb_build_object(
+                       'value_raw', identifier.value_raw,
+                       'value_normalized', identifier.value_normalized,
+                       'match_eligibility', identifier.match_eligibility
+                   )
+            FROM entity_identifiers identifier
+            WHERE identifier.scheme = 'AFM'
+              AND identifier.is_current = TRUE
+              AND identifier.identifier_valid = FALSE
+            ON CONFLICT DO NOTHING
+            """
+        )
+    )
+    resolved = await conn.execute(
+        sa.text(
+            """
+            UPDATE data_quality_issues issue
+            SET status = 'RESOLVED', resolved_at = now()
+            WHERE issue.object_type = 'ENTITY'
+              AND issue.issue_code = 'INVALID_AFM_CHECKSUM'
+              AND issue.status IN ('OPEN', 'ACKNOWLEDGED')
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM entity_identifiers identifier
+                  WHERE identifier.entity_id = issue.object_id
+                    AND identifier.scheme = 'AFM'
+                    AND identifier.is_current = TRUE
+                    AND identifier.identifier_valid = FALSE
+              )
+            """
+        )
+    )
+    return int(opened.rowcount or 0), int(resolved.rowcount or 0)
+
+
 async def run_data_quality_checks(
     conn: AsyncConnection,
     *,
@@ -147,6 +192,8 @@ async def run_data_quality_checks(
         ))
     """
     by_code: dict[str, int] = {}
+    invalid_afm_opened, invalid_afm_resolved = await _sync_invalid_afm_issues(conn)
+    by_code["INVALID_AFM_CHECKSUM"] = invalid_afm_opened
     by_code["INVALID_DATE_RANGE"] = await _open_issue(
         conn,
         issue_code="INVALID_DATE_RANGE",
@@ -189,7 +236,7 @@ async def run_data_quality_checks(
             {"max_year": current_year + 1},
         )
         invalid_dates_repaired = int(repair.rowcount or 0)
-    issues_resolved = await _resolve_stale_issues(
+    issues_resolved = invalid_afm_resolved + await _resolve_stale_issues(
         conn,
         issue_code="INVALID_DATE_RANGE",
         predicate=invalid_predicate,
@@ -210,6 +257,53 @@ async def run_data_quality_checks(
             "a.amount_gross IS NOT NULL AND a.amount_net IS NOT NULL "
             "AND ABS(a.amount_gross) < ABS(a.amount_net)",
             "jsonb_build_object('amount_net', a.amount_net, 'amount_gross', a.amount_gross)",
+        ),
+        (
+            "NEGATIVE_PROCUREMENT_VALUE",
+            "ERROR",
+            "a.act_type IN ('REQUEST', 'NOTICE', 'AWARD', 'CONTRACT', 'TED_NOTICE') "
+            "AND (a.amount_net < 0 OR a.amount_gross < 0)",
+            "jsonb_build_object('act_type', a.act_type, "
+            "'amount_net', a.amount_net, 'amount_gross', a.amount_gross)",
+        ),
+        (
+            "IMPLAUSIBLE_PROCUREMENT_VALUE",
+            "ERROR",
+            "a.act_type IN ('REQUEST', 'NOTICE', 'AWARD', 'CONTRACT', 'TED_NOTICE') "
+            "AND (ABS(a.amount_net) > 1000000000000 "
+            "OR ABS(a.amount_gross) > 1000000000000)",
+            "jsonb_build_object('act_type', a.act_type, "
+            "'amount_net', a.amount_net, 'amount_gross', a.amount_gross, "
+            "'maximum_accepted_value', 1000000000000)",
+        ),
+        (
+            "LIFECYCLE_DATE_ORDER",
+            "ERROR",
+            "EXISTS ("
+            "SELECT 1 FROM act_links link "
+            "JOIN procurement_acts predecessor ON predecessor.id = CASE "
+            "WHEN link.link_type = 'ANNOUNCES' AND link.to_act_id = a.id "
+            "THEN link.from_act_id "
+            "WHEN link.link_type = 'AWARDS' AND link.from_act_id = a.id "
+            "THEN link.to_act_id "
+            "WHEN link.link_type = 'EXECUTES' AND link.to_act_id = a.id "
+            "THEN link.from_act_id "
+            "WHEN link.link_type IN ('AMENDS', 'EXTENDS', 'PAYS') "
+            "AND link.from_act_id = a.id THEN link.to_act_id END "
+            "WHERE predecessor.is_current = TRUE "
+            "AND ((link.link_type = 'ANNOUNCES' AND link.to_act_id = a.id) "
+            "OR (link.link_type = 'AWARDS' AND link.from_act_id = a.id) "
+            "OR (link.link_type = 'EXECUTES' AND link.to_act_id = a.id) "
+            "OR (link.link_type IN ('AMENDS', 'EXTENDS', 'PAYS') "
+            "AND link.from_act_id = a.id)) "
+            "AND COALESCE(a.decision_date, a.publication_date, "
+            "a.submission_date, a.start_date) < "
+            "COALESCE(predecessor.decision_date, predecessor.publication_date, "
+            "predecessor.submission_date, predecessor.start_date))",
+            "jsonb_build_object('act_type', a.act_type, "
+            "'event_date', COALESCE(a.decision_date, a.publication_date, "
+            "a.submission_date, a.start_date), "
+            "'reason', 'linked predecessor has a later event date')",
         ),
         (
             "MISSING_EVENT_DATE",

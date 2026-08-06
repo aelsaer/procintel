@@ -18,24 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.auth.jwt_verifier import AuthenticatedUser
 from packages.domain.tables import (
-    act_cpv_codes,
-    act_locations,
-    act_parties,
     audit_log,
-    business_profiles,
-    entities,
-    entity_company_snapshots,
-    entity_identifiers,
     funding_geographic_allocations,
     funding_links,
     funding_payment_snapshots,
     funding_projects,
     funding_project_bodies,
     funding_subprojects,
-    opportunity_pipeline_items,
-    opportunity_scores,
     procurement_acts,
-    procurement_processes,
 )
 
 from services.analytics.risk_indicators import compute_risk_indicators
@@ -342,6 +332,7 @@ async def tenant_opportunities(
                    MAX(COALESCE(a.publication_date, a.submission_date, a.decision_date)) AS last_event_date
             FROM procurement_acts a
             WHERE a.is_current = TRUE
+              AND procintel_act_is_analytics_eligible(a.id)
               AND a.act_type IN ('REQUEST', 'NOTICE')
               AND a.process_id IS NOT NULL
               AND (
@@ -443,6 +434,7 @@ async def tenant_opportunities(
             JOIN act_identifiers identifier ON identifier.act_id = a.id
             WHERE a.process_id = candidate.process_id
               AND a.is_current = TRUE
+              AND procintel_act_is_analytics_eligible(a.id)
         ) identifiers ON TRUE
         LEFT JOIN LATERAL (
             SELECT ARRAY_REMOVE(ARRAY_AGG(DISTINCT cpv.cpv_code), NULL) AS cpv_codes
@@ -450,6 +442,7 @@ async def tenant_opportunities(
             JOIN act_cpv_codes cpv ON cpv.act_id = a.id
             WHERE a.process_id = candidate.process_id
               AND a.is_current = TRUE
+              AND procintel_act_is_analytics_eligible(a.id)
         ) cpvs ON TRUE
         LEFT JOIN LATERAL (
             SELECT ARRAY_REMOVE(
@@ -460,6 +453,7 @@ async def tenant_opportunities(
             JOIN act_locations loc ON loc.act_id = a.id
             WHERE a.process_id = candidate.process_id
               AND a.is_current = TRUE
+              AND procintel_act_is_analytics_eligible(a.id)
         ) locations ON TRUE
         ORDER BY candidate.total_score DESC NULLS LAST, candidate.last_event_date DESC NULLS LAST
         """
@@ -528,6 +522,7 @@ async def market_dashboard(
             FROM procurement_acts contract
             WHERE contract.act_type = 'CONTRACT'
               AND contract.is_current = TRUE
+              AND procintel_act_is_analytics_eligible(contract.id)
               AND (
                   CARDINALITY(CAST(:cpv_likes AS TEXT[])) = 0
                   OR EXISTS (
@@ -563,6 +558,7 @@ async def market_dashboard(
             SELECT DISTINCT contract.id, contract.amount_net
             FROM procurement_acts contract
             WHERE contract.act_type='CONTRACT' AND contract.is_current=TRUE
+              AND procintel_act_is_analytics_eligible(contract.id)
               AND (
                   CARDINALITY(CAST(:cpv_likes AS TEXT[])) = 0
                   OR EXISTS (
@@ -600,6 +596,7 @@ async def market_dashboard(
         FROM contract_modification_stats stats
         JOIN procurement_acts contract ON contract.id = stats.contract_act_id
         WHERE contract.is_current = TRUE
+          AND procintel_act_is_analytics_eligible(contract.id)
           AND (
               CARDINALITY(CAST(:cpv_likes AS TEXT[])) = 0
               OR EXISTS (
@@ -633,6 +630,7 @@ async def market_dashboard(
               SELECT 1 FROM procurement_acts scoped_act
               WHERE scoped_act.process_id=cycle.process_id
                 AND scoped_act.is_current=TRUE
+                AND procintel_act_is_analytics_eligible(scoped_act.id)
                 {_act_workspace_filter_sql("scoped_act")}
           )
         """
@@ -647,6 +645,7 @@ async def market_dashboard(
         FROM payment_execution execution
         JOIN procurement_acts contract ON contract.id = execution.contract_act_id
         WHERE contract.is_current = TRUE
+          AND procintel_act_is_analytics_eligible(contract.id)
           AND (
               CARDINALITY(CAST(:cpv_likes AS TEXT[])) = 0
               OR EXISTS (
@@ -746,6 +745,7 @@ async def market_dashboard(
             FROM procurement_acts contract
             WHERE contract.act_type = 'CONTRACT'
               AND contract.is_current = TRUE
+              AND procintel_act_is_analytics_eligible(contract.id)
               AND (
                   CARDINALITY(CAST(:cpv_likes AS TEXT[])) = 0
                   OR EXISTS (
@@ -779,6 +779,7 @@ async def market_dashboard(
          AND party.party_role IN ('SUPPLIER','CONTRACTOR')
         JOIN entities entity ON entity.id=party.entity_id
         WHERE contract.act_type='CONTRACT' AND contract.is_current=TRUE
+          AND procintel_act_is_analytics_eligible(contract.id)
           AND (
               CARDINALITY(CAST(:cpv_likes AS TEXT[])) = 0
               OR EXISTS (
@@ -814,7 +815,10 @@ async def buyer_intelligence(buyer_id: str, conn: AsyncConnection = Depends(get_
         FROM entities e
         LEFT JOIN entity_identifiers i ON i.entity_id=e.id
         LEFT JOIN act_parties p ON p.entity_id=e.id AND p.party_role IN ('BUYER','CONTRACTING_AUTHORITY')
-        LEFT JOIN procurement_acts a ON a.id=p.act_id AND a.is_current=TRUE
+        LEFT JOIN procurement_acts a
+          ON a.id=p.act_id
+         AND a.is_current=TRUE
+         AND procintel_act_is_analytics_eligible(a.id)
         WHERE e.id=CAST(:id AS uuid) GROUP BY e.id, e.canonical_name
         """
     ), {"id": str(target)})).first()
@@ -857,6 +861,7 @@ async def buyer_intelligence(buyer_id: str, conn: AsyncConnection = Depends(get_
         WHERE p.entity_id=CAST(:id AS uuid)
           AND p.party_role IN ('BUYER','CONTRACTING_AUTHORITY')
           AND a.act_type='CONTRACT' AND a.is_current=TRUE
+          AND procintel_act_is_analytics_eligible(a.id)
         GROUP BY year ORDER BY year
         """
     ), {"id": str(target)})).mappings().all()
@@ -908,6 +913,7 @@ async def buyer_intelligence(buyer_id: str, conn: AsyncConnection = Depends(get_
           AND p.party_role IN ('BUYER','CONTRACTING_AUTHORITY')
           AND a.act_type IN ('REQUEST','NOTICE','AWARD')
           AND a.is_current=TRUE
+          AND procintel_act_is_analytics_eligible(a.id)
         ORDER BY a.id, event_date DESC NULLS LAST LIMIT 30
         """
     ), {"id": str(target)})).mappings().all()
@@ -1099,6 +1105,7 @@ async def supplier_intelligence(supplier_id: str, conn: AsyncConnection = Depend
         WHERE p.entity_id=CAST(:id AS uuid)
           AND p.party_role IN ('SUPPLIER','CONTRACTOR','CONSORTIUM_MEMBER')
           AND a.act_type='CONTRACT' AND a.is_current=TRUE
+          AND procintel_act_is_analytics_eligible(a.id)
           AND (a.end_date IS NULL OR a.end_date>=CURRENT_DATE)
           AND COALESCE(a.status,'') NOT IN ('CANCELLED','TERMINATED')
         ORDER BY a.end_date NULLS LAST,a.amount_net DESC NULLS LAST
@@ -1430,7 +1437,11 @@ async def relationship_explorer(
                (ARRAY_AGG(doc.source_url ORDER BY COALESCE(a.publication_date,a.decision_date,a.submission_date) DESC NULLS LAST)
                    FILTER (WHERE doc.source_url IS NOT NULL))[1] AS document_url,
                (ARRAY_AGG(sr.source_system ORDER BY COALESCE(a.publication_date,a.decision_date,a.submission_date) DESC NULLS LAST))[1] AS source_system
-        FROM procurement_processes pp JOIN procurement_acts a ON a.process_id=pp.id AND a.is_current=TRUE
+        FROM procurement_processes pp
+        JOIN procurement_acts a
+          ON a.process_id=pp.id
+         AND a.is_current=TRUE
+         AND procintel_act_is_analytics_eligible(a.id)
         JOIN source_records sr ON sr.id=a.source_record_id
         LEFT JOIN act_parties bp ON bp.act_id=a.id AND bp.party_role IN ('BUYER','CONTRACTING_AUTHORITY')
         LEFT JOIN entities buyer ON buyer.id=COALESCE(bp.entity_id,pp.buyer_entity_id)

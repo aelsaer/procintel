@@ -31,7 +31,7 @@ class TedConnectorConfig:
 
     @classmethod
     def from_env(cls) -> "TedConnectorConfig":
-        base_url = os.environ.get("TED_API_BASE_URL", DEFAULT_TED_API_BASE_URL)
+        base_url = (os.environ.get("TED_API_BASE_URL") or DEFAULT_TED_API_BASE_URL).strip()
         return cls(
             base_url=base_url,
             rate_limit_per_minute=_float_env("TED_RATE_LIMIT_PER_MINUTE", cls.rate_limit_per_minute),

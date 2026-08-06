@@ -61,6 +61,7 @@ async def onboard_default_ckan_datasets(
         (
             await conn.execute(
                 select(external_datasets.c.catalog_dataset_id).where(
+                    external_datasets.c.catalog_source == "DATA_GOV_GR",
                     external_datasets.c.catalog_dataset_id.in_(
                         [dataset["dataset_id"] for dataset in DEFAULT_DATASETS]
                     )
@@ -154,7 +155,15 @@ async def refresh_due_ckan_datasets(
     """
     now = now or datetime.now(timezone.utc)
     rows = (
-        await conn.execute(select(external_datasets).where(external_datasets.c.ingestion_status == "ONBOARDED"))
+        await conn.execute(
+            select(external_datasets).where(
+                external_datasets.c.catalog_source == "DATA_GOV_GR",
+                external_datasets.c.ingestion_status == "ONBOARDED",
+                external_datasets.c.adapter_name.in_(
+                    ("population", "boundaries", "metric", "facilities")
+                ),
+            )
+        )
     ).all()
 
     outcomes: list[DatasetRefreshOutcome] = []

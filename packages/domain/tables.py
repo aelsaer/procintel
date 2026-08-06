@@ -260,7 +260,7 @@ spatial_service_capabilities = sa.Table(
     metadata,
     sa.Column("id", UUID(as_uuid=True), primary_key=True),
     sa.Column("catalog_source", sa.Text, nullable=False),
-    sa.Column("service_url", sa.Text, nullable=False, unique=True),
+    sa.Column("service_url", sa.Text, nullable=False),
     sa.Column("service_type", sa.Text, nullable=False),
     sa.Column("service_version", sa.Text),
     sa.Column("title", sa.Text),
@@ -276,6 +276,7 @@ spatial_service_capabilities = sa.Table(
     sa.Column("last_error", JSONB),
     sa.Column("checked_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.func.now()),
     sa.Column("last_available_at", sa.TIMESTAMP(timezone=True)),
+    sa.UniqueConstraint("service_url", "service_type", name="uq_spatial_capability_url_type"),
 )
 
 nuts_areas = sa.Table(

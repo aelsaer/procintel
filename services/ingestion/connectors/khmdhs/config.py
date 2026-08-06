@@ -35,6 +35,6 @@ class KhmdhsConnectorConfig:
     @classmethod
     def from_env(cls) -> "KhmdhsConnectorConfig":
         return cls(
-            base_url=os.environ.get("KHMDHS_API_BASE_URL", DEFAULT_KHMDHS_API_BASE_URL),
+            base_url=(os.environ.get("KHMDHS_API_BASE_URL") or DEFAULT_KHMDHS_API_BASE_URL).strip(),
             rate_limit_per_minute=_float_env("KHMDHS_RATE_LIMIT_PER_MINUTE", cls.rate_limit_per_minute),
         )

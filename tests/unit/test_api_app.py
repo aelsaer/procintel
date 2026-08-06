@@ -43,6 +43,7 @@ EXPECTED_PATHS = {
     "/v1/analytics/regions",
     "/v1/analytics/locations",
     "/v1/analytics/data-coverage",
+    "/v1/analytics/reference-sources",
     "/v1/competitors/discover",
     "/v1/competitors/{company_id}",
     "/v1/processes/{process_id}/competition",

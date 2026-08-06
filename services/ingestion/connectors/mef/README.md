@@ -23,3 +23,7 @@ derived metric must show coverage and last-updated date. See
   while non-zero offsets and year+AFM searches can time out. Such partitions
   remain retryable and visible in coverage; the worker never falls back to
   an unbounded all-years query.
+- Exhausted transport, rate-limit, 4xx, or 5xx retries are reported as
+  `BLOCKED_UPSTREAM`, never as a successful empty lookup. The worker stops
+  MEF work for the rest of that sweep, continues every other provider, and
+  retries MEF on a later sweep.

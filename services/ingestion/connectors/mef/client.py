@@ -10,7 +10,14 @@ from typing import Any
 import httpx
 
 from packages.source_clients.rate_limit import TokenBucket
-from packages.source_clients.retry import CircuitBreaker, raise_for_retryable_status, retrying
+from packages.source_clients.retry import (
+    CircuitBreaker,
+    CircuitOpenError,
+    RateLimitedError,
+    TransientServerError,
+    raise_for_retryable_status,
+    retrying,
+)
 
 from .config import MefConnectorConfig
 
@@ -22,6 +29,10 @@ class MefExpensesResponse:
     expenses: list[dict[str, Any]]
     raw_body: bytes
     http_status: int
+
+
+class MefUpstreamUnavailableError(RuntimeError):
+    """The public MEF endpoint could not satisfy a lookup after bounded retries."""
 
 
 class MefClient:
@@ -47,22 +58,29 @@ class MefClient:
         self,
         params: dict[str, str],
     ) -> httpx.Response:
-        self._circuit_breaker.raise_if_open()
-        await self._rate_limiter.acquire()
-
-        @retrying(max_attempts=self._config.max_retry_attempts)
-        async def _do_request() -> httpx.Response:
-            response = await self._http.get("/api/spendings", params=params)
-            raise_for_retryable_status(response)
-            return response
-
         try:
+            self._circuit_breaker.raise_if_open()
+            await self._rate_limiter.acquire()
+
+            @retrying(max_attempts=self._config.max_retry_attempts)
+            async def _do_request() -> httpx.Response:
+                response = await self._http.get("/api/spendings", params=params)
+                raise_for_retryable_status(response)
+                return response
+
             response = await _do_request()
-        except Exception:
+            response.raise_for_status()
+        except (
+            CircuitOpenError,
+            RateLimitedError,
+            TransientServerError,
+            httpx.HTTPError,
+        ) as exc:
             self._circuit_breaker.record_failure()
-            raise
+            raise MefUpstreamUnavailableError(
+                f"MEF /api/spendings is unavailable: {type(exc).__name__}: {exc}"
+            ) from exc
         self._circuit_breaker.record_success()
-        response.raise_for_status()
         return response
 
     async def _year_is_empty(self, year: int) -> bool:

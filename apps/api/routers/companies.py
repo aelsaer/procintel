@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -20,8 +21,17 @@ from packages.domain.tables import (
     procurement_acts,
 )
 from packages.schemas.responses import CompanyContractsResponse, CompanySummaryResponse
+from packages.source_clients.retry import (
+    CircuitOpenError,
+    RateLimitedError,
+    TransientServerError,
+)
 from packages.source_clients.raw_store import LocalFilesystemRawStore
-from services.ingestion.connectors.gemi.client import GemiClient
+from services.ingestion.connectors.gemi.client import (
+    GemiAuthenticationError,
+    GemiClient,
+    GemiInvalidResponseError,
+)
 from services.ingestion.connectors.gemi.config import GemiConnectorConfig
 from services.ingestion.connectors.gemi.provider import (
     CompanySearchQuery,
@@ -48,6 +58,32 @@ def _registry_provider() -> tuple[GemiClient, GemiCompanyRegistryProvider]:
     return client, GemiCompanyRegistryProvider(client)
 
 
+def _registry_http_exception(exc: Exception) -> HTTPException:
+    if isinstance(exc, GemiAuthenticationError):
+        return HTTPException(
+            status_code=503,
+            detail="Η αυθεντικοποίηση προς το ΓΕΜΗ απέτυχε",
+        )
+    if isinstance(exc, RateLimitedError):
+        retry_after = max(1, int(exc.retry_after or 60))
+        return HTTPException(
+            status_code=503,
+            detail="Το όριο αιτημάτων του ΓΕΜΗ εξαντλήθηκε προσωρινά",
+            headers={"Retry-After": str(retry_after)},
+        )
+    if isinstance(exc, GemiInvalidResponseError):
+        return HTTPException(
+            status_code=502,
+            detail="Το ΓΕΜΗ επέστρεψε μη έγκυρη JSON απάντηση",
+        )
+    if isinstance(exc, (TransientServerError, CircuitOpenError, httpx.TransportError)):
+        return HTTPException(
+            status_code=503,
+            detail="Το ΓΕΜΗ δεν είναι προσωρινά διαθέσιμο",
+        )
+    return HTTPException(status_code=502, detail="Η κλήση προς το ΓΕΜΗ απέτυχε")
+
+
 @router.get("/registry/search", response_model=list[dict])
 async def search_gemi_registry(
     name: str | None = Query(default=None, max_length=300),
@@ -71,6 +107,15 @@ async def search_gemi_registry(
             )
         )
         return [company.model_dump(mode="json") for company in companies]
+    except (
+        GemiAuthenticationError,
+        RateLimitedError,
+        GemiInvalidResponseError,
+        TransientServerError,
+        CircuitOpenError,
+        httpx.TransportError,
+    ) as exc:
+        raise _registry_http_exception(exc) from exc
     finally:
         await client.aclose()
 
@@ -89,10 +134,19 @@ async def resolve_gemi_registry_number(
             conn,
             provider=provider,
             raw_store=LocalFilesystemRawStore(
-                os.environ.get("RAW_STORAGE_ROOT", "./raw")
+                os.environ.get("RAW_STORE_ROOT", "./raw")
             ),
             gemi_number=gemi_number,
         )
+    except (
+        GemiAuthenticationError,
+        RateLimitedError,
+        GemiInvalidResponseError,
+        TransientServerError,
+        CircuitOpenError,
+        httpx.TransportError,
+    ) as exc:
+        raise _registry_http_exception(exc) from exc
     finally:
         await client.aclose()
     if result is None:

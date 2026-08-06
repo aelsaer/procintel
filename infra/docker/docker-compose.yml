@@ -133,6 +133,10 @@ services:
       RAW_STORE_ROOT: /var/lib/procintel/raw
       DOCUMENT_STORE_ROOT: /var/lib/procintel/documents
       EXPORT_ROOT: /var/lib/procintel/exports
+      GEMI_API_BASE_URL: ${GEMI_API_BASE_URL:-https://opendata-api.businessportal.gr/api/opendata/v1}
+      GEMI_API_KEY: ${GEMI_API_KEY:-}
+      GEMI_RATE_LIMIT_PER_MINUTE: ${GEMI_RATE_LIMIT_PER_MINUTE:-8}
+      GEMI_MAX_RETRY_ATTEMPTS: ${GEMI_MAX_RETRY_ATTEMPTS:-3}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
@@ -215,7 +219,8 @@ services:
       DIAVGEIA_RATE_LIMIT_PER_MINUTE: ${DIAVGEIA_RATE_LIMIT_PER_MINUTE:-60}
       GEMI_API_BASE_URL: ${GEMI_API_BASE_URL:-https://opendata-api.businessportal.gr/api/opendata/v1}
       GEMI_API_KEY: ${GEMI_API_KEY:-}
-      GEMI_RATE_LIMIT_PER_MINUTE: ${GEMI_RATE_LIMIT_PER_MINUTE:-60}
+      GEMI_RATE_LIMIT_PER_MINUTE: ${GEMI_RATE_LIMIT_PER_MINUTE:-8}
+      GEMI_MAX_RETRY_ATTEMPTS: ${GEMI_MAX_RETRY_ATTEMPTS:-3}
       MEF_API_BASE_URL: ${MEF_API_BASE_URL:-https://mef.diavgeia.gov.gr}
       MEF_RATE_LIMIT_PER_MINUTE: ${MEF_RATE_LIMIT_PER_MINUTE:-60}
       MEF_MAX_RETRY_ATTEMPTS: ${MEF_MAX_RETRY_ATTEMPTS:-2}
@@ -223,6 +228,10 @@ services:
       CKAN_API_BASE_URL: ${CKAN_API_BASE_URL:-https://data.gov.gr}
       CKAN_RATE_LIMIT_PER_MINUTE: ${CKAN_RATE_LIMIT_PER_MINUTE:-60}
       INSPIRE_KTIMATOLOGIO_WMS_URL: ${INSPIRE_KTIMATOLOGIO_WMS_URL:-https://gis.ktimanet.gr/inspire/rest/services/cadastralparcels/CadastralParcelWMS/MapServer/exts/InspireView/service}
+      INSPIRE_GREEK_CSW_URL: ${INSPIRE_GREEK_CSW_URL:-http://geoportal.ypen.gr/geonetwork/srv/eng/csw}
+      INSPIRE_CSW_MAX_RECORDS: ${INSPIRE_CSW_MAX_RECORDS:-200}
+      INSPIRE_CSW_MAX_SERVICE_CHECKS: ${INSPIRE_CSW_MAX_SERVICE_CHECKS:-40}
+      INSPIRE_BLOCKED_RETRY_DAYS: ${INSPIRE_BLOCKED_RETRY_DAYS:-30}
       INSPIRE_GREECE_NUTS_URL: ${INSPIRE_GREECE_NUTS_URL:-https://gisco-services.ec.europa.eu/distribution/v2/nuts/geojson/NUTS_RG_03M_2024_4326.geojson}
       INSPIRE_GREECE_POSTAL_NUTS_URL: ${INSPIRE_GREECE_POSTAL_NUTS_URL:-https://gisco-services.ec.europa.eu/tercet/NUTS-2024/pc2025_EL_NUTS-2024_v1.0.zip}
       ANAPTYXI_2007_2013_API_BASE_URL: ${ANAPTYXI_2007_2013_API_BASE_URL:-}

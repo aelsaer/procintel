@@ -21,7 +21,10 @@ const SOURCE_LABELS: Record<string, string> = {
   ACTS: "Πράξεις",
   INSPIRE: "INSPIRE",
   INSPIRE_GISCO: "Eurostat GISCO",
+  GREEK_INSPIRE_CSW: "Ελληνικός κατάλογος INSPIRE",
   KTIMATOLOGIO_INSPIRE: "Κτηματολόγιο INSPIRE",
+  DATA_GOV_GR_CATALOG: "Κατάλογος data.gov.gr",
+  ENRICHMENT_REGISTRY: "Μητρώο εμπλουτισμών",
 };
 
 function label(value: string): string {

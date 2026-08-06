@@ -134,6 +134,10 @@ their own adapters (see `services/ingestion/connectors/ckan/README.md`).
 ```bash
 export DATABASE_URL=postgresql://procintel:procintel@localhost:5432/procintel
 export PROCINTEL_DEV_AUTH=true
+# Load ignored provider credentials and limits when running outside Compose.
+set -a
+source infra/docker/.env
+set +a
 uvicorn apps.api.main:app --reload
 ```
 

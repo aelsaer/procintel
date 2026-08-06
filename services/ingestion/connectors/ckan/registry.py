@@ -39,6 +39,7 @@ async def upsert_external_dataset(
     update_frequency: str | None = None,
     adapter_name: str | None = None,
     config: dict[str, Any] | None = None,
+    ingestion_status: str | None = None,
 ) -> ExternalDatasetUpsertResult:
     existing = (
         await conn.execute(
@@ -63,6 +64,8 @@ async def upsert_external_dataset(
     if adapter_name is not None:
         values["adapter_name"] = adapter_name
         values["ingestion_status"] = "ONBOARDED"
+    if ingestion_status is not None:
+        values["ingestion_status"] = ingestion_status
     if config is not None:
         values["config"] = config
 

@@ -62,6 +62,22 @@ def test_validated_legacy_periods_have_public_defaults(monkeypatch):
     assert current.base_url == "https://anaptyxi.gov.gr"
 
 
+def test_blank_overrides_use_validated_public_defaults(monkeypatch):
+    monkeypatch.setenv("ANAPTYXI_API_BASE_URL", "")
+    monkeypatch.setenv("ANAPTYXI_2007_2013_API_BASE_URL", "  ")
+    monkeypatch.setenv("ANAPTYXI_2014_2020_API_BASE_URL", "")
+
+    old = AnaptyxiConnectorConfig.from_env(
+        program_period="ANAPTYXI_2007_2013"
+    )
+    current = AnaptyxiConnectorConfig.from_env(
+        program_period="ANAPTYXI_2014_2020"
+    )
+
+    assert old.base_url == "https://2013.anaptyxi.gov.gr"
+    assert current.base_url == "https://anaptyxi.gov.gr"
+
+
 def test_from_env_unknown_period_raises_value_error():
     with pytest.raises(ValueError):
         AnaptyxiConnectorConfig.from_env(program_period="ANAPTYXI_1999_2000")

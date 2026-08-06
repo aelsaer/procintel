@@ -71,6 +71,7 @@ from services.ingestion.connectors.mef.resolve import resolve_expenses_for_contr
 from services.search_index.config import OpenSearchConfig
 from services.search_index.indexer import index_single_act
 
+from .afm import valid_greek_afm
 from .adamchain import resolve_adam_chain_for_act
 from .client import ALL_RESOURCES, KhmdhsClient
 from .config import KhmdhsConnectorConfig
@@ -408,7 +409,11 @@ async def run_scheduled_window(
         )
         if gemi_provider is not None or queue_unconfigured_providers:
             for contractor_entity_id, contractor_afm in contractor_entities:
-                if not contractor_afm or contractor_afm in attempted_gemi_afms:
+                if (
+                    not contractor_afm
+                    or not valid_greek_afm(contractor_afm)
+                    or contractor_afm in attempted_gemi_afms
+                ):
                     continue
                 attempted_gemi_afms.add(contractor_afm)
 
@@ -464,7 +469,11 @@ async def run_scheduled_window(
             or result.act_upsert.related_ada
         ):
             act_details = await _fetch_act_details_for_anaptyxi(inner_conn, result.act_upsert.act_id)
-            contractor_afms = [afm for _, afm in contractor_entities if afm] or [None]
+            contractor_afms = [
+                afm
+                for _, afm in contractor_entities
+                if afm and valid_greek_afm(afm)
+            ] or [None]
             for program_period in anaptyxi_periods:
                 anaptyxi_client = anaptyxi_by_period.get(program_period)
                 for contractor_afm in contractor_afms:
@@ -514,7 +523,11 @@ async def run_scheduled_window(
 
         if mef_client is not None or queue_unconfigured_providers:
             for contractor_entity_id, contractor_afm in contractor_entities:
-                if not contractor_afm or contractor_afm in attempted_mef_afms:
+                if (
+                    not contractor_afm
+                    or not valid_greek_afm(contractor_afm)
+                    or contractor_afm in attempted_mef_afms
+                ):
                     continue
                 attempted_mef_afms.add(contractor_afm)
 

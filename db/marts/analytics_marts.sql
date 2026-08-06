@@ -54,6 +54,7 @@ WITH contract_dimensions AS (
         SELECT DISTINCT act_id, nuts_code FROM act_locations WHERE nuts_code IS NOT NULL
     ) location ON location.act_id = a.id
     WHERE a.act_type = 'CONTRACT' AND a.is_current = TRUE
+      AND procintel_act_is_analytics_eligible(a.id)
       AND COALESCE(a.decision_date, a.publication_date, a.submission_date, a.start_date) IS NOT NULL
 ),
 market_totals AS (
@@ -117,6 +118,7 @@ WITH contract_dimensions AS (
         SELECT DISTINCT act_id, nuts_code FROM act_locations WHERE nuts_code IS NOT NULL
     ) location ON location.act_id = a.id
     WHERE a.act_type = 'CONTRACT' AND a.is_current = TRUE
+      AND procintel_act_is_analytics_eligible(a.id)
       AND COALESCE(a.decision_date, a.publication_date, a.submission_date, a.start_date) IS NOT NULL
 ),
 supplier_allocations AS (
@@ -177,6 +179,7 @@ WITH buyer_supplier_value AS (
     JOIN act_parties ap ON ap.act_id = a.id AND ap.party_role IN ('SUPPLIER','CONTRACTOR')
     JOIN act_parties buyer_ap ON buyer_ap.act_id = a.id AND buyer_ap.party_role IN ('BUYER','CONTRACTING_AUTHORITY')
     WHERE a.act_type = 'CONTRACT' AND a.is_current = TRUE
+      AND procintel_act_is_analytics_eligible(a.id)
     GROUP BY buyer_ap.entity_id, ap.entity_id
 ),
 buyer_totals AS (
@@ -210,6 +213,7 @@ WITH supplier_buyer_value AS (
     JOIN act_parties ap ON ap.act_id = a.id AND ap.party_role IN ('SUPPLIER','CONTRACTOR')
     JOIN act_parties buyer_ap ON buyer_ap.act_id = a.id AND buyer_ap.party_role IN ('BUYER','CONTRACTING_AUTHORITY')
     WHERE a.act_type = 'CONTRACT' AND a.is_current = TRUE
+      AND procintel_act_is_analytics_eligible(a.id)
     GROUP BY ap.entity_id, buyer_ap.entity_id
 ),
 supplier_totals AS (
@@ -243,6 +247,7 @@ JOIN act_parties buyer_ap ON buyer_ap.act_id = a.id AND buyer_ap.party_role IN (
 JOIN act_cpv_codes acpv ON acpv.act_id = a.id AND acpv.is_primary = TRUE
 JOIN cpv_codes cpv ON cpv.code = acpv.cpv_code
 WHERE a.act_type = 'CONTRACT' AND a.is_current = TRUE
+  AND procintel_act_is_analytics_eligible(a.id)
   AND (a.end_date IS NULL OR a.end_date >= CURRENT_DATE)
   AND NOT EXISTS (
       SELECT 1 FROM act_links al
@@ -270,8 +275,12 @@ value_uplift AS (
         c.amount_net + COALESCE(SUM(amend.amount_net), 0) AS current_value
     FROM procurement_acts c
     LEFT JOIN act_links al ON al.to_act_id = c.id AND al.link_type = 'AMENDS'
-    LEFT JOIN procurement_acts amend ON amend.id = al.from_act_id
+    LEFT JOIN procurement_acts amend
+        ON amend.id = al.from_act_id
+       AND procintel_act_is_analytics_eligible(amend.id)
     WHERE c.act_type = 'CONTRACT'
+      AND c.is_current = TRUE
+      AND procintel_act_is_analytics_eligible(c.id)
     GROUP BY c.id, c.amount_net
 )
 SELECT
@@ -301,14 +310,24 @@ SELECT
         - COALESCE(contract.decision_date, contract.publication_date, contract.submission_date, contract.start_date)) AS contract_to_first_payment_days
 FROM procurement_acts request
 LEFT JOIN act_links l1 ON l1.from_act_id = request.id AND l1.link_type = 'ANNOUNCES' AND l1.confidence >= 0.95
-LEFT JOIN procurement_acts notice ON notice.id = l1.to_act_id
+LEFT JOIN procurement_acts notice
+    ON notice.id = l1.to_act_id
+   AND procintel_act_is_analytics_eligible(notice.id)
 LEFT JOIN act_links l2 ON l2.to_act_id = notice.id AND l2.link_type = 'AWARDS' AND l2.confidence >= 0.95
-LEFT JOIN procurement_acts award ON award.id = l2.from_act_id
+LEFT JOIN procurement_acts award
+    ON award.id = l2.from_act_id
+   AND procintel_act_is_analytics_eligible(award.id)
 LEFT JOIN act_links l3 ON l3.from_act_id = award.id AND l3.link_type = 'EXECUTES' AND l3.confidence >= 0.95
-LEFT JOIN procurement_acts contract ON contract.id = l3.to_act_id
+LEFT JOIN procurement_acts contract
+    ON contract.id = l3.to_act_id
+   AND procintel_act_is_analytics_eligible(contract.id)
 LEFT JOIN act_links l4 ON l4.to_act_id = contract.id AND l4.link_type = 'PAYS' AND l4.confidence >= 0.95
-LEFT JOIN procurement_acts first_payment ON first_payment.id = l4.from_act_id
-WHERE request.act_type = 'REQUEST';
+LEFT JOIN procurement_acts first_payment
+    ON first_payment.id = l4.from_act_id
+   AND procintel_act_is_analytics_eligible(first_payment.id)
+WHERE request.act_type = 'REQUEST'
+  AND request.is_current = TRUE
+  AND procintel_act_is_analytics_eligible(request.id);
 
 -- ---------------------------------------------------------------------------
 -- payment_execution: §27.10. Coverage badge distinguishes payment order vs
@@ -328,8 +347,13 @@ SELECT
     END AS coverage_badge
 FROM procurement_acts c
 LEFT JOIN act_links al ON al.to_act_id = c.id AND al.link_type = 'PAYS'
-LEFT JOIN procurement_acts pay ON pay.id = al.from_act_id AND pay.act_type = 'PAYMENT'
+LEFT JOIN procurement_acts pay
+    ON pay.id = al.from_act_id
+   AND pay.act_type = 'PAYMENT'
+   AND procintel_act_is_analytics_eligible(pay.id)
 WHERE c.act_type = 'CONTRACT'
+  AND c.is_current = TRUE
+  AND procintel_act_is_analytics_eligible(c.id)
 GROUP BY c.id, c.amount_net;
 
 -- ---------------------------------------------------------------------------
@@ -354,7 +378,10 @@ SELECT
 FROM procurement_acts c
 JOIN procurement_processes pp ON pp.id = c.process_id
 LEFT JOIN buyer_lead_time blt ON blt.buyer_entity_id = pp.buyer_entity_id
-WHERE c.act_type = 'CONTRACT' AND c.is_current = TRUE AND c.end_date IS NOT NULL;
+WHERE c.act_type = 'CONTRACT'
+  AND c.is_current = TRUE
+  AND procintel_act_is_analytics_eligible(c.id)
+  AND c.end_date IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- opportunity_scores: §5.1, §27.12. Computed and upserted by

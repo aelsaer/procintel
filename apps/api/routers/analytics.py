@@ -9,14 +9,21 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 
+import httpx
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncConnection
 from services.data_quality.completeness import collect_source_completeness
+from services.ingestion.connectors.inspire.selected_layers import (
+    SELECTED_INSPIRE_LAYERS,
+    get_selected_layer,
+    wms_get_map_params,
+)
 from services.search_index.lexical import query_concept_pattern
 
 from ..db import get_conn
+from ..deps import get_http_client
 
 router = APIRouter(prefix="/v1/analytics", tags=["analytics"])
 
@@ -186,6 +193,60 @@ class DataCoverageResponse(BaseModel):
     recent_runs: list[ConnectorRunCoverage]
     dataset_validations: list[DatasetValidationCoverage]
     assessments: list[SourceCompletenessResponse]
+
+
+class SpatialReferenceServiceResponse(BaseModel):
+    catalog_source: str
+    service_url: str
+    service_type: str
+    service_version: str | None = None
+    title: str | None = None
+    provider_name: str | None = None
+    license_code: str | None = None
+    fees: str | None = None
+    formats: list[str]
+    layer_count: int
+    status: str
+    http_status: int | None = None
+    checked_at: datetime
+    last_available_at: datetime | None = None
+    last_error: dict | None = None
+    coverage: str | None = None
+    catalog_modified: str | None = None
+    authoritative: bool = False
+    cadastral_parcels_in_scope: bool = False
+
+
+class CatalogReferenceDatasetResponse(BaseModel):
+    catalog_dataset_id: str
+    title: str
+    publisher: str | None = None
+    license_code: str | None = None
+    resource_type: str | None = None
+    resource_url: str | None = None
+    ingestion_status: str
+    domain: str | None = None
+    provenance_role: str | None = None
+    geographic_scope: str | None = None
+    temporal_scope: str | None = None
+    completeness_claim: str | None = None
+    primary_source: bool = False
+    last_seen_at: datetime | None = None
+
+
+class ReferenceSourcesResponse(BaseModel):
+    spatial_services: list[SpatialReferenceServiceResponse]
+    catalog_datasets: list[CatalogReferenceDatasetResponse]
+
+
+class ReferenceMapLayerResponse(BaseModel):
+    layer_id: str
+    title: str
+    category: str
+    opacity: float
+    attribution: str
+    status: str
+    checked_at: datetime | None = None
 
 
 GREEK_NUTS_2_NAMES = {
@@ -377,6 +438,19 @@ async def data_coverage(conn: AsyncConnection = Depends(get_conn)) -> DataCovera
                 AND status='AVAILABLE') AS ktimatologio_services
           ,(SELECT COUNT(*) FROM spatial_service_capabilities
               WHERE catalog_source='KTIMATOLOGIO_INSPIRE') AS ktimatologio_checks
+          ,(SELECT COUNT(*) FROM spatial_service_capabilities
+              WHERE catalog_source='GREEK_INSPIRE_CSW'
+                AND status='AVAILABLE') AS greek_inspire_services
+          ,(SELECT COUNT(*) FROM spatial_service_capabilities
+              WHERE catalog_source='GREEK_INSPIRE_CSW') AS greek_inspire_checks
+          ,(SELECT COUNT(*) FROM external_datasets
+              WHERE catalog_source='GREEK_INSPIRE_CSW'
+                AND ingestion_status='ONBOARDED'
+                AND COALESCE((config->>'selected_for_product')::boolean, FALSE)
+           ) AS selected_inspire_map_layers
+          ,(SELECT COUNT(*) FROM external_datasets
+              WHERE catalog_source='DATA_GOV_GR'
+                AND ingestion_status='METADATA_ONLY') AS data_gov_catalog_references
         """
     ))).mappings().one()
 
@@ -411,6 +485,44 @@ async def data_coverage(conn: AsyncConnection = Depends(get_conn)) -> DataCovera
                 if links["ktimatologio_services"]
                 else "BLOCKED_UPSTREAM"
                 if links["ktimatologio_checks"]
+                else "NOT_LOADED"
+            ),
+        ),
+        DataConnectionCoverage(
+            source="GREEK_INSPIRE_CSW",
+            target="GEOCODING",
+            relation="DISCOVERS_OGC_SERVICES",
+            available_records=links["greek_inspire_checks"],
+            linked_records=links["greek_inspire_services"],
+            status=(
+                "CONNECTED"
+                if links["greek_inspire_services"]
+                else "BLOCKED_UPSTREAM"
+                if links["greek_inspire_checks"]
+                else "NOT_LOADED"
+            ),
+        ),
+        DataConnectionCoverage(
+            source="GREEK_INSPIRE_WMS",
+            target="ANALYTICS_MAP",
+            relation="THEMATIC_MAP_OVERLAYS",
+            available_records=3,
+            linked_records=links["selected_inspire_map_layers"],
+            status=(
+                "CONNECTED"
+                if links["selected_inspire_map_layers"]
+                else "NOT_LOADED"
+            ),
+        ),
+        DataConnectionCoverage(
+            source="DATA_GOV_GR_CATALOG",
+            target="ENRICHMENT_REGISTRY",
+            relation="SECONDARY_REFERENCE_METADATA",
+            available_records=links["data_gov_catalog_references"],
+            linked_records=0,
+            status=(
+                "LOADED_UNLINKED"
+                if links["data_gov_catalog_references"]
                 else "NOT_LOADED"
             ),
         ),
@@ -459,6 +571,152 @@ async def data_coverage(conn: AsyncConnection = Depends(get_conn)) -> DataCovera
     )
 
 
+@router.get("/reference-sources", response_model=ReferenceSourcesResponse)
+async def reference_sources(
+    status: str | None = Query(default=None, max_length=32),
+    conn: AsyncConnection = Depends(get_conn),
+) -> ReferenceSourcesResponse:
+    spatial_rows = (
+        await conn.execute(
+            sa.text(
+                """
+                SELECT catalog_source, service_url, service_type, service_version,
+                       title, provider_name, access_constraints AS license_code,
+                       fees, formats, jsonb_array_length(layers) AS layer_count,
+                       capability.status, capability.http_status,
+                       capability.checked_at, capability.last_available_at,
+                       capability.last_error,
+                       dataset.config->>'coverage' AS coverage,
+                       dataset.config->>'catalog_modified' AS catalog_modified,
+                       COALESCE((dataset.config->>'authoritative')::boolean, FALSE) AS authoritative,
+                       COALESCE((dataset.config->>'cadastral_parcels_in_scope')::boolean, FALSE)
+                           AS cadastral_parcels_in_scope
+                FROM spatial_service_capabilities capability
+                LEFT JOIN LATERAL (
+                    SELECT external.config
+                    FROM external_datasets external
+                    WHERE external.resource_url = capability.service_url
+                      AND external.resource_type = capability.service_type
+                    ORDER BY external.last_seen_at DESC NULLS LAST
+                    LIMIT 1
+                ) dataset ON TRUE
+                WHERE CAST(:status AS TEXT) IS NULL
+                   OR capability.status = UPPER(CAST(:status AS TEXT))
+                ORDER BY
+                    CASE capability.status WHEN 'AVAILABLE' THEN 0 WHEN 'DEGRADED' THEN 1 ELSE 2 END,
+                    capability.checked_at DESC,
+                    capability.title NULLS LAST
+                """
+            ),
+            {"status": status},
+        )
+    ).mappings().all()
+    catalog_rows = (
+        await conn.execute(
+            sa.text(
+                """
+                SELECT catalog_dataset_id, title, publisher, license_code,
+                       resource_type, resource_url, ingestion_status,
+                       config->>'domain' AS domain,
+                       config->>'provenance_role' AS provenance_role,
+                       config->>'geographic_scope' AS geographic_scope,
+                       config->>'temporal_scope' AS temporal_scope,
+                       config->>'completeness_claim' AS completeness_claim,
+                       COALESCE((config->>'primary_source')::boolean, FALSE) AS primary_source,
+                       last_seen_at
+                FROM external_datasets
+                WHERE catalog_source = 'DATA_GOV_GR'
+                  AND ingestion_status = 'METADATA_ONLY'
+                ORDER BY domain, title
+                """
+            )
+        )
+    ).mappings().all()
+    return ReferenceSourcesResponse(
+        spatial_services=[
+            SpatialReferenceServiceResponse(**dict(row)) for row in spatial_rows
+        ],
+        catalog_datasets=[
+            CatalogReferenceDatasetResponse(**dict(row)) for row in catalog_rows
+        ],
+    )
+
+
+@router.get("/reference-map-layers", response_model=list[ReferenceMapLayerResponse])
+async def reference_map_layers(
+    conn: AsyncConnection = Depends(get_conn),
+) -> list[ReferenceMapLayerResponse]:
+    rows = (
+        await conn.execute(
+            sa.text(
+                """
+                SELECT service_url, status, checked_at
+                FROM spatial_service_capabilities
+                WHERE service_type = 'WMS'
+                  AND service_url = ANY(CAST(:service_urls AS TEXT[]))
+                """
+            ),
+            {"service_urls": [layer.service_url for layer in SELECTED_INSPIRE_LAYERS]},
+        )
+    ).mappings().all()
+    health = {row["service_url"]: row for row in rows}
+    return [
+        ReferenceMapLayerResponse(
+            layer_id=layer.layer_id,
+            title=layer.title,
+            category=layer.category,
+            opacity=layer.opacity,
+            attribution=layer.attribution,
+            status=(health.get(layer.service_url) or {}).get("status", "NOT_CHECKED"),
+            checked_at=(health.get(layer.service_url) or {}).get("checked_at"),
+        )
+        for layer in SELECTED_INSPIRE_LAYERS
+    ]
+
+
+@router.get("/reference-map/{layer_id}", response_class=Response)
+async def reference_map_tile(
+    layer_id: str,
+    bbox: str = Query(min_length=7, max_length=160),
+    width: int = Query(default=256, ge=1, le=1024),
+    height: int = Query(default=256, ge=1, le=1024),
+    srs: str = Query(default="EPSG:3857", max_length=16),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+) -> Response:
+    layer = get_selected_layer(layer_id)
+    if layer is None:
+        raise HTTPException(status_code=404, detail="Unknown reference map layer")
+    try:
+        params = wms_get_map_params(
+            layer,
+            bbox=bbox,
+            width=width,
+            height=height,
+            srs=srs.upper(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        upstream = await http_client.get(layer.service_url, params=params)
+        upstream.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"INSPIRE WMS unavailable: {type(exc).__name__}",
+        ) from exc
+    content_type = upstream.headers.get("content-type", "").split(";", 1)[0]
+    if content_type != "image/png":
+        raise HTTPException(status_code=502, detail="INSPIRE WMS returned a non-image response")
+    return Response(
+        content=upstream.content,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "public, max-age=3600, stale-if-error=86400",
+            "X-Content-Source": "Greek INSPIRE WMS",
+        },
+    )
+
+
 @router.get("/top-suppliers", response_model=list[TopSupplierResponse])
 async def top_suppliers(
     date_from: date | None = Query(default=None),
@@ -488,6 +746,7 @@ async def top_suppliers(
                        AND ap.party_role IN ('SUPPLIER', 'CONTRACTOR')
                     WHERE a.act_type = 'CONTRACT'
                       AND a.is_current = TRUE
+                      AND procintel_act_is_analytics_eligible(a.id)
                       AND (CAST(:date_from AS DATE) IS NULL OR COALESCE(a.decision_date, a.publication_date, a.submission_date) >= CAST(:date_from AS DATE))
                       AND (CAST(:date_to AS DATE) IS NULL OR COALESCE(a.decision_date, a.publication_date, a.submission_date) <= CAST(:date_to AS DATE))
                       AND procintel_taxonomy_match(
@@ -590,6 +849,7 @@ async def top_buyers(
                        AND ap.party_role IN ('BUYER', 'CONTRACTING_AUTHORITY')
                     WHERE a.act_type = 'CONTRACT'
                       AND a.is_current = TRUE
+                      AND procintel_act_is_analytics_eligible(a.id)
                       AND (CAST(:date_from AS DATE) IS NULL OR COALESCE(a.decision_date, a.publication_date, a.submission_date) >= CAST(:date_from AS DATE))
                       AND (CAST(:date_to AS DATE) IS NULL OR COALESCE(a.decision_date, a.publication_date, a.submission_date) <= CAST(:date_to AS DATE))
                       AND procintel_taxonomy_match(
@@ -709,6 +969,7 @@ async def market_overview(
                     ) AS acts_with_precise_geo
                 FROM procurement_acts a
                 WHERE a.is_current = TRUE
+                  AND procintel_act_is_analytics_eligible(a.id)
                   AND (CAST(:date_from AS DATE) IS NULL OR COALESCE(a.decision_date, a.publication_date, a.submission_date) >= CAST(:date_from AS DATE))
                   AND (CAST(:date_to AS DATE) IS NULL OR COALESCE(a.decision_date, a.publication_date, a.submission_date) <= CAST(:date_to AS DATE))
                   AND procintel_taxonomy_match(
@@ -797,6 +1058,7 @@ async def region_analytics(
                     FROM procurement_acts a
                     JOIN act_locations aloc ON aloc.act_id = a.id
                     WHERE a.is_current = TRUE
+                      AND procintel_act_is_analytics_eligible(a.id)
                       AND aloc.nuts_code IS NOT NULL
                       AND UPPER(aloc.nuts_code) LIKE 'EL%'
                       AND LENGTH(aloc.nuts_code) >= 4
@@ -923,6 +1185,7 @@ async def opportunities(
                 LEFT JOIN act_cpv_codes acpv ON acpv.act_id = a.id
                 LEFT JOIN act_locations aloc ON aloc.act_id = a.id
                 WHERE a.is_current = TRUE
+                  AND procintel_act_is_analytics_eligible(a.id)
                   AND a.act_type IN ('REQUEST', 'APPROVED_REQUEST', 'NOTICE')
                   AND (CAST(:date_from AS DATE) IS NULL OR COALESCE(a.publication_date, a.submission_date, a.decision_date) >= CAST(:date_from AS DATE))
                   AND (CAST(:date_to AS DATE) IS NULL OR COALESCE(a.publication_date, a.submission_date, a.decision_date) <= CAST(:date_to AS DATE))
@@ -1087,6 +1350,7 @@ async def region_activity(
                 LEFT JOIN act_cpv_codes acpv ON acpv.act_id = a.id
                 LEFT JOIN act_locations aloc ON aloc.act_id = a.id
                 WHERE a.is_current = TRUE
+                  AND procintel_act_is_analytics_eligible(a.id)
                   AND (CARDINALITY(CAST(:act_types AS TEXT[])) = 0 OR a.act_type = ANY(CAST(:act_types AS TEXT[])))
                   AND (CAST(:date_from AS DATE) IS NULL OR COALESCE(a.decision_date, a.publication_date, a.submission_date) >= CAST(:date_from AS DATE))
                   AND (CAST(:date_to AS DATE) IS NULL OR COALESCE(a.decision_date, a.publication_date, a.submission_date) <= CAST(:date_to AS DATE))
@@ -1214,6 +1478,7 @@ async def geocoded_locations(
                     FROM procurement_acts a
                     JOIN act_locations aloc ON aloc.act_id = a.id
                     WHERE a.is_current = TRUE
+                      AND procintel_act_is_analytics_eligible(a.id)
                       AND aloc.geom IS NOT NULL
                       AND (CAST(:date_from AS DATE) IS NULL OR COALESCE(a.publication_date, a.submission_date, a.decision_date) >= CAST(:date_from AS DATE))
                       AND (CAST(:date_to AS DATE) IS NULL OR COALESCE(a.publication_date, a.submission_date, a.decision_date) <= CAST(:date_to AS DATE))

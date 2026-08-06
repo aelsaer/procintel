@@ -17,7 +17,7 @@ import argparse
 import asyncio
 import os
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import sqlalchemy as sa
@@ -40,6 +40,7 @@ from services.ingestion.connectors.ckan.scheduled import (
     onboard_default_ckan_datasets,
     refresh_due_ckan_datasets,
 )
+from services.ingestion.connectors.ckan.catalog_manifest import refresh_curated_catalog
 from services.ingestion.connectors.inspire.scheduled import (
     refresh_inspire_reference_sources,
 )
@@ -236,6 +237,16 @@ async def _run_once(
                             print(f"{label}: FAILED -> {ckan_outcome.error}")
                         else:
                             print(f"{label}: skipped ({ckan_outcome.skipped_reason})")
+                    catalog_outcomes = await refresh_curated_catalog(
+                        conn,
+                        raw_root=raw_root,
+                    )
+                    for catalog_outcome in catalog_outcomes:
+                        label = f"DATA_GOV_GR/catalog/{catalog_outcome.dataset_id}"
+                        if catalog_outcome.error:
+                            print(f"{label}: FAILED -> {catalog_outcome.error}")
+                        else:
+                            print(f"{label}: {catalog_outcome.status.lower()}")
                 except Exception as exc:  # noqa: BLE001 - downstream stages must still run
                     await conn.rollback()
                     print(f"CKAN refresh sweep: FAILED -> {type(exc).__name__}: {exc}")
@@ -250,6 +261,10 @@ async def _run_once(
                     f"ktimatologio={inspire_result.ktimatologio.status} "
                     f"http={inspire_result.ktimatologio.http_status} "
                     f"layers={inspire_result.ktimatologio.layer_count} "
+                    f"csw_records={inspire_result.catalog.records_seen} "
+                    f"csw_services={inspire_result.catalog.services_discovered} "
+                    f"csw_available={inspire_result.catalog.available} "
+                    f"selected_layers={sum(1 for layer in inspire_result.selected_layers if layer.status == 'AVAILABLE')} "
                     f"nuts_rows={inspire_result.nuts.rows_written} "
                     f"postal_codes={inspire_result.postal_nuts.postal_codes}"
                 )

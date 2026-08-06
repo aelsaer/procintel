@@ -14,6 +14,14 @@ type NutsProperties = {
 
 type NutsFeature = Feature<Geometry, NutsProperties>;
 
+type ReferenceMapLayer = {
+  layer_id: string;
+  title: string;
+  opacity: number;
+  attribution: string;
+  status: string;
+};
+
 type FeatureLayer = Layer & {
   feature?: NutsFeature;
   getBounds?: () => ReturnType<LeafletGeoJSON["getBounds"]>;
@@ -112,6 +120,34 @@ export function GreeceNutsMap({
           attribution: "&copy; OpenStreetMap contributors | NUTS 2024: Eurostat GISCO | Places: <a href=\"https://www.geonames.org/\">GeoNames</a>",
           maxZoom: 19,
         }).addTo(map);
+        const layerControl = L.control.layers(undefined, undefined, {
+          collapsed: true,
+          position: "topright",
+        }).addTo(map);
+        try {
+          const layerResponse = await fetch("/api/v1/analytics/reference-map-layers");
+          if (layerResponse.ok) {
+            const referenceLayers = (await layerResponse.json()) as ReferenceMapLayer[];
+            referenceLayers
+              .filter((layer) => layer.status === "AVAILABLE")
+              .forEach((layer) => {
+                const overlay = L.tileLayer.wms(
+                  `/api/v1/analytics/reference-map/${encodeURIComponent(layer.layer_id)}`,
+                  {
+                    layers: layer.layer_id,
+                    format: "image/png",
+                    transparent: true,
+                    opacity: layer.opacity,
+                    attribution: layer.attribution,
+                    version: "1.1.1",
+                  },
+                );
+                layerControl.addOverlay(overlay, layer.title);
+              });
+          }
+        } catch {
+          // Procurement layers remain usable when an optional thematic source is down.
+        }
 
         const styleFor = (feature?: NutsFeature): PathOptions => {
           const code = feature?.properties?.NUTS_ID ?? "";

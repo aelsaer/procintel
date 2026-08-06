@@ -8,7 +8,12 @@ import pytest
 import respx
 
 from packages.source_clients.retry import TransientServerError
-from services.ingestion.connectors.gemi.client import CompanyNotFoundError, GemiClient
+from services.ingestion.connectors.gemi.client import (
+    CompanyNotFoundError,
+    GemiAuthenticationError,
+    GemiClient,
+    GemiInvalidResponseError,
+)
 from services.ingestion.connectors.gemi.config import GemiConnectorConfig
 from services.ingestion.connectors.gemi.provider import CompanySearchQuery, GemiCompanyRegistryProvider
 
@@ -101,6 +106,55 @@ async def test_5xx_is_retried_then_raises_on_exhaustion():
 
 
 @respx.mock
+async def test_401_raises_redacted_authentication_error_without_retry():
+    route = respx.get(
+        f"{BASE_URL}/companies", params={"afm": AFM, "resultsSize": "1"}
+    ).mock(return_value=httpx.Response(401, json={"message": "unauthorized"}))
+    client = GemiClient(_config())
+    try:
+        with pytest.raises(GemiAuthenticationError, match="HTTP 401") as error:
+            await client.find_by_vat(AFM)
+    finally:
+        await client.aclose()
+
+    assert route.call_count == 1
+    assert "test-key" not in str(error.value)
+
+
+@respx.mock
+async def test_429_honors_retry_and_then_returns_json():
+    route = respx.get(
+        f"{BASE_URL}/companies", params={"afm": AFM, "resultsSize": "1"}
+    ).mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "0"}),
+            httpx.Response(200, json=SEARCH_BODY),
+        ]
+    )
+    client = GemiClient(_config(max_retry_attempts=2))
+    try:
+        response = await client.find_by_vat(AFM)
+    finally:
+        await client.aclose()
+
+    assert response.body["afm"] == AFM
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_successful_non_json_response_is_rejected():
+    respx.get(
+        f"{BASE_URL}/companies", params={"afm": AFM, "resultsSize": "1"}
+    ).mock(return_value=httpx.Response(200, text="not-json"))
+    client = GemiClient(_config())
+    try:
+        with pytest.raises(GemiInvalidResponseError, match="non-JSON"):
+            await client.find_by_vat(AFM)
+    finally:
+        await client.aclose()
+
+
+@respx.mock
 async def test_provider_enriches_company_with_public_documents():
     respx.get(
         f"{BASE_URL}/companies", params={"afm": AFM, "resultsSize": "1"}
@@ -152,4 +206,3 @@ async def test_provider_search_maps_query_to_official_parameter_names():
     assert route.call_count == 1
     assert results[0].afm_normalized == AFM
     assert results[0].gemi_number == GEMI_NUMBER
-

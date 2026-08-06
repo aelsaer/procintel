@@ -40,3 +40,11 @@ Instead: *"A declared expense or payment order was found that possibly
 relates to the contract."* — unless the link and the source's own semantics
 fully prove it (`mef_expenses.linked_act_id` comment in
 `db/migrations/05_funding_and_external_sources.sql`).
+
+## Degraded operation
+
+The connector probes each configured year before issuing an AFM search and
+uses bounded retries plus a circuit breaker. If the public endpoint still
+cannot satisfy the request, the queue records `BLOCKED_UPSTREAM`; it does not
+turn an unknown result into zero expenses. MEF is paused only for the current
+sweep, while KHMDHS, Diavgeia, GEMI, ANAPTYXI, and document work continue.

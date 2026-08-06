@@ -70,7 +70,7 @@ class MefConnectorConfig:
 
     @classmethod
     def from_env(cls) -> "MefConnectorConfig":
-        base_url = os.environ.get("MEF_API_BASE_URL", DEFAULT_MEF_API_BASE_URL)
+        base_url = (os.environ.get("MEF_API_BASE_URL") or DEFAULT_MEF_API_BASE_URL).strip()
         return cls(
             base_url=base_url,
             rate_limit_per_minute=_float_env("MEF_RATE_LIMIT_PER_MINUTE", cls.rate_limit_per_minute),

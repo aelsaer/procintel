@@ -45,11 +45,12 @@ from services.ingestion.connectors.khmdhs.adamchain import (
 )
 from services.ingestion.connectors.khmdhs.client import KhmdhsClient
 from services.ingestion.connectors.khmdhs.config import KhmdhsConnectorConfig
+from services.ingestion.connectors.khmdhs.afm import valid_greek_afm
 from services.ingestion.connectors.khmdhs.documents import process_khmdhs_attachment
 from services.ingestion.connectors.khmdhs.scheduled import (
     _fetch_act_details_for_anaptyxi,
 )
-from services.ingestion.connectors.mef.client import MefClient
+from services.ingestion.connectors.mef.client import MefClient, MefUpstreamUnavailableError
 from services.ingestion.connectors.mef.config import MefConnectorConfig
 from services.ingestion.connectors.mef.resolve import resolve_expenses_for_contractor
 from services.ingestion.enrichment_queue import (
@@ -100,6 +101,7 @@ class _Dependencies:
         self.anaptyxi: dict[str, AnaptyxiClient] = {}
         self.config_errors: dict[str, str] = {}
         self.upstream_errors: dict[str, str] = {}
+        self.runtime_unavailable_providers: set[str] = set()
         try:
             self.gemi_client = GemiClient(GemiConnectorConfig.from_env())
             self.gemi_provider = GemiCompanyRegistryProvider(self.gemi_client)
@@ -147,7 +149,7 @@ class _Dependencies:
         providers.update(self.anaptyxi)
         if self.opensearch_config is not None:
             providers.add("OPENSEARCH")
-        return providers
+        return providers.difference(self.runtime_unavailable_providers)
 
     @property
     def known_providers(self) -> set[str]:
@@ -261,11 +263,14 @@ async def _dispatch(
             raise ProviderConfigurationError(
                 dependencies.config_errors.get("GEMI", "GEMI is not configured")
             )
+        afm = str(payload["afm"])
+        if not valid_greek_afm(afm):
+            return {"skipped_invalid_afm": True, "_external_call": False}
         result = await resolve_company_snapshot(
             conn,
             provider=dependencies.gemi_provider,
             raw_store=dependencies.raw_store,
-            afm_normalized=str(payload["afm"]),
+            afm_normalized=afm,
             entity_id=_uuid(payload, "entity_id"),
         )
         return {"wrote_new_snapshot": result.wrote_new_snapshot}
@@ -305,13 +310,20 @@ async def _dispatch(
         )
         return {"funding_project_id": str(project_id) if project_id else None}
     if provider == "MEF":
-        count = await resolve_expenses_for_contractor(
-            conn,
-            client=dependencies.mef,
-            raw_store=dependencies.raw_store,
-            contractor_entity_id=_uuid(payload, "entity_id"),
-            afm_normalized=str(payload["afm"]),
-        )
+        afm = str(payload["afm"])
+        if not valid_greek_afm(afm):
+            return {"skipped_invalid_afm": True, "_external_call": False}
+        try:
+            count = await resolve_expenses_for_contractor(
+                conn,
+                client=dependencies.mef,
+                raw_store=dependencies.raw_store,
+                contractor_entity_id=_uuid(payload, "entity_id"),
+                afm_normalized=afm,
+            )
+        except MefUpstreamUnavailableError as exc:
+            dependencies.runtime_unavailable_providers.add("MEF")
+            raise ProviderUpstreamContractError(str(exc)) from exc
         return {"expenses_ingested": count}
     if provider == "OPENSEARCH":
         if dependencies.opensearch_config is None:
@@ -367,6 +379,7 @@ async def run_pending_enrichment_jobs(
                 provider
                 for provider in dependencies.known_providers
                 if providers is None or provider in providers
+                if provider not in dependencies.runtime_unavailable_providers
                 if (provider_budgets or {}).get(provider) is None
                 or attempts.get(provider, 0)
                 < int((provider_budgets or {})[provider])

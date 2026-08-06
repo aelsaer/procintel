@@ -10,7 +10,9 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from packages.domain.tables import (
     act_identifiers,
+    act_links,
     act_parties,
+    data_quality_issues,
     enrichment_jobs,
     entities,
     procurement_acts,
@@ -331,15 +333,137 @@ async def test_data_quality_queries_are_typed_for_asyncpg() -> None:
             )
             assert result.invalid_dates_repaired == 0
             assert set(result.by_code) == {
+                "INVALID_AFM_CHECKSUM",
                 "INVALID_DATE_RANGE",
                 "END_BEFORE_START",
                 "GROSS_BELOW_NET",
+                "NEGATIVE_PROCUREMENT_VALUE",
+                "IMPLAUSIBLE_PROCUREMENT_VALUE",
+                "LIFECYCLE_DATE_ORDER",
                 "MISSING_EVENT_DATE",
                 "MISSING_CPV",
                 "MISSING_SUPPLIER",
                 "MISSING_OFFICIAL_DOCUMENT",
             }
     finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_bad_values_and_lifecycle_order_are_quarantined() -> None:
+    engine = create_async_engine(_async_url(DATABASE_URL))
+    source_ids = [uuid.uuid4(), uuid.uuid4()]
+    notice_id = uuid.uuid4()
+    award_id = uuid.uuid4()
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                source_records.insert(),
+                [
+                    {
+                        "id": source_id,
+                        "source_system": "TEST",
+                        "resource_type": "quality_gate",
+                        "source_native_id": f"quality-{source_id}",
+                        "content_sha256": uuid.uuid4().hex,
+                        "payload_uri": f"/tmp/quality-{source_id}.json",
+                        "fetched_at": datetime.now(timezone.utc),
+                        "parse_status": "PARSED",
+                    }
+                    for source_id in source_ids
+                ],
+            )
+            await conn.execute(
+                procurement_acts.insert(),
+                [
+                    {
+                        "id": notice_id,
+                        "act_type": "NOTICE",
+                        "publication_date": datetime(2026, 7, 29).date(),
+                        "decision_date": None,
+                        "amount_net": 2_000_000_000_000,
+                        "amount_gross": 2_480_000_000_000,
+                        "source_record_id": source_ids[0],
+                    },
+                    {
+                        "id": award_id,
+                        "act_type": "AWARD",
+                        "publication_date": None,
+                        "decision_date": datetime(2026, 7, 28).date(),
+                        "amount_net": -100,
+                        "amount_gross": -124,
+                        "source_record_id": source_ids[1],
+                    },
+                ],
+            )
+            await conn.execute(
+                act_links.insert().values(
+                    id=uuid.uuid4(),
+                    from_act_id=award_id,
+                    to_act_id=notice_id,
+                    link_type="AWARDS",
+                    link_method="TEST",
+                    confidence=1,
+                    evidence={},
+                    created_by="TEST",
+                )
+            )
+
+        async with engine.connect() as conn:
+            await run_data_quality_checks(
+                conn,
+                date_from=datetime(2026, 7, 28).date(),
+                date_to=datetime(2026, 7, 29).date(),
+                repair_invalid_dates=False,
+            )
+            rows = (
+                await conn.execute(
+                    sa.select(
+                        data_quality_issues.c.object_id,
+                        data_quality_issues.c.issue_code,
+                    ).where(
+                        data_quality_issues.c.object_id.in_([notice_id, award_id]),
+                        data_quality_issues.c.severity == "ERROR",
+                        data_quality_issues.c.status == "OPEN",
+                    )
+                )
+            ).all()
+            codes_by_act = {
+                act_id: {row.issue_code for row in rows if row.object_id == act_id}
+                for act_id in (notice_id, award_id)
+            }
+            assert "IMPLAUSIBLE_PROCUREMENT_VALUE" in codes_by_act[notice_id]
+            assert {
+                "NEGATIVE_PROCUREMENT_VALUE",
+                "LIFECYCLE_DATE_ORDER",
+            }.issubset(codes_by_act[award_id])
+            assert not (
+                await conn.execute(
+                    sa.text("SELECT procintel_act_is_analytics_eligible(:act_id)"),
+                    {"act_id": award_id},
+                )
+            ).scalar_one()
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(
+                data_quality_issues.delete().where(
+                    data_quality_issues.c.object_id.in_([notice_id, award_id])
+                )
+            )
+            await conn.execute(
+                act_links.delete().where(
+                    act_links.c.from_act_id == award_id,
+                    act_links.c.to_act_id == notice_id,
+                )
+            )
+            await conn.execute(
+                procurement_acts.delete().where(
+                    procurement_acts.c.id.in_([notice_id, award_id])
+                )
+            )
+            await conn.execute(
+                source_records.delete().where(source_records.c.id.in_(source_ids))
+            )
         await engine.dispose()
 
 

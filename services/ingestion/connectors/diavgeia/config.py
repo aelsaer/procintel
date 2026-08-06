@@ -35,6 +35,6 @@ class DiavgeiaConnectorConfig:
     @classmethod
     def from_env(cls) -> "DiavgeiaConnectorConfig":
         return cls(
-            base_url=os.environ.get("DIAVGEIA_API_BASE_URL", DEFAULT_DIAVGEIA_API_BASE_URL),
+            base_url=(os.environ.get("DIAVGEIA_API_BASE_URL") or DEFAULT_DIAVGEIA_API_BASE_URL).strip(),
             rate_limit_per_minute=_float_env("DIAVGEIA_RATE_LIMIT_PER_MINUTE", cls.rate_limit_per_minute),
         )

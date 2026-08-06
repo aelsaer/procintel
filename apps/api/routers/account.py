@@ -448,6 +448,7 @@ async def accept_invitation(
     await conn.commit()
     return MemberResponse(
         id=str(row.id),
+        user_id=str(row.user_id),
         email=member.email,
         display_name=member.display_name,
         role=row.role,

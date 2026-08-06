@@ -7,8 +7,10 @@ import httpx
 import pytest
 import respx
 
-from packages.source_clients.retry import TransientServerError
-from services.ingestion.connectors.mef.client import MefClient
+from services.ingestion.connectors.mef.client import (
+    MefClient,
+    MefUpstreamUnavailableError,
+)
 from services.ingestion.connectors.mef.config import MefConnectorConfig
 
 FIXTURE_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "mef" / "expenses_sample.json"
@@ -86,7 +88,7 @@ async def test_5xx_is_retried_then_raises_on_exhaustion():
     ).mock(return_value=httpx.Response(503))
     client = MefClient(_config(max_retry_attempts=2))
     try:
-        with pytest.raises(TransientServerError):
+        with pytest.raises(MefUpstreamUnavailableError, match="TransientServerError"):
             await client.find_expenses_by_recipient_afm(AFM)
     finally:
         await client.aclose()
@@ -100,7 +102,7 @@ async def test_4xx_raises_http_status_error():
     ).mock(return_value=httpx.Response(404))
     client = MefClient(_config())
     try:
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(MefUpstreamUnavailableError, match="HTTPStatusError"):
             await client.find_expenses_by_recipient_afm(AFM)
     finally:
         await client.aclose()

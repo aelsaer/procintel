@@ -10,7 +10,13 @@ import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from apps.api.main import app
-from packages.domain.tables import act_cpv_codes, procurement_acts, procurement_processes, source_records
+from packages.domain.tables import (
+    act_cpv_codes,
+    data_quality_issues,
+    procurement_acts,
+    procurement_processes,
+    source_records,
+)
 
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -28,6 +34,7 @@ async def test_market_overview_uses_current_acts_and_coherent_opportunity_counts
     process_id = uuid.uuid4()
     cpv_code = f"97{uuid.uuid4().int % 1_000_000:06d}-9"
     act_ids = [uuid.uuid4() for _ in range(4)]
+    issue_id = uuid.uuid4()
     try:
         async with engine.begin() as conn:
             await conn.execute(source_records.insert().values(
@@ -93,8 +100,48 @@ async def test_market_overview_uses_current_acts_and_coherent_opportunity_counts
         assert metrics["contract_count"] == 1
         assert Decimal(metrics["recorded_contract_value"]) == Decimal("100")
         assert metrics["notice_count"] <= metrics["opportunity_count"] <= metrics["act_count"]
+
+        async with engine.begin() as conn:
+            await conn.execute(data_quality_issues.insert().values(
+                id=issue_id,
+                source_record_id=source_id,
+                object_type="procurement_act",
+                object_id=act_ids[2],
+                issue_code="TEST_INVALID_AMOUNT",
+                severity="ERROR",
+                status="ACKNOWLEDGED",
+                details={"reason": "quality-quarantine regression test"},
+            ))
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            quarantined = await client.get("/v1/analytics/market-overview", params={
+                "date_from": "2098-06-01",
+                "date_to": "2098-06-30",
+                "cpv_prefixes": cpv_code.split("-", 1)[0],
+            })
+        assert quarantined.status_code == 200
+        quarantined_metrics = quarantined.json()
+        assert quarantined_metrics["contract_count"] == 0
+        assert Decimal(quarantined_metrics["recorded_contract_value"] or "0") == 0
+
+        async with engine.begin() as conn:
+            await conn.execute(
+                data_quality_issues.update()
+                .where(data_quality_issues.c.id == issue_id)
+                .values(status="RESOLVED", resolved_at=datetime.now(timezone.utc))
+            )
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            restored = await client.get("/v1/analytics/market-overview", params={
+                "date_from": "2098-06-01",
+                "date_to": "2098-06-30",
+                "cpv_prefixes": cpv_code.split("-", 1)[0],
+            })
+        assert restored.status_code == 200
+        assert restored.json()["contract_count"] == 1
     finally:
         async with engine.begin() as conn:
+            await conn.execute(data_quality_issues.delete().where(data_quality_issues.c.id == issue_id))
             await conn.execute(act_cpv_codes.delete().where(act_cpv_codes.c.act_id.in_(act_ids)))
             await conn.execute(procurement_acts.delete().where(procurement_acts.c.id.in_(act_ids)))
             await conn.execute(procurement_processes.delete().where(procurement_processes.c.id == process_id))

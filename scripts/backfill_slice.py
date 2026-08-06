@@ -60,6 +60,9 @@ from services.ingestion.connectors.ckan.scheduled import (  # noqa: E402
     onboard_default_ckan_datasets,
     refresh_due_ckan_datasets,
 )
+from services.ingestion.connectors.ckan.catalog_manifest import (  # noqa: E402
+    refresh_curated_catalog,
+)
 from services.ingestion.connectors.diavgeia.config import (  # noqa: E402
     DiavgeiaConnectorConfig,
 )
@@ -214,6 +217,18 @@ async def _coverage(conn: AsyncConnection) -> dict[str, Any]:
                      WHERE boundary_type='REGIONAL_UNIT') AS regional_units,
                   (SELECT COUNT(*) FROM administrative_boundaries
                      WHERE boundary_type='MUNICIPALITY') AS municipalities,
+                  (SELECT COUNT(*) FROM external_datasets
+                     WHERE catalog_source='GREEK_INSPIRE_CSW'
+                       AND ingestion_status='ONBOARDED'
+                       AND COALESCE((config->>'selected_for_product')::boolean, FALSE)
+                  ) AS selected_inspire_map_layers,
+                  (SELECT COUNT(DISTINCT object_id) FROM data_quality_issues
+                     WHERE LOWER(COALESCE(object_type, '')) IN (
+                         'procurement_act', 'procurement_acts'
+                     )
+                       AND severity IN ('ERROR', 'BLOCKING')
+                       AND status <> 'RESOLVED'
+                  ) AS analytics_quarantined_acts,
                   (SELECT COUNT(*) FROM process_participations) AS participations,
                   (SELECT COUNT(*) FROM field_provenance) AS provenance_fields,
                   (SELECT COUNT(*) FROM document_pages) AS document_pages,
@@ -345,7 +360,8 @@ def _build_verdict(
     open_quality_errors = sum(
         int(row["count"])
         for row in coverage["data_quality"]
-        if row["severity"] == "ERROR" and row["status"] == "OPEN"
+        if row["severity"] in {"ERROR", "BLOCKING"}
+        and row["status"] != "RESOLVED"
     )
     if failed_stages or core_failures or dead_enrichments:
         status = "FAILED"
@@ -386,6 +402,8 @@ async def _snapshot(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "date_from": str(args.date_from),
             "date_to": str(args.date_to),
             "database": _database_name(args.database_url),
+            "raw_root": args.raw_root,
+            "document_root": args.document_root,
         },
         "provider_configuration": provider_status,
         "stages": {},
@@ -544,9 +562,14 @@ async def _run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                         database_url=args.database_url,
                         raw_root=args.raw_root,
                     )
+                    cataloged = await refresh_curated_catalog(
+                        conn,
+                        raw_root=args.raw_root,
+                    )
                     return {
                         "onboarded": onboarded,
                         "refreshed": [_jsonable(item) for item in refreshed],
+                        "cataloged": [_jsonable(item) for item in cataloged],
                     }
 
                 await run_stage("ckan_references", _ckan)
@@ -625,6 +648,8 @@ async def _run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "date_from": str(args.date_from),
             "date_to": str(args.date_to),
             "database": _database_name(args.database_url),
+            "raw_root": args.raw_root,
+            "document_root": args.document_root,
         },
         "provider_configuration": provider_status,
         "stages": {
@@ -647,6 +672,10 @@ def main() -> None:
     parser.add_argument("--date-from", required=True, type=date.fromisoformat)
     parser.add_argument("--date-to", required=True, type=date.fromisoformat)
     parser.add_argument("--raw-root", default=os.environ.get("RAW_STORE_ROOT", "./raw"))
+    parser.add_argument(
+        "--document-root",
+        default=os.environ.get("DOCUMENT_STORE_ROOT", "./data/documents"),
+    )
     parser.add_argument("--report-path", type=Path)
     parser.add_argument("--allow-non-isolated-database", action="store_true")
     parser.add_argument(
@@ -700,6 +729,7 @@ def main() -> None:
     if any(value < 0 for value in numeric_values):
         parser.error("budgets and limits must be non-negative")
 
+    os.environ["DOCUMENT_STORE_ROOT"] = args.document_root
     report, exit_code = asyncio.run(
         _snapshot(args) if args.report_only else _run(args)
     )
