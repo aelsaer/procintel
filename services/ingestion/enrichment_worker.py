@@ -412,6 +412,7 @@ async def run_pending_enrichment_jobs(
                 _increment(by_provider, job.provider, "blocked_config")
             except ProviderUpstreamContractError as exc:
                 attempts[job.provider] = attempts.get(job.provider, 0) + 1
+                dependencies.runtime_unavailable_providers.add(job.provider)
                 await conn.rollback()
                 await fail_enrichment(
                     conn,
