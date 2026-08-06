@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import io
+import uuid
 import zipfile
 from datetime import datetime, timedelta, timezone
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 from packages.domain.tables import spatial_service_capabilities
 from services.ingestion.connectors.inspire.capabilities import (
+    _capability_source_record_insert,
     capability_health,
     capability_quality_issue,
     parse_wfs_capabilities,
@@ -99,6 +102,23 @@ def test_capability_health_does_not_claim_empty_service_is_available() -> None:
         "WARNING",
     )
     assert capability_quality_issue("AVAILABLE") is None
+
+
+def test_capability_raw_record_insert_is_content_hash_idempotent() -> None:
+    statement = _capability_source_record_insert(
+        {
+            "id": uuid.uuid4(),
+            "source_system": "INSPIRE",
+            "resource_type": "WMS_CAPABILITIES",
+            "source_native_id": "https://example.test/wms",
+            "content_sha256": "a" * 64,
+            "payload_uri": "mem://capabilities",
+            "fetched_at": datetime.now(timezone.utc),
+        }
+    )
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+
+    assert "ON CONFLICT ON CONSTRAINT uq_source_record_hash DO NOTHING" in sql
 
 
 def test_selected_wms_request_is_allowlisted_and_parameter_bounded() -> None:

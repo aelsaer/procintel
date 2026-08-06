@@ -33,6 +33,15 @@ class CapabilityCheckResult:
     checked: bool = True
 
 
+def _capability_source_record_insert(values: dict[str, Any]):
+    return (
+        pg_insert(source_records)
+        .values(**values)
+        .on_conflict_do_nothing(constraint="uq_source_record_hash")
+        .returning(source_records.c.id)
+    )
+
+
 def _local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
@@ -324,34 +333,36 @@ async def validate_ogc_service(
             partition_key=f"service={hashlib.sha256(service_url.encode()).hexdigest()[:16]}",
             payload=payload,
         )
-        existing = (
+        candidate_id = uuid.uuid4()
+        source_record_id = (
             await conn.execute(
-                sa.select(source_records.c.id).where(
-                    source_records.c.source_system == "INSPIRE",
-                    source_records.c.resource_type == f"{service_type}_CAPABILITIES",
-                    source_records.c.source_native_id == service_url,
-                    source_records.c.content_sha256 == raw_ref.content_sha256,
+                _capability_source_record_insert(
+                    {
+                        "id": candidate_id,
+                        "source_system": "INSPIRE",
+                        "resource_type": f"{service_type}_CAPABILITIES",
+                        "source_native_id": service_url,
+                        "content_sha256": raw_ref.content_sha256,
+                        "payload_uri": raw_ref.payload_uri,
+                        "fetched_at": checked_at,
+                        "http_status": response.status_code if response is not None else None,
+                        "license_code": license_code or "UNCONFIRMED",
+                        "parse_status": "PARSED" if parsed_successfully else "FAILED",
+                        "parse_error": {"message": error} if error else None,
+                    }
                 )
             )
         ).scalar()
-        source_record_id = existing
         if source_record_id is None:
-            source_record_id = uuid.uuid4()
-            await conn.execute(
-                source_records.insert().values(
-                    id=source_record_id,
-                    source_system="INSPIRE",
-                    resource_type=f"{service_type}_CAPABILITIES",
-                    source_native_id=service_url,
-                    content_sha256=raw_ref.content_sha256,
-                    payload_uri=raw_ref.payload_uri,
-                    fetched_at=checked_at,
-                    http_status=response.status_code if response is not None else None,
-                    license_code=license_code or "UNCONFIRMED",
-                    parse_status="PARSED" if parsed_successfully else "FAILED",
-                    parse_error={"message": error} if error else None,
+            source_record_id = (
+                await conn.execute(
+                    sa.select(source_records.c.id).where(
+                        source_records.c.source_system == "INSPIRE",
+                        source_records.c.resource_type == f"{service_type}_CAPABILITIES",
+                        source_records.c.content_sha256 == raw_ref.content_sha256,
+                    )
                 )
-            )
+            ).scalar_one()
 
     resolved_license = parsed.get("access_constraints") or license_code or "UNCONFIRMED"
     dataset_config = {
