@@ -446,41 +446,51 @@ async def _run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                     await conn.rollback()
                 return result
 
-            await run_stage(
-                "khmdhs",
-                lambda: run_khmdhs_window(
-                    conn,
-                    args.date_from,
-                    args.date_to,
-                    raw_root=args.raw_root,
-                    # The slice performs one deterministic full reindex after
-                    # enrichments, so avoid per-record indexing and queue work.
-                    opensearch_config=None,
-                    diavgeia_config=diavgeia_config,
-                    diavgeia_search=False,
-                    gemi_config=gemi_config,
-                    anaptyxi_configs=anaptyxi_configs,
-                    mef_config=mef_config,
-                    process_documents=True,
-                    inline_enrichment_providers={"ALERTS"},
-                    queue_unconfigured_providers=True,
-                    max_pages_per_resource=args.max_pages_per_resource,
-                    max_records_per_resource=args.max_records_per_resource,
-                ),
-            )
-            await run_stage(
-                "ted",
-                lambda: run_ted_window(
-                    conn,
-                    args.date_from,
-                    args.date_to,
-                    country="GR",
-                    raw_root=args.raw_root,
-                    vies_config=vies_config,
-                    vies_lookup_budget=args.vies_budget,
-                    opensearch_config=None,
-                ),
-            )
+            if args.skip_primary_ingestion:
+                stages["khmdhs"] = Stage(
+                    status="SKIPPED",
+                    result={"reason": "resuming downstream stages"},
+                )
+                stages["ted"] = Stage(
+                    status="SKIPPED",
+                    result={"reason": "resuming downstream stages"},
+                )
+            else:
+                await run_stage(
+                    "khmdhs",
+                    lambda: run_khmdhs_window(
+                        conn,
+                        args.date_from,
+                        args.date_to,
+                        raw_root=args.raw_root,
+                        # The slice performs one deterministic full reindex after
+                        # enrichments, so avoid per-record indexing and queue work.
+                        opensearch_config=None,
+                        diavgeia_config=diavgeia_config,
+                        diavgeia_search=False,
+                        gemi_config=gemi_config,
+                        anaptyxi_configs=anaptyxi_configs,
+                        mef_config=mef_config,
+                        process_documents=True,
+                        inline_enrichment_providers={"ALERTS"},
+                        queue_unconfigured_providers=True,
+                        max_pages_per_resource=args.max_pages_per_resource,
+                        max_records_per_resource=args.max_records_per_resource,
+                    ),
+                )
+                await run_stage(
+                    "ted",
+                    lambda: run_ted_window(
+                        conn,
+                        args.date_from,
+                        args.date_to,
+                        country="GR",
+                        raw_root=args.raw_root,
+                        vies_config=vies_config,
+                        vies_lookup_budget=args.vies_budget,
+                        opensearch_config=None,
+                    ),
+                )
             await run_stage(
                 "adamchain_enrichment",
                 lambda: run_pending_enrichment_jobs(
@@ -663,7 +673,7 @@ async def _run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     return report, exit_code
 
 
-def main() -> None:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -683,6 +693,11 @@ def main() -> None:
         action="store_true",
         help="read current coverage without running ingestion or enrichments",
     )
+    parser.add_argument(
+        "--skip-primary-ingestion",
+        action="store_true",
+        help="resume downstream stages without refetching KHMDHS or TED",
+    )
     parser.add_argument("--no-ckan", action="store_true")
     parser.add_argument("--max-pages-per-resource", type=int)
     parser.add_argument("--max-records-per-resource", type=int)
@@ -698,6 +713,11 @@ def main() -> None:
     parser.add_argument("--geospatial-limit", type=int, default=5000)
     parser.add_argument("--geospatial-batch-size", type=int, default=250)
     parser.add_argument("--scoring-lookback-days", type=int, default=120)
+    return parser
+
+
+def main() -> None:
+    parser = _build_parser()
     args = parser.parse_args()
 
     if not args.database_url:
