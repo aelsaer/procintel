@@ -58,3 +58,20 @@ hold the others. The command is resumable and respects provider budgets:
 Repeat for `KHMDHS_DOCUMENT`, `KHMDHS_ADAMCHAIN`, `DIAVGEIA`,
 `DIAVGEIA_SEARCH`, `MEF`, and the configured `ANAPTYXI_*` periods. Keep the
 daily scheduler enabled after the historical backlog has been drained.
+
+For a Docker deployment, run the same resumable worker from the scheduler
+image so it shares the raw-data volume and provider limiter with the API and
+daily scheduler:
+
+```bash
+docker compose --env-file infra/docker/.env.production \
+  -f infra/docker/docker-compose.production.yml run --rm scheduler \
+  python /app/scripts/drain_enrichments.py \
+  --raw-root /var/lib/procintel/raw \
+  --provider GEMI --budget GEMI=500 --limit 500 \
+  --allow-non-isolated-database
+```
+
+Run providers in separate invocations. This keeps a slow provider from
+blocking document, adamChain, Διαύγεια or funding recovery and preserves the
+shared ΓΕΜΗ limit of eight requests per minute.

@@ -14,6 +14,7 @@ COPY pyproject.toml ./
 COPY packages ./packages
 COPY services ./services
 COPY apps ./apps
+COPY scripts ./scripts
 
 RUN pip install .
 
