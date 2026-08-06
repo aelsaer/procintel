@@ -37,7 +37,13 @@ def _capability_source_record_insert(values: dict[str, Any]):
     return (
         pg_insert(source_records)
         .values(**values)
-        .on_conflict_do_nothing(constraint="uq_source_record_hash")
+        .on_conflict_do_nothing(
+            index_elements=(
+                source_records.c.source_system,
+                source_records.c.resource_type,
+                source_records.c.content_sha256,
+            )
+        )
         .returning(source_records.c.id)
     )
 

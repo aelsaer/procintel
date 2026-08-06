@@ -118,7 +118,10 @@ def test_capability_raw_record_insert_is_content_hash_idempotent() -> None:
     )
     sql = str(statement.compile(dialect=postgresql.dialect()))
 
-    assert "ON CONFLICT ON CONSTRAINT uq_source_record_hash DO NOTHING" in sql
+    assert (
+        "ON CONFLICT (source_system, resource_type, content_sha256) DO NOTHING"
+        in sql
+    )
 
 
 def test_selected_wms_request_is_allowlisted_and_parameter_bounded() -> None:

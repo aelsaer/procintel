@@ -27,6 +27,9 @@ from services.ingestion.enrichment_queue import (
     enqueue_enrichment,
     fail_enrichment,
 )
+from services.ingestion.connectors.inspire.capabilities import (
+    _capability_source_record_insert,
+)
 from services.data_quality.service import run_data_quality_checks
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -38,6 +41,58 @@ pytestmark = pytest.mark.skipif(
 
 def _async_url(url: str) -> str:
     return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+
+@pytest.mark.asyncio
+async def test_inspire_capability_evidence_dedupes_by_global_content_hash() -> None:
+    engine = create_async_engine(_async_url(DATABASE_URL))
+    content_hash = uuid.uuid4().hex
+    first_id = uuid.uuid4()
+    try:
+        async with engine.begin() as conn:
+            common = {
+                "source_system": "INSPIRE",
+                "resource_type": "WMS_CAPABILITIES",
+                "content_sha256": content_hash,
+                "payload_uri": f"mem://{content_hash}",
+                "fetched_at": datetime.now(timezone.utc),
+                "parse_status": "PARSED",
+            }
+            inserted = (
+                await conn.execute(
+                    _capability_source_record_insert(
+                        {
+                            **common,
+                            "id": first_id,
+                            "source_native_id": "https://example.test/first/wms",
+                        }
+                    )
+                )
+            ).scalar_one()
+            duplicate = (
+                await conn.execute(
+                    _capability_source_record_insert(
+                        {
+                            **common,
+                            "id": uuid.uuid4(),
+                            "source_native_id": "https://example.test/alias/wms",
+                        }
+                    )
+                )
+            ).scalar_one_or_none()
+
+            assert inserted == first_id
+            assert duplicate is None
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(
+                source_records.delete().where(
+                    source_records.c.source_system == "INSPIRE",
+                    source_records.c.resource_type == "WMS_CAPABILITIES",
+                    source_records.c.content_sha256 == content_hash,
+                )
+            )
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
