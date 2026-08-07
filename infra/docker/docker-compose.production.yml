@@ -66,6 +66,7 @@ services:
       RAW_STORE_ROOT: /var/lib/procintel/raw
       DOCUMENT_STORE_ROOT: /var/lib/procintel/documents
       EXPORT_ROOT: /var/lib/procintel/exports
+      DAILY_SCHEDULER_MAX_SLEEP_SECONDS: ${DAILY_SCHEDULER_MAX_SLEEP_SECONDS:-300}
     volumes:
       - raw_data:/var/lib/procintel/raw
       - document_data:/var/lib/procintel/documents

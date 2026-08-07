@@ -12,6 +12,8 @@ export function EntityReviewWorkspace() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
+  const [generationCursor, setGenerationCursor] = useState<string | null>(null);
+  const [generationStatus, setGenerationStatus] = useState<string | null>(null);
 
   async function refresh() {
     try {
@@ -25,7 +27,12 @@ export function EntityReviewWorkspace() {
 
   async function generate() {
     setBusy(true);
-    try { await api.generateEntityCandidates(); await refresh(); }
+    try {
+      const result = await api.generateEntityCandidates(generationCursor);
+      setGenerationCursor(result.next_cursor);
+      setGenerationStatus(`${result.pairs_considered} ζεύγη · ${result.candidates_written} ενημερώσεις${result.scan_complete ? " · ολοκληρώθηκε η σάρωση" : ""}`);
+      await refresh();
+    }
     catch (nextError) { setError(nextError); }
     finally { setBusy(false); }
   }
@@ -47,6 +54,7 @@ export function EntityReviewWorkspace() {
   return (
     <div className="entity-review-workspace">
       <div className="review-toolbar"><div><span className="eyebrow">Data stewardship</span><h2>Entity resolution review</h2></div><button className="button button-secondary" type="button" onClick={() => void generate()} disabled={busy}><RefreshCw className={busy ? "spin" : ""} size={15} />Παραγωγή υποψηφίων</button></div>
+      {generationStatus ? <p className="relationship-note" role="status">{generationStatus}</p> : null}
       {Boolean(error) && <ErrorState title="Δεν φορτώθηκε η ουρά entity review" error={error} />}
       {loading && <LoadingState label="Φόρτωση υποψηφίων ταύτισης" />}
       <label className="review-notes"><span>Σημείωση απόφασης</span><input value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Τεκμηρίωση merge ή rejection" /></label>

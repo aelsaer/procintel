@@ -15,8 +15,9 @@ from typing import Any, Literal
 
 import httpx
 
-from packages.source_clients.rate_limit import TokenBucket
+from packages.source_clients.rate_limit import RateLimiter, TokenBucket
 from packages.source_clients.retry import CircuitBreaker, raise_for_retryable_status, retrying
+from packages.source_clients.shared_rate_limit import SharedSlidingWindowLimiter
 
 from .config import KhmdhsConnectorConfig
 
@@ -48,20 +49,25 @@ class KhmdhsClient:
         self,
         config: KhmdhsConnectorConfig,
         http_client: httpx.AsyncClient | None = None,
-        rate_limiter: TokenBucket | None = None,
+        rate_limiter: RateLimiter | None = None,
     ) -> None:
         self._config = config
         self._http = http_client or httpx.AsyncClient(
             base_url=config.base_url, timeout=config.request_timeout_seconds
         )
         self._owns_http_client = http_client is None
-        self._rate_limiter = rate_limiter or TokenBucket(
-            config.rate_limit_per_minute
+        self._rate_limiter = rate_limiter or (
+            SharedSlidingWindowLimiter(
+                int(config.rate_limit_per_minute),
+                config.rate_limit_state_path,
+            )
+            if config.rate_limit_state_path
+            else TokenBucket(config.rate_limit_per_minute)
         )
         self._circuit_breaker = CircuitBreaker()
 
     @property
-    def request_rate_limiter(self) -> TokenBucket:
+    def request_rate_limiter(self) -> RateLimiter:
         return self._rate_limiter
 
     async def aclose(self) -> None:
@@ -81,10 +87,9 @@ class KhmdhsClient:
             raise ValueError(f"unknown KHMDHS resource: {resource!r}")
 
         self._circuit_breaker.raise_if_open()
-        await self._rate_limiter.acquire()
-
         @retrying(max_attempts=self._config.max_retry_attempts)
         async def _do_request() -> httpx.Response:
+            await self._rate_limiter.acquire()
             body = {
                 "dateFrom": date_from.isoformat(),
                 "dateTo": date_to.isoformat(),
@@ -148,10 +153,9 @@ class KhmdhsClient:
     async def fetch_adam_chain(self, reference_number: str) -> KhmdhsAdamChainResponse:
         """Fetch the official six-bucket lifecycle chain for one ΑΔΑΜ."""
         self._circuit_breaker.raise_if_open()
-        await self._rate_limiter.acquire()
-
         @retrying(max_attempts=self._config.max_retry_attempts)
         async def _do_request() -> httpx.Response:
+            await self._rate_limiter.acquire()
             response = await self._http.get(f"/khmdhs-opendata/adamChain/{reference_number}")
             raise_for_retryable_status(response)
             return response

@@ -11,7 +11,8 @@ derived metric must show coverage and last-updated date. See
 
 - `MefClient` calls the published `/api/spendings` endpoint with mandatory
   `year`, `searchTerm`, `limit`, and `offset`, then exact-filters
-  `issuer_afm`. `MEF_LOOKUP_YEARS` can provide a comma-separated historical
+  `receiver_afm` (current envelope) or `issuer_afm` (documented legacy envelope).
+  `MEF_LOOKUP_YEARS` can provide a comma-separated historical
   recovery scope; the safe daily default is the current UTC year.
 - The normalizer handles the API's dotted organization fields, Greek
   `DD/MM/YYYY` dates, and Greek-formatted decimal amounts.

@@ -9,6 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Protocol
+
+
+class RateLimiter(Protocol):
+    async def acquire(self, cost: float = 1.0) -> None: ...
 
 
 class TokenBucket:

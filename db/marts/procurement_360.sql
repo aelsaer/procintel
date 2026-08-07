@@ -33,7 +33,10 @@ WITH act_identifiers_by_act AS (
     GROUP BY act_id
 ),
 
-acts_agg AS (
+-- This CTE is referenced by both the final row and lifecycle confidence.
+-- Force inlining so a process_id predicate reaches ix_acts_process instead of
+-- materializing every act and identifier in the database for one detail page.
+acts_agg AS NOT MATERIALIZED (
     SELECT
         a.process_id,
         jsonb_agg(

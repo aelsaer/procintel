@@ -1427,7 +1427,6 @@ async def relationship_explorer(
                buyer.id AS buyer_id, buyer.canonical_name AS buyer_name,
                supplier.id AS supplier_id, supplier.canonical_name AS supplier_name,
                MAX(COALESCE(sp.amount,a.amount_net)) AS value,
-               ARRAY_REMOVE(ARRAY_AGG(DISTINCT cpv.cpv_code),NULL) AS cpv_codes,
                (ARRAY_AGG(a.id ORDER BY COALESCE(a.publication_date,a.decision_date,a.submission_date) DESC NULLS LAST))[1] AS evidence_act_id,
                MAX(COALESCE(a.publication_date,a.decision_date,a.submission_date)) AS evidence_date,
                (ARRAY_AGG(official.scheme ORDER BY COALESCE(a.publication_date,a.decision_date,a.submission_date) DESC NULLS LAST)
@@ -1447,8 +1446,6 @@ async def relationship_explorer(
         LEFT JOIN entities buyer ON buyer.id=COALESCE(bp.entity_id,pp.buyer_entity_id)
         LEFT JOIN act_parties sp ON sp.act_id=a.id AND sp.party_role IN ('SUPPLIER','CONTRACTOR')
         LEFT JOIN entities supplier ON supplier.id=sp.entity_id
-        LEFT JOIN act_cpv_codes cpv ON cpv.act_id=a.id
-        LEFT JOIN act_locations loc ON loc.act_id=a.id
         LEFT JOIN LATERAL (
             SELECT i.scheme,i.value_normalized
             FROM act_identifiers i
@@ -1464,19 +1461,35 @@ async def relationship_explorer(
         WHERE (CAST(:entity_id AS uuid) IS NULL OR buyer.id=CAST(:entity_id AS uuid) OR supplier.id=CAST(:entity_id AS uuid))
           AND (CAST(:date_from AS date) IS NULL OR COALESCE(a.publication_date,a.decision_date,a.submission_date) >= CAST(:date_from AS date))
           AND (CAST(:date_to AS date) IS NULL OR COALESCE(a.publication_date,a.decision_date,a.submission_date) <= CAST(:date_to AS date))
-          AND (CAST(:nuts AS text) IS NULL OR loc.nuts_code LIKE CAST(:nuts AS text) || '%')
+          AND (
+              CAST(:nuts AS text) IS NULL
+              OR EXISTS (
+                  SELECT 1 FROM act_locations location
+                  WHERE location.act_id=a.id
+                    AND location.nuts_code LIKE CAST(:nuts AS text) || '%'
+              )
+          )
           AND (
               CAST(:municipality_like AS text) IS NULL
-              OR loc.municipality_name ILIKE CAST(:municipality_like AS text)
-              OR loc.place_text ILIKE CAST(:municipality_like AS text)
-              OR loc.regional_unit_name ILIKE CAST(:municipality_like AS text)
+              OR EXISTS (
+                  SELECT 1 FROM act_locations location
+                  WHERE location.act_id=a.id
+                    AND (
+                        location.municipality_name ILIKE CAST(:municipality_like AS text)
+                        OR location.place_text ILIKE CAST(:municipality_like AS text)
+                        OR location.regional_unit_name ILIKE CAST(:municipality_like AS text)
+                    )
+              )
           )
-          AND procintel_taxonomy_match(
-              a.id,
-              a.title,
-              CAST(:cpv_likes AS TEXT[]),
-              CAST(:keyword_patterns AS TEXT[]),
-              CAST(:taxonomy_match_all AS BOOLEAN)
+          AND (
+              NOT CAST(:has_taxonomy_filter AS BOOLEAN)
+              OR procintel_taxonomy_match(
+                  a.id,
+                  a.title,
+                  CAST(:cpv_likes AS TEXT[]),
+                  CAST(:keyword_patterns AS TEXT[]),
+                  CAST(:taxonomy_match_all AS BOOLEAN)
+              )
           )
         GROUP BY pp.id, pp.title, buyer.id, buyer.canonical_name, supplier.id, supplier.canonical_name
         HAVING (CAST(:minimum_value AS numeric) IS NULL OR MAX(COALESCE(sp.amount,a.amount_net)) >= CAST(:minimum_value AS numeric))
@@ -1485,6 +1498,7 @@ async def relationship_explorer(
     ), {
         "entity_id": entity_id,
         "minimum_value": minimum_value,
+        "has_taxonomy_filter": bool(cpv_likes or keyword_patterns),
         "cpv_likes": cpv_likes,
         "keyword_patterns": keyword_patterns,
         "taxonomy_match_all": taxonomy_match_all,
@@ -1494,6 +1508,23 @@ async def relationship_explorer(
         "municipality_like": f"%{municipality.strip()}%" if municipality and municipality.strip() else None,
         "limit": limit,
     })).all()
+    process_ids = list(dict.fromkeys(row.process_id for row in rows))
+    cpv_by_process: dict[Any, list[str]] = {}
+    if process_ids:
+        cpv_rows = (await conn.execute(
+            sa.text(
+                """
+                SELECT act.process_id,
+                       ARRAY_AGG(DISTINCT cpv.cpv_code ORDER BY cpv.cpv_code) AS cpv_codes
+                FROM procurement_acts act
+                JOIN act_cpv_codes cpv ON cpv.act_id=act.id
+                WHERE act.process_id=ANY(CAST(:process_ids AS UUID[]))
+                GROUP BY act.process_id
+                """
+            ),
+            {"process_ids": process_ids},
+        )).all()
+        cpv_by_process = {row.process_id: list(row.cpv_codes or []) for row in cpv_rows}
     nodes: dict[str, RelationshipNode] = {}
     edges: list[RelationshipEdge] = []
     table: list[dict[str, Any]] = []
@@ -1534,11 +1565,10 @@ async def relationship_explorer(
         table.append({
             "process_id": str(row.process_id), "process": row.process_title,
             "buyer": row.buyer_name, "supplier": row.supplier_name,
-            "value": row.value, "cpv_codes": row.cpv_codes or [],
+            "value": row.value, "cpv_codes": cpv_by_process.get(row.process_id, []),
             **evidence,
         })
 
-    process_ids = [row.process_id for row in rows]
     if process_ids and relation_type in (None, "FUNDED_BY") and source in (None, "funding_links"):
         funding_rows = (await conn.execute(
             sa.select(

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from packages.source_clients.rate_limit import TokenBucket
+from packages.source_clients.rate_limit import RateLimiter
 from packages.source_clients.retry import raise_for_retryable_status, retrying
 
 from .config import DocumentPipelineConfig
@@ -39,7 +39,7 @@ async def download_document(
     *,
     config: DocumentPipelineConfig,
     http_client: httpx.AsyncClient | None = None,
-    rate_limiter: TokenBucket | None = None,
+    rate_limiter: RateLimiter | None = None,
 ) -> DownloadedDocument:
     owns_client = http_client is None
     client = http_client or httpx.AsyncClient(timeout=config.download_timeout_seconds)

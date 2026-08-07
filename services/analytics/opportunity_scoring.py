@@ -27,7 +27,7 @@ from packages.domain.tables import (
     opportunity_scores,
 )
 from services.alerts.evaluate import rule_matches
-from services.search_index.lexical import lexical_query_matches
+from services.search_index.lexical import lexical_query_matches, query_concept_pattern
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,23 @@ class OpportunityScoreRun:
     scores_written: int
 
 
+async def tenant_ids_with_business_profiles(
+    conn: AsyncConnection,
+) -> list[uuid.UUID]:
+    """Return only tenants that have completed the persisted profile step."""
+    return list(
+        (
+            await conn.execute(
+                sa.select(business_profiles.c.tenant_id).order_by(
+                    business_profiles.c.tenant_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
 def _as_list(value: Any) -> list[Any]:
     if value is None:
         return []
@@ -46,6 +63,31 @@ def _as_list(value: Any) -> list[Any]:
     if isinstance(value, tuple):
         return list(value)
     return [value]
+
+
+def candidate_taxonomy_scope(rules: list[Any]) -> tuple[list[str], list[str]]:
+    """Build a safe taxonomy superset for SQL candidate preselection."""
+    cpv_likes: list[str] = []
+    keyword_patterns: list[str] = []
+    for rule in rules:
+        filters = rule.filters or {}
+        cpv_prefixes = _as_list(filters.get("cpv_prefix")) + _as_list(filters.get("cpv_prefixes"))
+        keywords = _as_list(filters.get("keyword")) + _as_list(filters.get("keywords"))
+        patterns = [
+            pattern
+            for keyword in keywords
+            if (pattern := query_concept_pattern(str(keyword))) is not None
+        ]
+        mode = str(filters.get("taxonomy_match_mode") or "ANY").upper()
+        if mode == "KEYWORD_REQUIRED" and patterns:
+            rule_cpv_likes: list[str] = []
+        else:
+            rule_cpv_likes = [f"{str(prefix).split('-', 1)[0]}%" for prefix in cpv_prefixes]
+        if not rule_cpv_likes and not patterns:
+            return [], []
+        cpv_likes.extend(rule_cpv_likes)
+        keyword_patterns.extend(patterns)
+    return list(dict.fromkeys(cpv_likes)), list(dict.fromkeys(keyword_patterns))
 
 
 def _money(value: Any) -> Decimal | None:
@@ -219,53 +261,134 @@ async def _load_candidates(
     lookback_days: int,
     include_contracted: bool,
     limit: int | None,
+    candidate_cpv_likes: list[str] | None = None,
+    candidate_keyword_patterns: list[str] | None = None,
 ) -> list[Any]:
     since_date = as_of - timedelta(days=lookback_days) if lookback_days > 0 else None
     limit_clause = "LIMIT :limit" if limit is not None else ""
     sql = sa.text(
         f"""
-        WITH process_rollup AS (
+        WITH candidate_processes AS MATERIALIZED (
             SELECT
-                pp.id AS process_id,
-                pp.title,
-                pp.buyer_entity_id,
-                COALESCE(pp.estimated_value, pp.awarded_value, pp.current_contract_value, MAX(a.amount_gross)) AS amount_gross,
-                BOOL_OR(a.act_type = 'CONTRACT') AS has_contract,
-                BOOL_OR(a.act_type IN ('REQUEST', 'APPROVED_REQUEST', 'NOTICE')) AS has_opportunity,
-                MAX(COALESCE(a.publication_date, a.submission_date, a.decision_date)) AS latest_act_date,
-                COUNT(DISTINCT a.id) AS act_count,
-                ARRAY_REMOVE(ARRAY_AGG(DISTINCT acpv.cpv_code), NULL) AS cpv_codes,
-                ARRAY_REMOVE(ARRAY_AGG(DISTINCT aloc.nuts_code), NULL) AS nuts_codes,
+                opportunity.process_id,
+                MAX(COALESCE(
+                    opportunity.publication_date,
+                    opportunity.submission_date,
+                    opportunity.decision_date
+                )) AS latest_act_date
+            FROM procurement_acts opportunity
+            JOIN procurement_processes process ON process.id = opportunity.process_id
+            WHERE process.record_status = 'ACTIVE'
+              AND opportunity.is_current = TRUE
+              AND opportunity.act_type IN ('REQUEST', 'APPROVED_REQUEST', 'NOTICE')
+              AND procintel_act_is_analytics_eligible(opportunity.id)
+              AND (
+                  NOT CAST(:has_candidate_taxonomy AS BOOLEAN)
+                  OR procintel_taxonomy_match(
+                      opportunity.id,
+                      opportunity.title,
+                      CAST(:candidate_cpv_likes AS TEXT[]),
+                      CAST(:candidate_keyword_patterns AS TEXT[]),
+                      FALSE
+                  )
+              )
+              AND (
+                  CAST(:since_date AS DATE) IS NULL
+                  OR COALESCE(
+                      opportunity.publication_date,
+                      opportunity.submission_date,
+                      opportunity.decision_date
+                  ) >= CAST(:since_date AS DATE)
+              )
+              AND (
+                  CAST(:include_contracted AS BOOLEAN)
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM procurement_acts contract
+                      WHERE contract.process_id = opportunity.process_id
+                        AND contract.is_current = TRUE
+                        AND contract.act_type = 'CONTRACT'
+                        AND procintel_act_is_analytics_eligible(contract.id)
+                  )
+              )
+            GROUP BY opportunity.process_id
+            ORDER BY latest_act_date DESC NULLS LAST, opportunity.process_id
+            {limit_clause}
+        )
+        SELECT
+            process.id AS process_id,
+            process.title,
+            process.buyer_entity_id,
+            COALESCE(
+                process.estimated_value,
+                process.awarded_value,
+                process.current_contract_value,
+                act_stats.amount_gross
+            ) AS amount_gross,
+            candidate.latest_act_date,
+            COALESCE(act_stats.act_count, 0) AS act_count,
+            COALESCE(cpv.cpv_codes, ARRAY[]::TEXT[]) AS cpv_codes,
+            COALESCE(location.nuts_codes, ARRAY[]::TEXT[]) AS nuts_codes,
+            COALESCE(location.location_names, ARRAY[]::TEXT[]) AS location_names,
+            COALESCE(supplier.supplier_count, 0) AS supplier_count
+        FROM candidate_processes candidate
+        JOIN procurement_processes process ON process.id = candidate.process_id
+        LEFT JOIN LATERAL (
+            SELECT
+                MAX(COALESCE(act.amount_gross, act.amount_net)) AS amount_gross,
+                COUNT(*)::INT AS act_count
+            FROM procurement_acts act
+            WHERE act.process_id = candidate.process_id
+              AND act.is_current = TRUE
+              AND procintel_act_is_analytics_eligible(act.id)
+        ) act_stats ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT ARRAY_AGG(DISTINCT code.cpv_code ORDER BY code.cpv_code) AS cpv_codes
+            FROM procurement_acts act
+            JOIN act_cpv_codes code ON code.act_id = act.id
+            WHERE act.process_id = candidate.process_id
+              AND act.is_current = TRUE
+              AND procintel_act_is_analytics_eligible(act.id)
+        ) cpv ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT
+                ARRAY_REMOVE(ARRAY_AGG(DISTINCT place.nuts_code), NULL) AS nuts_codes,
                 ARRAY_REMOVE(
                     ARRAY_AGG(DISTINCT COALESCE(
-                        aloc.municipality_name,
-                        aloc.place_text,
-                        aloc.regional_unit_name,
-                        aloc.region_name
+                        place.municipality_name,
+                        place.place_text,
+                        place.regional_unit_name,
+                        place.region_name
                     )),
                     NULL
-                ) AS location_names,
-                COUNT(DISTINCT supplier_ap.entity_id) AS supplier_count
-            FROM procurement_processes pp
-            JOIN procurement_acts a ON a.process_id = pp.id AND a.is_current = TRUE
-            LEFT JOIN act_cpv_codes acpv ON acpv.act_id = a.id
-            LEFT JOIN act_locations aloc ON aloc.act_id = a.id
-            LEFT JOIN act_parties supplier_ap
-                ON supplier_ap.act_id = a.id
-               AND supplier_ap.party_role IN ('SUPPLIER', 'CONTRACTOR')
-            WHERE pp.record_status = 'ACTIVE'
-            GROUP BY pp.id, pp.title, pp.buyer_entity_id, pp.estimated_value, pp.awarded_value, pp.current_contract_value
-        )
-        SELECT *
-        FROM process_rollup
-        WHERE has_opportunity = TRUE
-          AND (CAST(:include_contracted AS BOOLEAN) OR has_contract = FALSE)
-          AND (CAST(:since_date AS DATE) IS NULL OR latest_act_date >= CAST(:since_date AS DATE))
-        ORDER BY latest_act_date DESC NULLS LAST, process_id
-        {limit_clause}
+                ) AS location_names
+            FROM procurement_acts act
+            JOIN act_locations place ON place.act_id = act.id
+            WHERE act.process_id = candidate.process_id
+              AND act.is_current = TRUE
+              AND procintel_act_is_analytics_eligible(act.id)
+        ) location ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT COUNT(DISTINCT party.entity_id)::INT AS supplier_count
+            FROM procurement_acts act
+            JOIN act_parties party
+              ON party.act_id = act.id
+             AND party.party_role IN ('SUPPLIER', 'CONTRACTOR')
+            WHERE act.process_id = candidate.process_id
+              AND act.is_current = TRUE
+              AND procintel_act_is_analytics_eligible(act.id)
+        ) supplier ON TRUE
+        ORDER BY candidate.latest_act_date DESC NULLS LAST, process.id
         """
     )
-    params = {"include_contracted": include_contracted, "since_date": since_date, "limit": limit}
+    params = {
+        "include_contracted": include_contracted,
+        "since_date": since_date,
+        "limit": limit,
+        "has_candidate_taxonomy": bool(candidate_cpv_likes or candidate_keyword_patterns),
+        "candidate_cpv_likes": candidate_cpv_likes or [],
+        "candidate_keyword_patterns": candidate_keyword_patterns or [],
+    }
     return (await conn.execute(sql, params)).all()
 
 
@@ -305,12 +428,15 @@ async def score_opportunities_for_tenant(
             scores_written=0,
         )
 
+    candidate_cpv_likes, candidate_keyword_patterns = candidate_taxonomy_scope(rules)
     candidates = await _load_candidates(
         conn,
         as_of=as_of,
         lookback_days=lookback_days,
         include_contracted=include_contracted,
         limit=limit,
+        candidate_cpv_likes=candidate_cpv_likes,
+        candidate_keyword_patterns=candidate_keyword_patterns,
     )
     feedback_rows = (
         await conn.execute(

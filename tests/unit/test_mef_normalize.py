@@ -38,3 +38,17 @@ def test_normalize_empty_record_is_all_none():
     assert normalized.amount is None
     assert normalized.expense_date is None
     assert normalized.related_ada is None
+
+
+def test_normalize_supports_current_receiver_field_names():
+    normalized = normalize_expense_record(
+        {
+            "receiver_afm": "090000045",
+            "receiver_title": "CURRENT SUPPLIER",
+            "issuer_afm": "099999999",
+            "issuer_title": "LEGACY SUPPLIER",
+        }
+    )
+
+    assert normalized.recipient_afm == "090000045"
+    assert normalized.recipient_name == "CURRENT SUPPLIER"

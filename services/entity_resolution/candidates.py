@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -19,6 +19,27 @@ class CandidateGenerationResult:
     pairs_considered: int
     candidates_written: int
     identifier_conflicts: int
+    next_cursor: str | None
+    scan_complete: bool
+
+
+@dataclass(frozen=True)
+class CandidateScanPage:
+    entity_ids: tuple[uuid.UUID, ...]
+    next_cursor: str | None
+    complete: bool
+
+
+def candidate_scan_page(rows: Iterable[Any], page_size: int) -> CandidateScanPage:
+    """Turn a limit-plus-one entity query into a stable continuation page."""
+    values = tuple(row.id for row in rows)
+    entity_ids = values[:page_size]
+    has_more = len(values) > page_size
+    return CandidateScanPage(
+        entity_ids=entity_ids,
+        next_cursor=str(entity_ids[-1]) if has_more and entity_ids else None,
+        complete=not has_more,
+    )
 
 
 def _values(value: Any) -> set[str]:
@@ -94,8 +115,33 @@ async def generate_match_candidates(
     conn: AsyncConnection,
     *,
     minimum_name_similarity: float = 0.58,
-    limit: int = 1000,
+    limit: int = 500,
+    anchor_limit: int = 50,
+    after_entity_id: uuid.UUID | None = None,
 ) -> CandidateGenerationResult:
+    anchor_rows = (
+        await conn.execute(
+            sa.text(
+                """
+                SELECT id
+                FROM entities
+                WHERE status = 'ACTIVE'
+                  AND entity_type IN ('COMPANY', 'PUBLIC_ORGANIZATION', 'CONSORTIUM')
+                  AND (CAST(:after_entity_id AS UUID) IS NULL OR id > CAST(:after_entity_id AS UUID))
+                ORDER BY id
+                LIMIT :anchor_query_limit
+                """
+            ),
+            {
+                "after_entity_id": after_entity_id,
+                "anchor_query_limit": anchor_limit + 1,
+            },
+        )
+    ).all()
+    page = candidate_scan_page(anchor_rows, anchor_limit)
+    if not page.entity_ids:
+        return CandidateGenerationResult(0, 0, 0, None, True)
+
     rows = (
         await conn.execute(
             sa.text(
@@ -148,31 +194,32 @@ async def generate_match_candidates(
                 ), candidate_pairs AS MATERIALIZED (
                     SELECT entity_a_id, entity_b_id
                     FROM (
-                        SELECT a.id AS entity_a_id, b.id AS entity_b_id,
+                        SELECT LEAST(a.id, b.id) AS entity_a_id,
+                               GREATEST(a.id, b.id) AS entity_b_id,
                                similarity(a.normalized_name, b.normalized_name) AS name_similarity
                         FROM entities a
                         JOIN entities b
-                          ON b.id > a.id
+                          ON b.id <> a.id
                          AND b.entity_type = a.entity_type
                          AND b.status = 'ACTIVE'
                          AND b.normalized_name % a.normalized_name
-                        WHERE a.status = 'ACTIVE'
-                          AND a.entity_type IN ('COMPANY', 'PUBLIC_ORGANIZATION', 'CONSORTIUM')
+                        WHERE a.id = ANY(CAST(:anchor_ids AS UUID[]))
                           AND similarity(a.normalized_name, b.normalized_name) >= :minimum_similarity
 
                         UNION ALL
 
-                        SELECT a.id, b.id,
+                        SELECT LEAST(a.id, b.id), GREATEST(a.id, b.id),
                                similarity(a.normalized_name, b.normalized_name)
                         FROM entity_contacts ac
                         JOIN entity_contacts bc
-                          ON bc.entity_id > ac.entity_id
+                          ON bc.entity_id <> ac.entity_id
                          AND bc.contact_type = ac.contact_type
                          AND bc.value_normalized = ac.value_normalized
                          AND bc.is_current = TRUE
                         JOIN entities a ON a.id = ac.entity_id
                         JOIN entities b ON b.id = bc.entity_id
-                        WHERE ac.is_current = TRUE
+                        WHERE ac.entity_id = ANY(CAST(:anchor_ids AS UUID[]))
+                          AND ac.is_current = TRUE
                           AND ac.contact_type IN ('DOMAIN', 'PHONE', 'EMAIL')
                           AND NULLIF(ac.value_normalized, '') IS NOT NULL
                           AND a.status = 'ACTIVE'
@@ -181,16 +228,17 @@ async def generate_match_candidates(
 
                         UNION ALL
 
-                        SELECT a.id, b.id,
+                        SELECT LEAST(a.id, b.id), GREATEST(a.id, b.id),
                                similarity(a.normalized_name, b.normalized_name)
                         FROM entity_addresses aa
                         JOIN entity_addresses ba
-                          ON ba.entity_id > aa.entity_id
+                          ON ba.entity_id <> aa.entity_id
                          AND REPLACE(ba.postal_code, ' ', '') = REPLACE(aa.postal_code, ' ', '')
                          AND ba.is_current = TRUE
                         JOIN entities a ON a.id = aa.entity_id
                         JOIN entities b ON b.id = ba.entity_id
-                        WHERE aa.is_current = TRUE
+                        WHERE aa.entity_id = ANY(CAST(:anchor_ids AS UUID[]))
+                          AND aa.is_current = TRUE
                           AND NULLIF(REPLACE(aa.postal_code, ' ', ''), '') IS NOT NULL
                           AND a.status = 'ACTIVE'
                           AND b.status = 'ACTIVE'
@@ -245,26 +293,36 @@ async def generate_match_candidates(
                 ORDER BY name_similarity DESC, a.id, b.id
                 """
             ),
-            {"minimum_similarity": minimum_name_similarity, "limit": limit},
+            {
+                "anchor_ids": list(page.entity_ids),
+                "minimum_similarity": minimum_name_similarity,
+                "limit": limit,
+            },
         )
     ).all()
 
-    written = 0
     conflicts = 0
+    values: list[dict[str, Any]] = []
     for row in rows:
         score, breakdown = score_candidate(row._mapping)
         if breakdown["identifier_conflict"]:
             conflicts += 1
+        values.append(
+            {
+                "id": uuid.uuid4(),
+                "entity_a_id": row.entity_a_id,
+                "entity_b_id": row.entity_b_id,
+                "score": Decimal(str(score)),
+                "score_breakdown": breakdown,
+                "blocking_reason": row.blocking_reason,
+            }
+        )
+
+    written = 0
+    if values:
         result = await conn.execute(
             pg_insert(entity_match_candidates)
-            .values(
-                id=uuid.uuid4(),
-                entity_a_id=row.entity_a_id,
-                entity_b_id=row.entity_b_id,
-                score=Decimal(str(score)),
-                score_breakdown=breakdown,
-                blocking_reason=row.blocking_reason,
-            )
+            .values(values)
             .on_conflict_do_update(
                 index_elements=[
                     entity_match_candidates.c.entity_a_id,
@@ -278,6 +336,11 @@ async def generate_match_candidates(
                 where=entity_match_candidates.c.status == "PENDING_REVIEW",
             )
         )
-        if result.rowcount:
-            written += 1
-    return CandidateGenerationResult(len(rows), written, conflicts)
+        written = result.rowcount or 0
+    return CandidateGenerationResult(
+        len(rows),
+        written,
+        conflicts,
+        page.next_cursor,
+        page.complete,
+    )

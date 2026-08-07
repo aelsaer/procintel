@@ -248,24 +248,96 @@ async def discover_competitors(
         await conn.execute(
             sa.text(
                 """
-                WITH scoped_processes AS (
-                    SELECT DISTINCT p.id AS process_id, p.buyer_entity_id
-                    FROM procurement_processes p
-                    JOIN procurement_acts scope_act ON scope_act.process_id = p.id
-                    WHERE scope_act.is_current = TRUE
-                      AND (CAST(:date_from AS DATE) IS NULL OR COALESCE(scope_act.decision_date, scope_act.publication_date, scope_act.submission_date) >= CAST(:date_from AS DATE))
-                      AND (CAST(:date_to AS DATE) IS NULL OR COALESCE(scope_act.decision_date, scope_act.publication_date, scope_act.submission_date) <= CAST(:date_to AS DATE))
-                      AND (
-                          CAST(:amount_min AS NUMERIC) IS NULL
-                          OR COALESCE(scope_act.amount_gross, scope_act.amount_net, p.estimated_value, p.awarded_value, 0) >= CAST(:amount_min AS NUMERIC)
+                WITH eligible_award_facts AS MATERIALIZED (
+                    SELECT
+                        a.id AS act_id,
+                        a.process_id,
+                        party.entity_id,
+                        COALESCE(party.amount, a.amount_gross, a.amount_net) AS amount,
+                        COALESCE(a.decision_date, a.publication_date, a.submission_date) AS event_date
+                    FROM act_parties party
+                    JOIN procurement_acts a ON a.id = party.act_id
+                    JOIN source_records source ON source.id = a.source_record_id
+                    WHERE a.process_id IS NOT NULL
+                      AND a.is_current = TRUE
+                      AND party.party_role IN ('SUPPLIER', 'CONTRACTOR')
+                      AND NOT (
+                          source.source_system = 'KHMDHS'
+                          AND source.resource_type = 'adamChain'
+                          AND a.title IS NULL
+                          AND a.amount_net IS NULL
+                          AND a.amount_gross IS NULL
+                          AND a.publication_date IS NULL
+                          AND a.submission_date IS NULL
+                          AND a.decision_date IS NULL
+                          AND a.start_date IS NULL
+                          AND a.end_date IS NULL
                       )
-                      AND procintel_taxonomy_match(
-                          scope_act.id,
-                          scope_act.title,
-                          CAST(:cpv_likes AS TEXT[]),
-                          CAST(:keyword_patterns AS TEXT[]),
-                          CAST(:taxonomy_match_all AS BOOLEAN)
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM data_quality_issues issue
+                          WHERE issue.object_id = a.id
+                            AND LOWER(COALESCE(issue.object_type, '')) IN ('procurement_act', 'procurement_acts')
+                            AND issue.severity IN ('ERROR', 'BLOCKING')
+                            AND issue.status <> 'RESOLVED'
                       )
+                ), competitive_processes AS (
+                    SELECT DISTINCT process_id
+                    FROM eligible_award_facts
+                    UNION
+                    SELECT DISTINCT participation.process_id
+                    FROM process_participations participation
+                    WHERE participation.entity_id IS NOT NULL
+                ), scoped_processes AS (
+                    SELECT p.id AS process_id, p.buyer_entity_id
+                    FROM competitive_processes competitive
+                    JOIN procurement_processes p ON p.id = competitive.process_id
+                    WHERE (
+                        NOT CAST(:has_act_scope_filter AS BOOLEAN)
+                        OR EXISTS (
+                        SELECT 1
+                        FROM procurement_acts scope_act
+                        JOIN source_records scope_source ON scope_source.id = scope_act.source_record_id
+                        WHERE scope_act.process_id = p.id
+                          AND scope_act.is_current = TRUE
+                          AND NOT (
+                              scope_source.source_system = 'KHMDHS'
+                              AND scope_source.resource_type = 'adamChain'
+                              AND scope_act.title IS NULL
+                              AND scope_act.amount_net IS NULL
+                              AND scope_act.amount_gross IS NULL
+                              AND scope_act.publication_date IS NULL
+                              AND scope_act.submission_date IS NULL
+                              AND scope_act.decision_date IS NULL
+                              AND scope_act.start_date IS NULL
+                              AND scope_act.end_date IS NULL
+                          )
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM data_quality_issues issue
+                              WHERE issue.object_id = scope_act.id
+                                AND LOWER(COALESCE(issue.object_type, '')) IN ('procurement_act', 'procurement_acts')
+                                AND issue.severity IN ('ERROR', 'BLOCKING')
+                                AND issue.status <> 'RESOLVED'
+                          )
+                          AND (CAST(:date_from AS DATE) IS NULL OR COALESCE(scope_act.decision_date, scope_act.publication_date, scope_act.submission_date) >= CAST(:date_from AS DATE))
+                          AND (CAST(:date_to AS DATE) IS NULL OR COALESCE(scope_act.decision_date, scope_act.publication_date, scope_act.submission_date) <= CAST(:date_to AS DATE))
+                          AND (
+                              CAST(:amount_min AS NUMERIC) IS NULL
+                              OR COALESCE(scope_act.amount_gross, scope_act.amount_net, p.estimated_value, p.awarded_value, 0) >= CAST(:amount_min AS NUMERIC)
+                          )
+                          AND (
+                              NOT CAST(:has_taxonomy_filter AS BOOLEAN)
+                              OR procintel_taxonomy_match(
+                                  scope_act.id,
+                                  scope_act.title,
+                                  CAST(:cpv_likes AS TEXT[]),
+                                  CAST(:keyword_patterns AS TEXT[]),
+                                  CAST(:taxonomy_match_all AS BOOLEAN)
+                              )
+                          )
+                        )
+                    )
                       AND (
                           CAST(:nuts_code AS TEXT) IS NULL
                           OR EXISTS (
@@ -288,18 +360,15 @@ async def discover_competitors(
                           )
                       )
                 ), award_facts AS (
-                    SELECT DISTINCT ON (a.process_id, ap.entity_id, a.id)
+                    SELECT DISTINCT ON (a.process_id, a.entity_id, a.act_id)
                         a.process_id,
-                        ap.entity_id,
+                        a.entity_id,
                         sp.buyer_entity_id,
-                        COALESCE(ap.amount, a.amount_gross, a.amount_net) AS amount,
-                        COALESCE(a.decision_date, a.publication_date, a.submission_date) AS event_date
-                    FROM procurement_acts a
+                        a.amount,
+                        a.event_date
+                    FROM eligible_award_facts a
                     JOIN scoped_processes sp ON sp.process_id = a.process_id
-                    JOIN act_parties ap ON ap.act_id = a.id
-                       AND ap.party_role IN ('SUPPLIER', 'CONTRACTOR')
-                    WHERE a.is_current = TRUE
-                    ORDER BY a.process_id, ap.entity_id, a.id
+                    ORDER BY a.process_id, a.entity_id, a.act_id
                 ), participation_facts AS (
                     SELECT DISTINCT
                         pp.process_id,
@@ -356,10 +425,17 @@ async def discover_competitors(
                     LEFT JOIN award_aggregates aa ON aa.entity_id = c.entity_id
                     JOIN exposure_aggregates ea ON ea.entity_id = c.entity_id
                     LEFT JOIN participation_aggregates pa ON pa.entity_id = c.entity_id
+                ), ranked_companies AS (
+                    SELECT cm.*, e.canonical_name
+                    FROM company_market cm
+                    JOIN entities e ON e.id = cm.entity_id
+                    WHERE (CAST(:reference_id AS UUID) IS NULL OR cm.entity_id <> CAST(:reference_id AS UUID))
+                    ORDER BY (cm.bid_count > 0) DESC, cm.recorded_value DESC NULLS LAST, cm.award_count DESC, e.canonical_name
+                    LIMIT :limit
                 )
                 SELECT
                     cm.entity_id,
-                    e.canonical_name,
+                    cm.canonical_name,
                     vat.value_normalized AS afm,
                     company.gemi_number,
                     company.company_status,
@@ -372,8 +448,7 @@ async def discover_competitors(
                     cm.bid_count,
                     COALESCE(cpv.cpv_codes, ARRAY[]::TEXT[]) AS cpv_codes,
                     COALESCE(nuts.nuts_codes, ARRAY[]::TEXT[]) AS nuts_codes
-                FROM company_market cm
-                JOIN entities e ON e.id = cm.entity_id
+                FROM ranked_companies cm
                 LEFT JOIN LATERAL (
                     SELECT value_normalized FROM entity_identifiers
                     WHERE entity_id = cm.entity_id AND scheme = 'AFM' AND is_current = TRUE
@@ -388,27 +463,31 @@ async def discover_competitors(
                     SELECT ARRAY_AGG(DISTINCT cc.cpv_code ORDER BY cc.cpv_code) AS cpv_codes
                     FROM procurement_acts ca
                     JOIN act_cpv_codes cc ON cc.act_id = ca.id
-                    WHERE ca.process_id = ANY(cm.process_ids)
+                    WHERE CAST(:include_cpv_footprint AS BOOLEAN)
+                      AND ca.process_id = ANY(cm.process_ids)
                 ) cpv ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT ARRAY_AGG(DISTINCT UPPER(ll.nuts_code) ORDER BY UPPER(ll.nuts_code)) AS nuts_codes
                     FROM procurement_acts la
                     JOIN act_locations ll ON ll.act_id = la.id
-                    WHERE la.process_id = ANY(cm.process_ids) AND ll.nuts_code IS NOT NULL
+                    WHERE CAST(:include_nuts_footprint AS BOOLEAN)
+                      AND la.process_id = ANY(cm.process_ids)
+                      AND ll.nuts_code IS NOT NULL
                 ) nuts ON TRUE
-                WHERE (CAST(:reference_id AS UUID) IS NULL OR cm.entity_id <> CAST(:reference_id AS UUID))
-                ORDER BY (cm.bid_count > 0) DESC, cm.recorded_value DESC NULLS LAST, cm.award_count DESC, e.canonical_name
-                LIMIT :limit
+                ORDER BY (cm.bid_count > 0) DESC, cm.recorded_value DESC NULLS LAST, cm.award_count DESC, cm.canonical_name
                 """
             ),
             {
                 "date_from": date_from,
                 "date_to": date_to,
                 "amount_min": amount_min,
+                "has_act_scope_filter": bool(date_from or date_to or amount_min is not None or cpv_likes or keyword_patterns),
                 "has_taxonomy_filter": bool(cpv_likes or keyword_patterns),
                 "keyword_patterns": keyword_patterns,
                 "taxonomy_match_all": taxonomy_match_all,
                 "cpv_likes": cpv_likes,
+                "include_cpv_footprint": bool(active_cpv_prefixes),
+                "include_nuts_footprint": bool(nuts_code),
                 "nuts_code": nuts_code,
                 "nuts_like": f"{nuts_code.upper()}%" if nuts_code else None,
                 "municipality_like": municipality_like,

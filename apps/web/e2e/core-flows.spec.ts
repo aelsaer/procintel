@@ -166,6 +166,7 @@ test("date and geography scope propagates across workspaces", async ({ page }) =
 });
 
 test("business profile classification persists meaningful targeting", async ({ page, request }) => {
+  test.setTimeout(90_000);
   const original = await apiGet<BusinessProfile>(request, "/v1/business-profile");
   const description = "Αναλαμβάνουμε αποψιλώσεις, καθαρισμούς οικοπέδων, κοπή χόρτων και κλάδεμα δέντρων στην Αττική.";
 

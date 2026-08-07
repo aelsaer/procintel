@@ -24,10 +24,19 @@ from packages.source_clients.raw_store import LocalFilesystemRawStore
 from services.ingestion.connectors.khmdhs.client import KhmdhsClient
 from services.ingestion.connectors.khmdhs.config import KhmdhsConnectorConfig
 from services.ingestion.connectors.khmdhs.db_writer import ingest_khmdhs_record
-from services.search_index.client import create_index, delete_index, index_exists
+from services.search_index.client import (
+    alias_targets,
+    create_index,
+    delete_index,
+    index_exists,
+)
 from services.search_index.catalog import CATALOGS
 from services.search_index.config import OpenSearchConfig
-from services.search_index.indexer import reindex_all_acts
+from services.search_index.indexer import (
+    _physical_build_config,
+    rebuild_all_indexes_atomic,
+    reindex_all_acts,
+)
 from services.search_index.mapping import PROCUREMENT_ACTS_MAPPING
 from services.search_index.search import search_procurement_acts
 
@@ -100,4 +109,44 @@ async def test_reindex_and_search_finds_the_seeded_contract(tmp_path):
                             ),
                         )
     finally:
+        await engine.dispose()
+
+
+async def test_atomic_rebuild_replaces_legacy_indexes_with_aliases():
+    suffix = uuid.uuid4().hex[:8]
+    config = OpenSearchConfig(
+        base_url=OPENSEARCH_URL.rstrip("/"),
+        index_name=f"test_atomic_acts_{suffix}",
+        index_prefix=f"test_atomic_catalogs_{suffix}",
+    )
+    physical = _physical_build_config(config, suffix)
+    engine = create_async_engine(_asyncpg_url())
+
+    try:
+        async with engine.connect() as conn, httpx.AsyncClient(
+            timeout=30.0
+        ) as os_client:
+            await create_index(os_client, config, PROCUREMENT_ACTS_MAPPING)
+            result = await rebuild_all_indexes_atomic(
+                conn,
+                os_client,
+                config,
+                batch_size=100,
+                build_id=suffix,
+            )
+
+            assert set(result.catalogs) == set(CATALOGS)
+            for logical, target in result.aliases.items():
+                assert await alias_targets(os_client, config, logical) == [target]
+    finally:
+        async with httpx.AsyncClient(timeout=10.0) as os_client:
+            await delete_index(os_client, physical)
+            for catalog in CATALOGS:
+                await delete_index(
+                    os_client,
+                    replace(
+                        physical,
+                        index_name=physical.catalog_index_name(catalog),
+                    ),
+                )
         await engine.dispose()

@@ -25,9 +25,10 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -41,9 +42,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from packages.domain.tables import tenants  # noqa: E402
 from services.analytics.opportunity_scoring import (  # noqa: E402
     score_opportunities_for_tenant,
+    tenant_ids_with_business_profiles,
 )
 from services.analytics.refresh import refresh_all_marts  # noqa: E402
 from services.competitors.participation import (  # noqa: E402
@@ -90,7 +91,9 @@ from services.ingestion.enrichment_worker import (  # noqa: E402
 )
 from packages.source_clients.raw_store import LocalFilesystemRawStore  # noqa: E402
 from services.search_index.config import OpenSearchConfig  # noqa: E402
-from services.search_index.indexer import reindex_all_acts  # noqa: E402
+from services.search_index.indexer import (  # noqa: E402
+    rebuild_all_indexes_atomic,
+)
 
 
 @dataclass
@@ -113,6 +116,24 @@ def _optional(factory: Callable[[], Any]) -> Any | None:
 
 def _database_name(database_url: str) -> str:
     return urlparse(database_url.replace("+asyncpg", "")).path.rsplit("/", 1)[-1]
+
+
+def _slice_opensearch_config(
+    config: OpenSearchConfig | None,
+    database_url: str,
+) -> OpenSearchConfig | None:
+    if config is None:
+        return None
+    database_name = _database_name(database_url)
+    if "slice" not in database_name.casefold():
+        return config
+    namespace = re.sub(r"[^a-z0-9]+", "_", database_name.casefold()).strip("_")
+    prefix = f"{config.index_prefix}_{namespace}"[:120].rstrip("_")
+    return replace(
+        config,
+        index_name=f"{prefix}_procurement_acts",
+        index_prefix=prefix,
+    )
 
 
 def _jsonable(value: Any) -> Any:
@@ -186,6 +207,45 @@ async def _coverage(conn: AsyncConnection) -> dict[str, Any]:
             )
         )
     ).mappings().all()
+    quality_gate = (
+        await conn.execute(
+            sa.text(
+                """
+                WITH open_errors AS (
+                    SELECT issue.*,
+                           CASE
+                               WHEN LOWER(COALESCE(issue.object_type, '')) IN (
+                                   'procurement_act', 'procurement_acts'
+                               ) THEN procintel_act_is_analytics_eligible(issue.object_id)
+                               WHEN UPPER(COALESCE(issue.object_type, '')) = 'ENTITY'
+                                    AND issue.issue_code = 'INVALID_AFM_CHECKSUM'
+                               THEN NOT EXISTS (
+                                   SELECT 1
+                                   FROM entity_identifiers identifier
+                                   WHERE identifier.entity_id = issue.object_id
+                                     AND identifier.scheme = 'AFM'
+                                     AND identifier.is_current = TRUE
+                                     AND identifier.identifier_valid = FALSE
+                                     AND identifier.match_eligibility = 'RESTRICTED'
+                               )
+                               ELSE TRUE
+                           END AS leaks_from_quarantine
+                    FROM data_quality_issues issue
+                    WHERE issue.status IN ('OPEN', 'ACKNOWLEDGED')
+                      AND issue.severity IN ('ERROR', 'BLOCKING')
+                      AND issue.issue_code <> 'INCOMPLETE_ADAMCHAIN_PLACEHOLDER'
+                )
+                SELECT
+                    COUNT(*) AS open_errors,
+                    COUNT(*) FILTER (WHERE NOT leaks_from_quarantine)
+                        AS quarantined_errors,
+                    COUNT(*) FILTER (WHERE leaks_from_quarantine)
+                        AS unquarantined_errors
+                FROM open_errors
+                """
+            )
+        )
+    ).mappings().one()
     totals = (
         await conn.execute(
             sa.text(
@@ -266,6 +326,7 @@ async def _coverage(conn: AsyncConnection) -> dict[str, Any]:
         "source_records": [dict(row) for row in source_rows],
         "enrichment_jobs": [dict(row) for row in queue_rows],
         "data_quality": [dict(row) for row in quality_rows],
+        "quality_gate": dict(quality_gate),
         "act_links": [dict(row) for row in links],
         "spatial_capabilities": [dict(row) for row in capabilities],
     }
@@ -363,9 +424,16 @@ def _build_verdict(
         if row["severity"] in {"ERROR", "BLOCKING"}
         and row["status"] != "RESOLVED"
     )
+    quality_gate = coverage.get("quality_gate", {})
+    quarantined_quality_errors = int(
+        quality_gate.get("quarantined_errors", 0)
+    )
+    unquarantined_quality_errors = int(
+        quality_gate.get("unquarantined_errors", open_quality_errors)
+    )
     if failed_stages or core_failures or dead_enrichments:
         status = "FAILED"
-    elif deferred_enrichments or open_quality_errors:
+    elif deferred_enrichments or unquarantined_quality_errors:
         status = (
             "PARTIAL_WITH_EXTERNAL_BLOCKERS"
             if blocked_config or blocked_upstream
@@ -383,6 +451,8 @@ def _build_verdict(
         "quarantined_enrichments": quarantined_enrichments,
         "deferred_enrichments": deferred_enrichments,
         "open_quality_errors": open_quality_errors,
+        "quarantined_quality_errors": quarantined_quality_errors,
+        "unquarantined_quality_errors": unquarantined_quality_errors,
         "blocked_config": blocked_config,
         "blocked_upstream": blocked_upstream,
     }
@@ -417,7 +487,10 @@ async def _run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     stages: dict[str, Stage] = {}
     engine = create_async_engine(_async_url(args.database_url))
     provider_status = _provider_status()
-    opensearch_config = _optional(OpenSearchConfig.from_env)
+    opensearch_config = _slice_opensearch_config(
+        _optional(OpenSearchConfig.from_env),
+        args.database_url,
+    )
     diavgeia_config = _optional(DiavgeiaConnectorConfig.from_env)
     gemi_config = _optional(GemiConnectorConfig.from_env)
     mef_config = _optional(MefConnectorConfig.from_env)
@@ -619,9 +692,7 @@ async def _run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             await run_stage("analytics_marts", lambda: refresh_all_marts(conn))
 
             async def _score() -> dict[str, int]:
-                tenant_ids = (
-                    await conn.execute(sa.select(tenants.c.id))
-                ).scalars().all()
+                tenant_ids = await tenant_ids_with_business_profiles(conn)
                 written = 0
                 for tenant_id in tenant_ids:
                     result = await score_opportunities_for_tenant(
@@ -639,7 +710,7 @@ async def _run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                     async with httpx.AsyncClient(
                         timeout=opensearch_config.request_timeout_seconds
                     ) as client:
-                        return await reindex_all_acts(
+                        return await rebuild_all_indexes_atomic(
                             conn,
                             client,
                             opensearch_config,

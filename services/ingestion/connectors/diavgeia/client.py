@@ -10,8 +10,9 @@ from xml.etree import ElementTree
 
 import httpx
 
-from packages.source_clients.rate_limit import TokenBucket
+from packages.source_clients.rate_limit import RateLimiter, TokenBucket
 from packages.source_clients.retry import CircuitBreaker, raise_for_retryable_status, retrying
+from packages.source_clients.shared_rate_limit import SharedSlidingWindowLimiter
 
 from .config import DiavgeiaConnectorConfig
 
@@ -136,15 +137,20 @@ class DiavgeiaClient:
         self,
         config: DiavgeiaConnectorConfig,
         http_client: httpx.AsyncClient | None = None,
-        rate_limiter: TokenBucket | None = None,
+        rate_limiter: RateLimiter | None = None,
     ) -> None:
         self._config = config
         self._http = http_client or httpx.AsyncClient(
             base_url=config.base_url, timeout=config.request_timeout_seconds
         )
         self._owns_http_client = http_client is None
-        self._rate_limiter = rate_limiter or TokenBucket(
-            config.rate_limit_per_minute
+        self._rate_limiter = rate_limiter or (
+            SharedSlidingWindowLimiter(
+                int(config.rate_limit_per_minute),
+                config.rate_limit_state_path,
+            )
+            if config.rate_limit_state_path
+            else TokenBucket(config.rate_limit_per_minute)
         )
         self._reference_cache: dict[
             tuple[str, tuple[tuple[str, str], ...]], DiavgeiaReferenceResponse
@@ -161,7 +167,7 @@ class DiavgeiaClient:
         self.capabilities: dict[str, CapabilityStatus] = dict(DEFAULT_CAPABILITIES)
 
     @property
-    def request_rate_limiter(self) -> TokenBucket:
+    def request_rate_limiter(self) -> RateLimiter:
         return self._rate_limiter
 
     async def aclose(self) -> None:
@@ -175,10 +181,9 @@ class DiavgeiaClient:
         every ΑΔΑ referenced elsewhere resolves to a published decision),
         not a retryable failure."""
         self._circuit_breaker.raise_if_open()
-        await self._rate_limiter.acquire()
-
         @retrying(max_attempts=self._config.max_retry_attempts)
         async def _do_request() -> httpx.Response:
+            await self._rate_limiter.acquire()
             response = await self._http.get(f"/decisions/{ada}")
             if response.status_code == 404:
                 return response  # not retryable, not a failure — handled below
@@ -210,10 +215,9 @@ class DiavgeiaClient:
     async def fetch_decision_version(self, version_id: str) -> DiavgeiaDecisionResponse:
         """Retrieve a submitted or published decision version by versionId."""
         self._circuit_breaker.raise_if_open()
-        await self._rate_limiter.acquire()
-
         @retrying(max_attempts=self._config.max_retry_attempts)
         async def _do_request() -> httpx.Response:
+            await self._rate_limiter.acquire()
             response = await self._http.get(f"/decisions/v/{version_id}")
             if response.status_code == 404:
                 return response
@@ -275,10 +279,9 @@ class DiavgeiaClient:
             return cached
 
         self._reference_circuit_breaker.raise_if_open()
-        await self._rate_limiter.acquire()
-
         @retrying(max_attempts=self._config.max_retry_attempts)
         async def _do_request() -> httpx.Response:
+            await self._rate_limiter.acquire()
             response = await self._http.get(path, params=params)
             raise_for_retryable_status(response)
             return response
@@ -400,8 +403,6 @@ class DiavgeiaClient:
         are validated against the live Open Data endpoint.
         """
         self._search_circuit_breaker.raise_if_open()
-        await self._rate_limiter.acquire()
-
         params: dict[str, str] = {}
         if organization_query:
             params["org"] = organization_query
@@ -414,6 +415,7 @@ class DiavgeiaClient:
 
         @retrying(max_attempts=self._config.max_retry_attempts)
         async def _do_request() -> httpx.Response:
+            await self._rate_limiter.acquire()
             response = await self._http.get("/search", params=params)
             raise_for_retryable_status(response)
             return response
@@ -455,8 +457,6 @@ class DiavgeiaClient:
         same validated Open Data search endpoint.
         """
         self._advanced_search_circuit_breaker.raise_if_open()
-        await self._rate_limiter.acquire()
-
         params: dict[str, str] = {}
         if organization_query:
             params["org"] = organization_query
@@ -475,6 +475,7 @@ class DiavgeiaClient:
 
         @retrying(max_attempts=self._config.max_retry_attempts)
         async def _do_request() -> httpx.Response:
+            await self._rate_limiter.acquire()
             response = await self._http.get("/search", params=params)
             raise_for_retryable_status(response)
             return response

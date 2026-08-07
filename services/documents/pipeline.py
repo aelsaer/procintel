@@ -27,7 +27,7 @@ from packages.domain.tables import (
     procurement_acts,
     source_records,
 )
-from packages.source_clients.rate_limit import TokenBucket
+from packages.source_clients.rate_limit import RateLimiter
 from services.competitors.participation import record_document_participant
 
 from .amounts import ExtractedAmount, extract_amounts
@@ -122,7 +122,7 @@ async def process_document(
     title: str | None = None,
     config: DocumentPipelineConfig | None = None,
     http_client: httpx.AsyncClient | None = None,
-    download_rate_limiter: TokenBucket | None = None,
+    download_rate_limiter: RateLimiter | None = None,
     blob_store: DocumentBlobStore | None = None,
     av_scanner: AntivirusScanner | None = None,
 ) -> ProcessDocumentResult:

@@ -81,9 +81,9 @@ export function DataCoveragePanel({ compact = false, onOpen }: { compact?: boole
   const data = response.query.isSuccess ? response.result.data : null;
 
   if (compact) {
-    if (response.query.isLoading) return <LoadingState label="Έλεγχος εισαγωγών" />;
-    if (response.query.isError) return <ErrorState title="Δεν είναι διαθέσιμη η κατάσταση εισαγωγής" error={response.query.error} />;
-    if (!data) return null;
+    if (response.query.isLoading) return <section className="ingestion-status-strip" aria-label="Κατάσταση εισαγωγής δεδομένων"><LoadingState label="Έλεγχος εισαγωγών" /></section>;
+    if (response.query.isError) return <section className="ingestion-status-strip" aria-label="Κατάσταση εισαγωγής δεδομένων"><ErrorState title="Δεν είναι διαθέσιμη η κατάσταση εισαγωγής" error={response.query.error} /></section>;
+    if (!data) return <section className="ingestion-status-strip" aria-label="Κατάσταση εισαγωγής δεδομένων" />;
     const healthy = data.assessments.filter((item) => item.status === "HEALTHY").length;
     const sourceCount = data.sources.filter((source) => source.source_system !== "TEST").length;
     return (

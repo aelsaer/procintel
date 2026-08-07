@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.domain.tables import procurement_acts
@@ -108,7 +108,12 @@ async def get_process_timeline(
     rows = (
         await conn.execute(
             select(procurement_acts)
-            .where(procurement_acts.c.process_id == pid)
+            .where(
+                procurement_acts.c.process_id == pid,
+                func.procintel_act_is_analytics_eligible(
+                    procurement_acts.c.id
+                ),
+            )
             .order_by(procurement_acts.c.publication_date.asc().nulls_last())
         )
     ).all()

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 DEFAULT_PROGRAM_PERIOD = "ANAPTYXI_2014_2020"
 
@@ -67,6 +68,7 @@ class AnaptyxiConnectorConfig:
     rate_limit_per_minute: float = 60.0  # no official number published; conservative default
     max_retry_attempts: int = 5
     request_timeout_seconds: float = 30.0
+    rate_limit_state_path: str | None = None
 
     @classmethod
     def from_env(cls, program_period: str = DEFAULT_PROGRAM_PERIOD) -> "AnaptyxiConnectorConfig":
@@ -90,8 +92,17 @@ class AnaptyxiConnectorConfig:
                 "contract; the official 2021-2027 portal currently exposes aggregate "
                 "charts, which are not sufficient for procurement-project linkage."
             )
+        raw_root = os.environ.get("RAW_STORE_ROOT", "./raw")
         return cls(
             base_url=base_url,
             program_period=program_period,
             rate_limit_per_minute=_float_env("ANAPTYXI_RATE_LIMIT_PER_MINUTE", cls.rate_limit_per_minute),
+            rate_limit_state_path=os.environ.get(
+                f"{program_period}_RATE_LIMIT_STATE_PATH"
+            )
+            or str(
+                Path(raw_root)
+                / "provider-limits"
+                / f"{program_period.casefold()}.json"
+            ),
         )

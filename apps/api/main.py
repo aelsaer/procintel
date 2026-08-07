@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 import time
 import uuid
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import sqlalchemy as sa
@@ -57,6 +59,21 @@ from .routers import (
     workspace,
 )
 
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Warm operational aggregates before accepting the first user request."""
+    if os.environ.get("DATABASE_URL"):
+        try:
+            async with get_engine().connect() as conn:
+                await analytics.data_coverage(conn)
+        except Exception:
+            logger.exception("Could not warm the data coverage cache")
+    yield
+
+
 _production = os.environ.get("PROCINTEL_ENV", "development").lower() == "production"
 app = FastAPI(
     title="Procurement Intelligence API",
@@ -64,6 +81,7 @@ app = FastAPI(
     description="Greek Public Procurement Intelligence platform with cross-source procurement enrichment.",
     docs_url=None if _production else "/docs",
     redoc_url=None if _production else "/redoc",
+    lifespan=lifespan,
 )
 
 _cors_origins = [
@@ -80,6 +98,8 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     TrustedHostMiddleware,

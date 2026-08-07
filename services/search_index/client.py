@@ -35,7 +35,88 @@ async def create_index(http_client: httpx.AsyncClient, config: OpenSearchConfig,
 
 
 async def delete_index(http_client: httpx.AsyncClient, config: OpenSearchConfig) -> None:
-    await http_client.delete(f"{config.base_url}/{config.index_name}", auth=_auth(config))
+    response = await http_client.delete(
+        f"{config.base_url}/{config.index_name}", auth=_auth(config)
+    )
+    if response.status_code not in (200, 202, 404):
+        response.raise_for_status()
+
+
+async def refresh_index(
+    http_client: httpx.AsyncClient,
+    config: OpenSearchConfig,
+) -> None:
+    response = await http_client.post(
+        f"{config.base_url}/{config.index_name}/_refresh",
+        auth=_auth(config),
+    )
+    response.raise_for_status()
+
+
+async def index_count(
+    http_client: httpx.AsyncClient,
+    config: OpenSearchConfig,
+) -> int:
+    response = await http_client.get(
+        f"{config.base_url}/{config.index_name}/_count",
+        auth=_auth(config),
+    )
+    response.raise_for_status()
+    return int(response.json()["count"])
+
+
+async def alias_targets(
+    http_client: httpx.AsyncClient,
+    config: OpenSearchConfig,
+    alias: str,
+) -> list[str]:
+    response = await http_client.get(
+        f"{config.base_url}/_alias/{alias}",
+        auth=_auth(config),
+    )
+    if response.status_code == 404:
+        return []
+    response.raise_for_status()
+    body = response.json()
+    return sorted(body) if isinstance(body, dict) else []
+
+
+async def swap_index_aliases(
+    http_client: httpx.AsyncClient,
+    config: OpenSearchConfig,
+    replacements: dict[str, str],
+) -> set[str]:
+    """Atomically replace logical indexes/aliases with validated builds."""
+    actions: list[dict] = []
+    old_physical_indexes: set[str] = set()
+    for logical, physical in replacements.items():
+        targets = await alias_targets(http_client, config, logical)
+        if targets:
+            old_physical_indexes.update(targets)
+            actions.extend(
+                {"remove": {"index": target, "alias": logical}}
+                for target in targets
+            )
+        else:
+            existing = await http_client.head(
+                f"{config.base_url}/{logical}",
+                auth=_auth(config),
+            )
+            if existing.status_code == 200:
+                actions.append({"remove_index": {"index": logical}})
+            elif existing.status_code != 404:
+                existing.raise_for_status()
+        actions.append({"add": {"index": physical, "alias": logical}})
+
+    response = await http_client.post(
+        f"{config.base_url}/_aliases",
+        json={"actions": actions},
+        auth=_auth(config),
+    )
+    response.raise_for_status()
+    if response.json().get("errors"):
+        raise RuntimeError("OpenSearch alias swap reported errors")
+    return old_physical_indexes
 
 
 async def delete_all_documents(

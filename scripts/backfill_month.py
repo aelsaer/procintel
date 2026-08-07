@@ -28,15 +28,16 @@ import uuid
 from datetime import date
 from pathlib import Path
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from packages.domain.tables import tenants  # noqa: E402
-from services.analytics.opportunity_scoring import score_opportunities_for_tenant  # noqa: E402
+from services.analytics.opportunity_scoring import (  # noqa: E402
+    score_opportunities_for_tenant,
+    tenant_ids_with_business_profiles,
+)
 from services.analytics.refresh import refresh_all_marts  # noqa: E402
 from services.ingestion.connectors.anaptyxi.config import DEFAULT_PROGRAM_PERIOD  # noqa: E402
 from services.ingestion.connectors.khmdhs.client import ALL_RESOURCES  # noqa: E402
@@ -140,7 +141,7 @@ async def _refresh_and_score(args: argparse.Namespace) -> None:
                 if args.score_tenant_id:
                     tenant_ids = [uuid.UUID(args.score_tenant_id)]
                 else:
-                    tenant_ids = [row.id for row in (await conn.execute(select(tenants.c.id))).all()]
+                    tenant_ids = await tenant_ids_with_business_profiles(conn)
                 for tenant_id in tenant_ids:
                     result = await score_opportunities_for_tenant(
                         conn,

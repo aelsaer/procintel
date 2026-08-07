@@ -6,6 +6,9 @@ scores remain tenant-scoped data and are computed by services.analytics.cli.
 
 from __future__ import annotations
 
+import asyncio
+import os
+import time
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -22,10 +25,14 @@ from services.ingestion.connectors.inspire.selected_layers import (
 )
 from services.search_index.lexical import query_concept_pattern
 
-from ..db import get_conn
+from ..db import get_conn, get_engine
 from ..deps import get_http_client
 
 router = APIRouter(prefix="/v1/analytics", tags=["analytics"])
+
+_data_coverage_cache: tuple[float, "DataCoverageResponse"] | None = None
+_data_coverage_lock = asyncio.Lock()
+_data_coverage_refresh_task: asyncio.Task[None] | None = None
 
 
 class TopSupplierResponse(BaseModel):
@@ -352,6 +359,39 @@ def _score_opportunity(
 
 @router.get("/data-coverage", response_model=DataCoverageResponse)
 async def data_coverage(conn: AsyncConnection = Depends(get_conn)) -> DataCoverageResponse:
+    global _data_coverage_cache, _data_coverage_refresh_task
+
+    ttl_seconds = max(5.0, float(os.environ.get("DATA_COVERAGE_CACHE_SECONDS", "30")))
+    now = time.monotonic()
+    if _data_coverage_cache:
+        if (
+            now - _data_coverage_cache[0] >= ttl_seconds
+            and (_data_coverage_refresh_task is None or _data_coverage_refresh_task.done())
+        ):
+            _data_coverage_refresh_task = asyncio.create_task(
+                _refresh_data_coverage_cache()
+            )
+        return _data_coverage_cache[1]
+
+    async with _data_coverage_lock:
+        now = time.monotonic()
+        if _data_coverage_cache and now - _data_coverage_cache[0] < ttl_seconds:
+            return _data_coverage_cache[1]
+        response = await _build_data_coverage(conn)
+        _data_coverage_cache = (time.monotonic(), response)
+        return response
+
+
+async def _refresh_data_coverage_cache() -> None:
+    global _data_coverage_cache
+
+    async with _data_coverage_lock:
+        async with get_engine().connect() as conn:
+            response = await _build_data_coverage(conn)
+        _data_coverage_cache = (time.monotonic(), response)
+
+
+async def _build_data_coverage(conn: AsyncConnection) -> DataCoverageResponse:
     """Live ingestion, canonicalization and cross-source linkage coverage."""
     resource_rows = (await conn.execute(sa.text(
         """
@@ -959,25 +999,50 @@ async def market_overview(
                     SUM(COALESCE(a.amount_gross, a.amount_net))
                         FILTER (WHERE a.act_type = 'CONTRACT') AS recorded_contract_value,
                     COUNT(DISTINCT a.id) FILTER (
-                        WHERE EXISTS (SELECT 1 FROM act_locations aloc WHERE aloc.act_id = a.id)
+                        WHERE geo.has_geo
                     ) AS acts_with_geo,
                     COUNT(DISTINCT a.id) FILTER (
-                        WHERE EXISTS (
-                            SELECT 1 FROM act_locations aloc
-                            WHERE aloc.act_id = a.id AND aloc.geom IS NOT NULL
-                        )
+                        WHERE geo.has_precise_geo
                     ) AS acts_with_precise_geo
                 FROM procurement_acts a
+                JOIN source_records source ON source.id = a.source_record_id
+                LEFT JOIN (
+                    SELECT act_id, TRUE AS has_geo, BOOL_OR(geom IS NOT NULL) AS has_precise_geo
+                    FROM act_locations
+                    GROUP BY act_id
+                ) geo ON geo.act_id = a.id
                 WHERE a.is_current = TRUE
-                  AND procintel_act_is_analytics_eligible(a.id)
+                  AND NOT (
+                      source.source_system = 'KHMDHS'
+                      AND source.resource_type = 'adamChain'
+                      AND a.title IS NULL
+                      AND a.amount_net IS NULL
+                      AND a.amount_gross IS NULL
+                      AND a.publication_date IS NULL
+                      AND a.submission_date IS NULL
+                      AND a.decision_date IS NULL
+                      AND a.start_date IS NULL
+                      AND a.end_date IS NULL
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM data_quality_issues issue
+                      WHERE issue.object_id = a.id
+                        AND LOWER(COALESCE(issue.object_type, '')) IN ('procurement_act', 'procurement_acts')
+                        AND issue.severity IN ('ERROR', 'BLOCKING')
+                        AND issue.status <> 'RESOLVED'
+                  )
                   AND (CAST(:date_from AS DATE) IS NULL OR COALESCE(a.decision_date, a.publication_date, a.submission_date) >= CAST(:date_from AS DATE))
                   AND (CAST(:date_to AS DATE) IS NULL OR COALESCE(a.decision_date, a.publication_date, a.submission_date) <= CAST(:date_to AS DATE))
-                  AND procintel_taxonomy_match(
-                      a.id,
-                      a.title,
-                      CAST(:cpv_likes AS TEXT[]),
-                      CAST(:keyword_patterns AS TEXT[]),
-                      CAST(:taxonomy_match_all AS BOOLEAN)
+                  AND (
+                      NOT CAST(:has_taxonomy_filter AS BOOLEAN)
+                      OR procintel_taxonomy_match(
+                          a.id,
+                          a.title,
+                          CAST(:cpv_likes AS TEXT[]),
+                          CAST(:keyword_patterns AS TEXT[]),
+                          CAST(:taxonomy_match_all AS BOOLEAN)
+                      )
                   )
                   AND (
                       CAST(:nuts_code AS TEXT) IS NULL

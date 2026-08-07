@@ -29,3 +29,21 @@ def test_normalize_falls_back_to_synthetic_title_when_missing():
     assert normalized.mis_ops_code == "MIS-999"
     assert "MIS-999" in normalized.title
     assert normalized.beneficiary_afm is None
+
+
+def test_legacy_payload_null_bytes_are_removed_recursively():
+    normalized = normalize_project_record(
+        {
+            "title": "Έργο\x00 δοκιμής",
+            "statusReport": "Ενεργό\x00",
+            "files": [{"title": "Απόφαση\x00", "url": "https://example.test/file"}],
+            "subprojects": [{"title": "Υποέργο\x00", "files": [{"name": "Τεύχος\x00"}]}],
+        },
+        mis_code="MIS-NULL",
+    )
+
+    assert normalized.title == "Έργο δοκιμής"
+    assert normalized.status_report == "Ενεργό"
+    assert normalized.files[0]["title"] == "Απόφαση"
+    assert normalized.subprojects[0].title == "Υποέργο"
+    assert normalized.subprojects[0].files[0]["name"] == "Τεύχος"

@@ -21,7 +21,7 @@ from .client import create_index as os_create_index
 from .client import index_exists
 from .catalog import reindex_catalogs
 from .config import OpenSearchConfig
-from .indexer import reindex_all_acts
+from .indexer import rebuild_all_indexes_atomic
 from .mapping import PROCUREMENT_ACTS_MAPPING
 
 
@@ -46,10 +46,10 @@ async def _reindex_all(database_url: str) -> None:
     engine = create_async_engine(_to_asyncpg_url(database_url))
     try:
         async with engine.connect() as conn, httpx.AsyncClient(timeout=config.request_timeout_seconds) as client:
-            result = await reindex_all_acts(conn, client, config)
+            result = await rebuild_all_indexes_atomic(conn, client, config)
             print(
                 f"indexed {result.acts_indexed} acts into {config.index_name!r}; "
-                f"catalogs={result.catalogs}"
+                f"catalogs={result.catalogs}; build={result.build_id}"
             )
     finally:
         await engine.dispose()

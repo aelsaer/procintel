@@ -109,6 +109,20 @@ def test_extract_dates_numeric_and_greek_month_name():
     assert (results[1].day, results[1].month, results[1].year) == (12, 1, 2024)
 
 
+def test_extract_dates_accepts_ocr_micro_sign_in_september():
+    results = extract_dates("Αθήνα, 12 Σεπτεµβρίου 2024")
+
+    assert len(results) == 1
+    assert (results[0].day, results[0].month, results[0].year) == (12, 9, 2024)
+
+
+def test_extract_dates_normalizes_decomposed_greek_month_accents():
+    results = extract_dates("Προθεσμία 7 μαΐου 2026")
+
+    assert len(results) == 1
+    assert (results[0].day, results[0].month, results[0].year) == (7, 5, 2026)
+
+
 def test_extract_dates_rejects_invalid_month():
     assert extract_dates("13/13/2024") == []
 

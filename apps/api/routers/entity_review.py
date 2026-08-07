@@ -51,6 +51,8 @@ class GenerationResponse(BaseModel):
     pairs_considered: int
     candidates_written: int
     identifier_conflicts: int
+    next_cursor: str | None
+    scan_complete: bool
 
 
 class MergeHistoryResponse(BaseModel):
@@ -112,10 +114,11 @@ async def list_candidates(
 
 @router.post("/generate", response_model=GenerationResponse)
 async def generate_candidates(
+    cursor: uuid.UUID | None = Query(default=None),
     conn: AsyncConnection = Depends(get_tenant_scoped_conn),
     _: AuthenticatedUser = Depends(require_role(*_REVIEW_ROLES)),
 ) -> GenerationResponse:
-    result = await generate_match_candidates(conn)
+    result = await generate_match_candidates(conn, after_entity_id=cursor)
     return GenerationResponse(**result.__dict__)
 
 

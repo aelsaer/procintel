@@ -61,6 +61,42 @@ async def test_find_expenses_uses_spendings_search_and_filters_exact_issuer_afm(
 
 
 @respx.mock
+async def test_find_expenses_supports_current_receiver_afm_envelope():
+    current_item = {
+        **SAMPLE_BODY["items"][0],
+        "uid": "CURRENT",
+        "receiver_afm": AFM,
+        "receiver_title": "CURRENT SUPPLIER",
+        "issuer_afm": "099999999",
+    }
+    respx.get(
+        f"{BASE_URL}/api/spendings",
+        params={"year": "2025", "limit": "1", "offset": "0"},
+    ).mock(return_value=httpx.Response(200, json={"items": [{}], "count": 1}))
+    respx.get(
+        f"{BASE_URL}/api/spendings",
+        params={
+            "year": "2025",
+            "searchTerm": AFM,
+            "limit": "200",
+            "offset": "0",
+        },
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"items": [current_item], "count": 1},
+        )
+    )
+    client = MefClient(_config())
+    try:
+        response = await client.find_expenses_by_recipient_afm(AFM)
+    finally:
+        await client.aclose()
+
+    assert [item["uid"] for item in response.expenses] == ["CURRENT"]
+
+
+@respx.mock
 async def test_empty_items_list_is_not_an_error():
     probe = respx.get(
         f"{BASE_URL}/api/spendings",

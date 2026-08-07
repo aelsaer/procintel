@@ -1613,7 +1613,10 @@ export const api = {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ export_type: exportType, format, filters }),
   }),
   getEntityCandidates: () => apiFetch<EntityMatchCandidateResponse[]>("/v1/entity-review/candidates"),
-  generateEntityCandidates: () => apiFetch<{ pairs_considered: number; candidates_written: number; identifier_conflicts: number }>("/v1/entity-review/generate", { method: "POST" }),
+  generateEntityCandidates: (cursor?: string | null) => {
+    const params = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    return apiFetch<{ pairs_considered: number; candidates_written: number; identifier_conflicts: number; next_cursor: string | null; scan_complete: boolean }>(`/v1/entity-review/generate${params}`, { method: "POST" });
+  },
   reviewEntityCandidate: (id: string, action: string, notes: string) => apiFetch<EntityMatchCandidateResponse>(`/v1/entity-review/candidates/${id}/review`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, notes }),
   }),

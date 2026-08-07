@@ -127,7 +127,8 @@ async def search(
                 END AS match_type
             FROM deduplicated_matches
             JOIN procurement_acts a ON a.id = deduplicated_matches.id
-            WHERE (CAST(:act_type AS TEXT) IS NULL OR a.act_type = CAST(:act_type AS TEXT))
+            WHERE procintel_act_is_analytics_eligible(a.id)
+              AND (CAST(:act_type AS TEXT) IS NULL OR a.act_type = CAST(:act_type AS TEXT))
               AND (
                   CAST(:date_from AS DATE) IS NULL
                   OR COALESCE(a.publication_date, a.submission_date, a.decision_date) >= CAST(:date_from AS DATE)

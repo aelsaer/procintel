@@ -9,6 +9,19 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+def _without_null_bytes(value: Any) -> Any:
+    """PostgreSQL text/jsonb cannot represent NUL bytes found in legacy payloads."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {key: _without_null_bytes(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_without_null_bytes(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_without_null_bytes(item) for item in value)
+    return value
+
+
 def _to_date(value: Any) -> date | None:
     if not value:
         return None
@@ -142,6 +155,7 @@ def normalize_subproject_record(
 
 
 def normalize_project_record(raw: dict[str, Any], *, mis_code: str) -> NormalizedFundingProject:
+    raw = _without_null_bytes(raw)
     beneficiary = _body_by_category(raw, "ΔΙΚΑΙΟΥΧΟΣ", "BENEFICIARY") or (
         raw.get("beneficiary") if isinstance(raw.get("beneficiary"), dict) else None
     )

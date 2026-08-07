@@ -23,6 +23,7 @@ implementation, not reinvented here.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from services.ingestion.connectors.khmdhs.afm import valid_greek_afm
@@ -243,6 +244,10 @@ _GREEK_MONTHS = {
     "μαΐου": 5, "ιουνίου": 6, "ιουλίου": 7, "αυγούστου": 8,
     "σεπτεμβρίου": 9, "οκτωβρίου": 10, "νοεμβρίου": 11, "δεκεμβρίου": 12,
 }
+_NORMALIZED_GREEK_MONTHS = {
+    unicodedata.normalize("NFC", name).casefold(): number
+    for name, number in _GREEK_MONTHS.items()
+}
 _GREEK_DATE_RE = re.compile(
     rf"\b(\d{{1,2}})\s+({'|'.join(_GREEK_MONTHS)})\s+(\d{{4}})\b", re.IGNORECASE
 )
@@ -258,6 +263,7 @@ class ExtractedDate:
 
 
 def extract_dates(text: str) -> list[ExtractedDate]:
+    text = unicodedata.normalize("NFC", text)
     results: list[ExtractedDate] = []
     for m in _NUMERIC_DATE_RE.finditer(text):
         day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
@@ -266,7 +272,11 @@ def extract_dates(text: str) -> list[ExtractedDate]:
         results.append(ExtractedDate(raw_value=m.group(0), year=year, month=month, day=day, span=m.span()))
     for m in _GREEK_DATE_RE.finditer(text):
         day = int(m.group(1))
-        month = _GREEK_MONTHS[m.group(2).lower()]
+        month = _NORMALIZED_GREEK_MONTHS.get(
+            unicodedata.normalize("NFC", m.group(2)).casefold()
+        )
+        if month is None:
+            continue
         year = int(m.group(3))
         results.append(ExtractedDate(raw_value=m.group(0), year=year, month=month, day=day, span=m.span()))
     results.sort(key=lambda r: r.span[0])

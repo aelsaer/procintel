@@ -9,7 +9,7 @@ a process_id) — process-level aggregation is `/v1/processes/{id}`.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -31,6 +31,18 @@ async def _load_act_by_identifier(conn: AsyncConnection, identifier_normalized: 
             .where(
                 act_identifiers.c.scheme.in_(("ADAM", "ADA")),
                 act_identifiers.c.value_normalized == identifier_normalized,
+            )
+            .order_by(
+                case(
+                    (
+                        func.procintel_act_is_analytics_eligible(
+                            procurement_acts.c.id
+                        ),
+                        0,
+                    ),
+                    else_=1,
+                ),
+                procurement_acts.c.updated_at.desc(),
             )
         )
     ).first()

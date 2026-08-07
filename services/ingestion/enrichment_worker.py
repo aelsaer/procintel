@@ -11,7 +11,6 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.domain.tables import enrichment_jobs, procurement_acts
-from packages.source_clients.rate_limit import TokenBucket
 from packages.source_clients.raw_store import LocalFilesystemRawStore
 from services.documents.download import DocumentTooLargeError
 from services.documents.pdf_text import (
@@ -87,13 +86,8 @@ class _Dependencies:
     def __init__(self, raw_root: str) -> None:
         self.raw_store = LocalFilesystemRawStore(raw_root)
         khmdhs_config = KhmdhsConnectorConfig.from_env()
-        self.khmdhs_rate_limiter = TokenBucket(
-            khmdhs_config.rate_limit_per_minute
-        )
-        self.khmdhs = KhmdhsClient(
-            khmdhs_config,
-            rate_limiter=self.khmdhs_rate_limiter,
-        )
+        self.khmdhs = KhmdhsClient(khmdhs_config)
+        self.khmdhs_rate_limiter = self.khmdhs.request_rate_limiter
         self.diavgeia = DiavgeiaClient(DiavgeiaConnectorConfig.from_env())
         self.mef = MefClient(MefConnectorConfig.from_env())
         self.gemi_client: GemiClient | None = None
@@ -373,27 +367,40 @@ async def run_pending_enrichment_jobs(
     succeeded = failed = blocked = upstream_blocked = deferred = 0
     attempts: dict[str, int] = {}
     by_provider: dict[str, dict[str, int]] = {}
+    provider_order = sorted(
+        provider
+        for provider in dependencies.known_providers
+        if providers is None or provider in providers
+    )
+    provider_cursor = 0
+    exhausted_providers: set[str] = set()
     try:
         for _ in range(limit):
-            eligible_providers = {
-                provider
-                for provider in dependencies.known_providers
-                if providers is None or provider in providers
-                if provider not in dependencies.runtime_unavailable_providers
-                if (provider_budgets or {}).get(provider) is None
-                or attempts.get(provider, 0)
-                < int((provider_budgets or {})[provider])
-            }
-            if not eligible_providers:
+            selected_provider: str | None = None
+            for offset in range(len(provider_order)):
+                index = (provider_cursor + offset) % len(provider_order)
+                candidate = provider_order[index]
+                budget = (provider_budgets or {}).get(candidate)
+                if candidate in exhausted_providers:
+                    continue
+                if candidate in dependencies.runtime_unavailable_providers:
+                    continue
+                if budget is not None and attempts.get(candidate, 0) >= int(budget):
+                    continue
+                selected_provider = candidate
+                provider_cursor = (index + 1) % len(provider_order)
+                break
+            if selected_provider is None:
                 break
             jobs = await claim_enrichment_jobs(
                 conn,
                 limit=1,
-                providers=eligible_providers,
+                providers={selected_provider},
                 reactivate_blocked_providers=dependencies.available_providers,
             )
             if not jobs:
-                break
+                exhausted_providers.add(selected_provider)
+                continue
             job = jobs[0]
             claimed += 1
             try:

@@ -37,7 +37,7 @@ from packages.domain.tables import (
     procurement_acts,
     process_members,
 )
-from packages.source_clients.rate_limit import TokenBucket
+from packages.source_clients.rate_limit import RateLimiter
 from packages.source_clients.raw_store import RawStore
 from services.documents.pipeline import process_document
 from services.entity_resolution.text_similarity import normalized_similarity
@@ -257,7 +257,7 @@ async def _maybe_process_decision_document(
     *,
     result: DecisionIngestResult,
     process_documents: bool,
-    rate_limiter: TokenBucket | None = None,
+    rate_limiter: RateLimiter | None = None,
 ) -> str:
     """§23's documents pipeline was fully built with no automatic caller —
     this is that caller. Opt-in (mirrors every other "needs its own real

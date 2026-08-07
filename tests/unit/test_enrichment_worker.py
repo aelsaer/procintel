@@ -153,3 +153,89 @@ async def test_upstream_contract_failure_opens_provider_circuit_for_sweep(
 
     assert claim_calls == 1
     assert result.blocked_upstream == 1
+
+
+async def test_enrichment_sweep_claims_providers_round_robin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    providers = ("PROVIDER_A", "PROVIDER_B")
+
+    def make_job(provider: str) -> ClaimedEnrichmentJob:
+        return ClaimedEnrichmentJob(
+            id=uuid.uuid4(),
+            provider=provider,
+            idempotency_key=f"{provider}:{uuid.uuid4()}",
+            payload={},
+            object_type=None,
+            object_id=None,
+            source_record_id=None,
+            attempt_count=1,
+            max_attempts=8,
+        )
+
+    queues = {provider: [make_job(provider), make_job(provider)] for provider in providers}
+    claimed_providers: list[str] = []
+
+    class FakeDependencies:
+        upstream_errors: dict[str, str] = {}
+        runtime_unavailable_providers: set[str] = set()
+        known_providers = set(providers)
+        available_providers = set(providers)
+
+        def __init__(self, raw_root: str) -> None:
+            self.runtime_unavailable_providers = set()
+
+        async def aclose(self) -> None:
+            return None
+
+    class EmptyRows:
+        def all(self) -> list[object]:
+            return []
+
+    class FakeConnection:
+        async def execute(self, statement):
+            return EmptyRows()
+
+        async def commit(self) -> None:
+            return None
+
+        async def rollback(self) -> None:
+            return None
+
+    async def claim(*args, **kwargs):
+        provider = next(iter(kwargs["providers"]))
+        claimed_providers.append(provider)
+        return [queues[provider].pop(0)] if queues[provider] else []
+
+    async def no_op(*args, **kwargs) -> None:
+        return None
+
+    async def recover(*args, **kwargs) -> int:
+        return 0
+
+    async def dispatch(*args, **kwargs):
+        return {}
+
+    monkeypatch.setattr(
+        "services.ingestion.enrichment_worker._Dependencies", FakeDependencies
+    )
+    monkeypatch.setattr(
+        "services.ingestion.enrichment_worker.claim_enrichment_jobs", claim
+    )
+    monkeypatch.setattr(
+        "services.ingestion.enrichment_worker.complete_enrichment", no_op
+    )
+    monkeypatch.setattr(
+        "services.ingestion.enrichment_worker.recover_stale_enrichment_jobs", recover
+    )
+    monkeypatch.setattr("services.ingestion.enrichment_worker._dispatch", dispatch)
+
+    result = await run_pending_enrichment_jobs(
+        FakeConnection(),
+        raw_root="/tmp/raw",
+        limit=4,
+        providers=set(providers),
+    )
+
+    assert claimed_providers == ["PROVIDER_A", "PROVIDER_B"] * 2
+    assert result.succeeded == 4

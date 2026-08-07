@@ -245,6 +245,16 @@ async def run_data_quality_checks(
 
     rules = (
         (
+            "INCOMPLETE_ADAMCHAIN_PLACEHOLDER",
+            "ERROR",
+            "sr.source_system = 'KHMDHS' AND sr.resource_type = 'adamChain' "
+            "AND a.title IS NULL AND a.amount_net IS NULL AND a.amount_gross IS NULL "
+            "AND a.publication_date IS NULL AND a.submission_date IS NULL "
+            "AND a.decision_date IS NULL AND a.start_date IS NULL AND a.end_date IS NULL",
+            "jsonb_build_object('reason', 'identifier-only lifecycle evidence', "
+            "'source_system', sr.source_system, 'resource_type', sr.resource_type)",
+        ),
+        (
             "END_BEFORE_START",
             "ERROR",
             "a.end_date IS NOT NULL AND a.start_date IS NOT NULL "

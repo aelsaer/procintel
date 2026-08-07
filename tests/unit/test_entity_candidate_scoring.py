@@ -1,4 +1,7 @@
-from services.entity_resolution.candidates import score_candidate
+import uuid
+from types import SimpleNamespace
+
+from services.entity_resolution.candidates import candidate_scan_page, score_candidate
 
 
 def test_multifield_candidate_uses_contacts_address_time_and_reliability():
@@ -50,3 +53,17 @@ def test_conflicting_valid_afms_cap_candidate_score():
     assert score == 0.69
     assert breakdown["identifier_conflict"] is True
     assert breakdown["suggested_action"] == "REJECT_CONFLICT"
+
+
+def test_candidate_scan_page_returns_stable_cursor_from_limit_plus_one_query():
+    ids = [uuid.UUID(int=value) for value in range(1, 5)]
+
+    first_page = candidate_scan_page([SimpleNamespace(id=value) for value in ids], 3)
+    final_page = candidate_scan_page([SimpleNamespace(id=ids[-1])], 3)
+
+    assert first_page.entity_ids == tuple(ids[:3])
+    assert first_page.next_cursor == str(ids[2])
+    assert first_page.complete is False
+    assert final_page.entity_ids == (ids[-1],)
+    assert final_page.next_cursor is None
+    assert final_page.complete is True

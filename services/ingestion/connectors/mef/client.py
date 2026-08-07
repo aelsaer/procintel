@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from packages.source_clients.rate_limit import TokenBucket
+from packages.source_clients.shared_rate_limit import configured_rate_limiter
 from packages.source_clients.retry import (
     CircuitBreaker,
     CircuitOpenError,
@@ -46,7 +46,10 @@ class MefClient:
             base_url=config.base_url, timeout=config.request_timeout_seconds
         )
         self._owns_http_client = http_client is None
-        self._rate_limiter = TokenBucket(config.rate_limit_per_minute)
+        self._rate_limiter = configured_rate_limiter(
+            config.rate_limit_per_minute,
+            config.rate_limit_state_path,
+        )
         self._circuit_breaker = CircuitBreaker()
         self._empty_years: dict[int, bool] = {}
 
@@ -60,10 +63,9 @@ class MefClient:
     ) -> httpx.Response:
         try:
             self._circuit_breaker.raise_if_open()
-            await self._rate_limiter.acquire()
-
             @retrying(max_attempts=self._config.max_retry_attempts)
             async def _do_request() -> httpx.Response:
+                await self._rate_limiter.acquire()
                 response = await self._http.get("/api/spendings", params=params)
                 raise_for_retryable_status(response)
                 return response
@@ -124,7 +126,12 @@ class MefClient:
                     for item in items
                     if "".join(
                         character
-                        for character in str(item.get("issuer_afm") or "")
+                        for character in str(
+                            item.get("receiver_afm")
+                            or item.get("issuer_afm")
+                            or item.get("recipientAfm")
+                            or ""
+                        )
                         if character.isdigit()
                     )
                     == afm_digits

@@ -18,6 +18,7 @@ import asyncio
 import os
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
+from typing import Awaitable, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import sqlalchemy as sa
@@ -25,9 +26,11 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 import httpx
 
-from packages.domain.tables import tenants
 from services.alerts.webhook_delivery import retry_pending_deliveries
-from services.analytics.opportunity_scoring import score_opportunities_for_tenant
+from services.analytics.opportunity_scoring import (
+    score_opportunities_for_tenant,
+    tenant_ids_with_business_profiles,
+)
 from services.analytics.refresh import refresh_all_marts
 from services.competitors.participation import backfill_winner_participations
 from services.data_quality.service import run_data_quality_checks
@@ -65,6 +68,7 @@ from .scheduler import run_due_jobs
 
 DEFAULT_DAILY_AT = "02:30"
 DEFAULT_DAILY_TIMEZONE = "Europe/Athens"
+DEFAULT_DAILY_MAX_SLEEP_SECONDS = 300.0
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,39 @@ def next_daily_run(now: datetime, schedule: DailySchedule) -> datetime:
     if candidate <= local_now:
         candidate = datetime.combine(local_now.date() + timedelta(days=1), schedule.at, tzinfo=schedule.timezone)
     return candidate
+
+
+def scheduler_sleep_interval(
+    now: datetime,
+    target: datetime,
+    *,
+    max_sleep_seconds: float,
+) -> float:
+    if max_sleep_seconds <= 0:
+        raise ValueError("max_sleep_seconds must be positive")
+    return max(
+        0.0,
+        min(max_sleep_seconds, (target - now).total_seconds()),
+    )
+
+
+async def _sleep_until(
+    target: datetime,
+    *,
+    max_sleep_seconds: float,
+    now: Callable[[], datetime] | None = None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> None:
+    current_time = now or (lambda: datetime.now(target.tzinfo))
+    while True:
+        delay_seconds = scheduler_sleep_interval(
+            current_time(),
+            target,
+            max_sleep_seconds=max_sleep_seconds,
+        )
+        if delay_seconds <= 0:
+            return
+        await sleep(delay_seconds)
 
 
 def _to_asyncpg_url(database_url: str) -> str:
@@ -396,7 +433,7 @@ async def _run_once(
 
             if with_opportunity_scoring:
                 try:
-                    tenant_ids = [row.id for row in (await conn.execute(sa.select(tenants.c.id))).all()]
+                    tenant_ids = await tenant_ids_with_business_profiles(conn)
                     total_scores = 0
                     for tenant_id in tenant_ids:
                         score_result = await score_opportunities_for_tenant(
@@ -487,6 +524,7 @@ async def _run_daily(
     geospatial_max_jobs: int,
     scoring_lookback_days: int,
     run_immediately: bool,
+    max_sleep_seconds: float,
 ) -> None:
     if run_immediately:
         await _run_once(
@@ -508,7 +546,10 @@ async def _run_daily(
         next_run = next_daily_run(now, schedule)
         delay_seconds = max(0.0, (next_run - now).total_seconds())
         print(f"next daily ingestion: {next_run.isoformat()} ({delay_seconds:.0f}s)")
-        await asyncio.sleep(delay_seconds)
+        await _sleep_until(
+            next_run,
+            max_sleep_seconds=max_sleep_seconds,
+        )
         try:
             await _run_once(
                 database_url,
@@ -575,6 +616,17 @@ def main() -> None:
                 action="store_true",
                 help="run once at startup before waiting for the configured time",
             )
+            sub.add_argument(
+                "--max-sleep-seconds",
+                type=float,
+                default=float(
+                    os.environ.get(
+                        "DAILY_SCHEDULER_MAX_SLEEP_SECONDS",
+                        str(DEFAULT_DAILY_MAX_SLEEP_SECONDS),
+                    )
+                ),
+                help="maximum wait before recomputing wall-clock time",
+            )
         if name == "run-forever":
             sub.add_argument("--poll-interval-seconds", type=float, default=300.0)
 
@@ -585,6 +637,8 @@ def main() -> None:
         parser.error("--geospatial-max-jobs must be positive")
     if args.scoring_lookback_days < 0:
         parser.error("--scoring-lookback-days must be non-negative")
+    if getattr(args, "max_sleep_seconds", DEFAULT_DAILY_MAX_SLEEP_SECONDS) <= 0:
+        parser.error("--max-sleep-seconds must be positive")
 
     try:
         schedule = parse_daily_schedule(
@@ -625,6 +679,7 @@ def main() -> None:
                 args.geospatial_max_jobs,
                 args.scoring_lookback_days,
                 args.run_immediately,
+                args.max_sleep_seconds,
             )
         )
     elif args.command == "run-forever":

@@ -1,6 +1,11 @@
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
 from services.data_quality.completeness import (
     SourceCompletenessInput,
     assess_source,
+    collect_source_completeness,
 )
 
 
@@ -80,3 +85,38 @@ def test_empty_source_is_unavailable():
         )
     )
     assert assessment.status == "UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_collection_preaggregates_related_acts_instead_of_correlated_scans():
+    row = {
+        "source_system": "KHMDHS",
+        "freshness_target_seconds": 108000,
+        "minimum_completeness": 95,
+        "observed_records": 1,
+        "parsed_records": 1,
+        "failed_records": 0,
+        "freshness_seconds": 60,
+        "canonical_records": 1,
+        "applicable_document_records": 1,
+        "records_with_documents": 1,
+        "applicable_party_records": 1,
+        "records_with_parties": 1,
+        "applicable_location_records": 1,
+        "records_with_locations": 1,
+        "pending_enrichments": 0,
+        "expected_records": 1,
+        "expected_basis": "UPSTREAM_TOTAL",
+    }
+    result = Mock()
+    result.mappings.return_value.all.return_value = [row]
+    conn = Mock(execute=AsyncMock(return_value=result))
+
+    assessments = await collect_source_completeness(conn)
+
+    query = str(conn.execute.await_args.args[0])
+    assert "document_acts AS MATERIALIZED" in query
+    assert "party_acts AS MATERIALIZED" in query
+    assert "located_acts AS MATERIALIZED" in query
+    assert "SELECT 1 FROM documents" not in query
+    assert assessments[0].status == "HEALTHY"

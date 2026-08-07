@@ -97,7 +97,12 @@ const InteractiveGreeceMap = dynamic(
   () => import("@/components/greece-nuts-map").then((module) => module.GreeceNutsMap),
   {
     ssr: false,
-    loading: () => <div className="map-loading map-loading-static">Φόρτωση χάρτη…</div>,
+    loading: () => (
+      <div className="leaflet-map-shell" data-map-status="loading">
+        <div className="leaflet-map-canvas" data-testid="greece-nuts-map" />
+        <div className="map-loading">Φόρτωση χάρτη…</div>
+      </div>
+    ),
   },
 );
 
@@ -622,6 +627,7 @@ function ProfileHome({
   profile,
   appliedProfile,
   description,
+  descriptionChanged,
   suggestions,
   overview,
   expandedArchive,
@@ -639,6 +645,7 @@ function ProfileHome({
   profile: BusinessProfile;
   appliedProfile: BusinessProfile;
   description: string;
+  descriptionChanged: boolean;
   suggestions: ProfileSuggestion[];
   overview: MarketOverviewResponse | null;
   expandedArchive: boolean;
@@ -665,13 +672,21 @@ function ProfileHome({
 
   function applySuggestion(suggestion: ProfileSuggestion) {
     const selected = profile.cpvPrefixes.includes(suggestion.cpvPrefix);
+    const currentSuggestionCpvs = new Set(suggestions.map((item) => item.cpvPrefix));
+    const currentSuggestionKeywords = new Set(suggestions.map((item) => item.keyword));
+    const baselineCpvs = descriptionChanged && !selected
+      ? profile.cpvPrefixes.filter((prefix) => currentSuggestionCpvs.has(prefix))
+      : profile.cpvPrefixes;
     const cpvPrefixes = selected
-      ? profile.cpvPrefixes.filter((prefix) => prefix !== suggestion.cpvPrefix)
-      : [...profile.cpvPrefixes, suggestion.cpvPrefix];
+      ? baselineCpvs.filter((prefix) => prefix !== suggestion.cpvPrefix)
+      : Array.from(new Set([...baselineCpvs, suggestion.cpvPrefix]));
     const existingKeywords = activeKeywords(profile);
+    const baselineKeywords = descriptionChanged && !selected
+      ? existingKeywords.filter((keyword) => currentSuggestionKeywords.has(keyword))
+      : existingKeywords;
     const keywords = selected
-      ? existingKeywords.filter((keyword) => keyword !== suggestion.keyword)
-      : Array.from(new Set([...existingKeywords, suggestion.keyword]));
+      ? baselineKeywords.filter((keyword) => keyword !== suggestion.keyword)
+      : Array.from(new Set([...baselineKeywords, suggestion.keyword]));
     onProfileChange({
       ...profile,
       keyword: keywords.join(", "),
@@ -1387,7 +1402,7 @@ export default function IntelligencePage() {
       ...(profileCpvQuery ? { cpv_prefixes: profileCpvQuery } : {}),
       ...workspaceFilterQuery(appliedProfile),
     } },
-    queryOptions: { retry: 1, enabled: activeView === "analytics" },
+    queryOptions: { retry: 1, enabled: activeView === "analytics" && analyticsMode === "market" },
   });
   const marketOverview = useCustom<MarketOverviewResponse>({
     url: "/v1/analytics/market-overview",
@@ -1395,10 +1410,11 @@ export default function IntelligencePage() {
     config: { query: profileQuery },
     queryOptions: {
       retry: 1,
+      enabled: activeView === "home" || (activeView === "analytics" && ["market", "geography"].includes(analyticsMode)),
     },
   });
   const overallMarketOverview = useCustom<MarketOverviewResponse>({
-    url: "/v1/analytics/market-overview", method: "get", queryOptions: { retry: 1 },
+    url: "/v1/analytics/market-overview", method: "get", queryOptions: { retry: 1, enabled: activeView === "home" },
   });
 
   const regionAnalytics = useCustom<RegionAnalyticsResponse[]>({
@@ -1407,6 +1423,7 @@ export default function IntelligencePage() {
     config: { query: regionalQuery },
     queryOptions: {
       retry: 1,
+      enabled: activeView === "analytics" && analyticsMode === "geography",
     },
   });
   const locationAnalytics = useCustom<GeocodedLocationAnalyticsResponse[]>({
@@ -1415,6 +1432,7 @@ export default function IntelligencePage() {
     config: { query: { ...regionalQuery, limit: 500 } },
     queryOptions: {
       retry: 1,
+      enabled: activeView === "analytics" && analyticsMode === "geography",
     },
   });
   const mapScopedRegions = Array.isArray(regionAnalytics.result.data) ? regionAnalytics.result.data : [];
@@ -1426,6 +1444,7 @@ export default function IntelligencePage() {
     config: { query: supplierQuery },
     queryOptions: {
       retry: 1,
+      enabled: activeView === "analytics" && analyticsMode === "market",
     },
   });
 
@@ -1435,7 +1454,7 @@ export default function IntelligencePage() {
     config: { query: supplierQuery },
     queryOptions: {
       retry: 1,
-      enabled: activeView === "analytics",
+      enabled: activeView === "analytics" && analyticsMode === "market",
     },
   });
 
@@ -1445,7 +1464,7 @@ export default function IntelligencePage() {
     config: { query: { active_only: true, ...workspaceFilterQuery(appliedProfile), limit: 10 } },
     queryOptions: {
       retry: 1,
-      enabled: activeView === "analytics",
+      enabled: activeView === "analytics" && analyticsMode === "market",
     },
   });
 
@@ -1454,7 +1473,7 @@ export default function IntelligencePage() {
     method: "get",
     queryOptions: {
       retry: 1,
-      enabled: activeView === "analytics",
+      enabled: activeView === "analytics" && analyticsMode === "market",
     },
   });
 
@@ -1506,18 +1525,19 @@ export default function IntelligencePage() {
     queryOptions: {
       retry: 1,
       refetchInterval: 15_000,
+      enabled: activeView === "home" || activeView === "opportunities",
     },
   });
 
   const pipelineResults = useCustom<PipelineItemResponse[]>({
     url: "/v1/workspace/pipeline",
     method: "get",
-    queryOptions: { retry: 1 },
+    queryOptions: { retry: 1, enabled: activeView === "opportunities" },
   });
   const relevanceFeedbackResults = useCustom<RelevanceFeedbackResponse[]>({
     url: "/v1/business-profile/relevance-feedback",
     method: "get",
-    queryOptions: { retry: 1 },
+    queryOptions: { retry: 1, enabled: activeView === "home" || activeView === "opportunities" },
   });
   const procurementSignals = useCustom<ProcurementSignalResponse[]>({
     url: "/v1/intelligence/signals",
@@ -1543,7 +1563,7 @@ export default function IntelligencePage() {
     },
   });
   const savedSearchResults = useCustom<SavedSearchResponse[]>({
-    url: "/v1/workspace/saved-searches", method: "get", queryOptions: { retry: 1 },
+    url: "/v1/workspace/saved-searches", method: "get", queryOptions: { retry: 1, enabled: activeView === "archive" },
   });
 
   const scopedOverview = marketOverview.query.isSuccess ? marketOverview.result.data : null;
@@ -1747,16 +1767,17 @@ export default function IntelligencePage() {
       if (nextProfile.nutsCode) setMapFocusCode(resolveRegionCode(nextProfile.nutsCode));
       setProfileUpdatePhase("scoring");
       setProfileFeedback("Το προφίλ αποθηκεύτηκε. Επαναϋπολογίζονται οι ταιριαστές ευκαιρίες…");
+      setActiveView("opportunities");
       await waitForOpportunityScoring(saved.updated_at);
+      setProfileUpdatePhase("ready");
+      setProfileFeedback("Το radar ενημερώθηκε με το νέο προφίλ. Φορτώνονται οι ταιριαστές ευκαιρίες…");
       const [refreshedOpportunities] = await Promise.all([
         api.getScoredOpportunities(undefined, opportunitySearch, saved.classification_version, nextProfile),
         pipelineResults.query.refetch(),
         relevanceFeedbackResults.query.refetch(),
       ]);
       const matchCount = refreshedOpportunities.length;
-      setProfileUpdatePhase("ready");
       setProfileFeedback(`Το radar ενημερώθηκε με ${matchCount} ταιριαστές ευκαιρίες για το νέο προφίλ.`);
-      setActiveView("opportunities");
     } catch (error) {
       setProfileUpdatePhase("error");
       setProfileFeedback(error instanceof Error ? error.message : "Δεν ολοκληρώθηκε η ενημέρωση του προφίλ.");
@@ -1924,6 +1945,7 @@ export default function IntelligencePage() {
             profile={profileDraft}
             appliedProfile={appliedProfile}
             description={companyDescription}
+            descriptionChanged={companyDescription.trim() !== appliedDescription.trim()}
             suggestions={profileSuggestions}
             overview={overview}
             expandedArchive={expandedArchive}

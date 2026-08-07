@@ -219,6 +219,12 @@ _PROCESS_QUERY = sa.text(
     FROM procurement_processes p
     LEFT JOIN entities buyer ON buyer.id=p.buyer_entity_id
     WHERE p.record_status='ACTIVE'
+      AND EXISTS (
+        SELECT 1
+        FROM procurement_acts eligible_act
+        WHERE eligible_act.process_id = p.id
+          AND procintel_act_is_analytics_eligible(eligible_act.id)
+      )
     ORDER BY p.id
     """
 )

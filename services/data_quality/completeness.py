@@ -224,36 +224,46 @@ async def collect_source_completeness(
                     )
                     GROUP BY source.source_system
                 ),
+                document_acts AS MATERIALIZED (
+                    SELECT DISTINCT document.act_id
+                    FROM documents document
+                    WHERE document.act_id IS NOT NULL
+                ),
+                party_acts AS MATERIALIZED (
+                    SELECT DISTINCT party.act_id
+                    FROM act_parties party
+                ),
+                located_acts AS MATERIALIZED (
+                    SELECT DISTINCT location.act_id
+                    FROM act_locations location
+                ),
                 act_stats AS (
                     SELECT
                         source.source_system,
-                        COUNT(DISTINCT act.id) AS canonical_records,
-                        COUNT(DISTINCT act.id) FILTER (
+                        COUNT(*) AS canonical_records,
+                        COUNT(*) FILTER (
                             WHERE act.act_type IN ('NOTICE', 'AWARD', 'CONTRACT', 'TED_NOTICE')
                         ) AS applicable_document_records,
-                        COUNT(DISTINCT act.id) FILTER (
-                            WHERE EXISTS (
-                                SELECT 1 FROM documents document WHERE document.act_id = act.id
-                            )
+                        COUNT(*) FILTER (
+                            WHERE document_acts.act_id IS NOT NULL
                         ) AS records_with_documents,
-                        COUNT(DISTINCT act.id) FILTER (
+                        COUNT(*) FILTER (
                             WHERE act.act_type IN ('REQUEST', 'NOTICE', 'AWARD', 'CONTRACT', 'TED_NOTICE')
                         ) AS applicable_party_records,
-                        COUNT(DISTINCT act.id) FILTER (
-                            WHERE EXISTS (
-                                SELECT 1 FROM act_parties party WHERE party.act_id = act.id
-                            )
+                        COUNT(*) FILTER (
+                            WHERE party_acts.act_id IS NOT NULL
                         ) AS records_with_parties,
-                        COUNT(DISTINCT act.id) FILTER (
+                        COUNT(*) FILTER (
                             WHERE act.act_type IN ('REQUEST', 'NOTICE', 'CONTRACT', 'TED_NOTICE')
                         ) AS applicable_location_records,
-                        COUNT(DISTINCT act.id) FILTER (
-                            WHERE EXISTS (
-                                SELECT 1 FROM act_locations location WHERE location.act_id = act.id
-                            )
+                        COUNT(*) FILTER (
+                            WHERE located_acts.act_id IS NOT NULL
                         ) AS records_with_locations
                     FROM procurement_acts act
                     JOIN source_records source ON source.id = act.source_record_id
+                    LEFT JOIN document_acts ON document_acts.act_id = act.id
+                    LEFT JOIN party_acts ON party_acts.act_id = act.id
+                    LEFT JOIN located_acts ON located_acts.act_id = act.id
                     WHERE act.is_current = TRUE
                     GROUP BY source.source_system
                 ),

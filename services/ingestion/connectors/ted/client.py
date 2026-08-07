@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from packages.source_clients.rate_limit import TokenBucket
+from packages.source_clients.shared_rate_limit import configured_rate_limiter
 from packages.source_clients.retry import CircuitBreaker, raise_for_retryable_status, retrying
 
 from .config import TedConnectorConfig
@@ -100,7 +100,10 @@ class TedClient:
             base_url=config.base_url, timeout=config.request_timeout_seconds
         )
         self._owns_http_client = http_client is None
-        self._rate_limiter = TokenBucket(config.rate_limit_per_minute)
+        self._rate_limiter = configured_rate_limiter(
+            config.rate_limit_per_minute,
+            config.rate_limit_state_path,
+        )
         self._circuit_breaker = CircuitBreaker()
 
     async def aclose(self) -> None:
@@ -117,10 +120,9 @@ class TedClient:
         iteration_next_token: str | None = None,
     ) -> TedSearchPage:
         self._circuit_breaker.raise_if_open()
-        await self._rate_limiter.acquire()
-
         @retrying(max_attempts=self._config.max_retry_attempts)
         async def _do_request() -> httpx.Response:
+            await self._rate_limiter.acquire()
             country_code = TED_COUNTRY_CODES.get(country.upper(), country.upper())
             expert_query = (
                 f"buyer-country = {country_code} "

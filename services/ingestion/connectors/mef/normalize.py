@@ -53,11 +53,23 @@ class NormalizedMefExpense(BaseModel):
 def normalize_expense_record(raw: dict[str, Any]) -> NormalizedMefExpense:
     organization = raw.get("organization") or {}
     return NormalizedMefExpense(
-        organization_source_native_id=raw.get("org.uid") or raw.get("org_uid") or organization.get("id") or raw.get("organizationId"),
-        organization_name=raw.get("org.title") or organization.get("name") or raw.get("organizationName"),
-        organization_afm=raw.get("org.afm") or organization.get("vatNumber") or raw.get("organizationAfm"),
-        recipient_afm=raw.get("issuer_afm") or raw.get("recipientAfm") or raw.get("recipientVatNumber"),
-        recipient_name=raw.get("issuer_title") or raw.get("recipientName"),
+        organization_source_native_id=raw.get("org.uid")
+        or raw.get("org_uid")
+        or organization.get("id")
+        or raw.get("organizationId"),
+        organization_name=raw.get("org.title")
+        or organization.get("name")
+        or raw.get("organizationName"),
+        organization_afm=raw.get("org.afm")
+        or organization.get("vatNumber")
+        or raw.get("organizationAfm"),
+        recipient_afm=raw.get("receiver_afm")
+        or raw.get("issuer_afm")
+        or raw.get("recipientAfm")
+        or raw.get("recipientVatNumber"),
+        recipient_name=raw.get("receiver_title")
+        or raw.get("issuer_title")
+        or raw.get("recipientName"),
         amount=_to_decimal(raw.get("amount")),
         vat_amount=_to_decimal(raw.get("vat") if "vat" in raw else raw.get("vatAmount")),
         expense_date=_to_date(raw.get("date") or raw.get("expenseDate")),

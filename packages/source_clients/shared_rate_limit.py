@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from .rate_limit import RateLimiter, TokenBucket
+
 
 class SharedSlidingWindowLimiter:
     def __init__(
@@ -63,3 +65,14 @@ class SharedSlidingWindowLimiter:
             if wait_seconds <= 0:
                 return
             await asyncio.sleep(wait_seconds)
+
+
+def configured_rate_limiter(
+    rate_per_minute: float,
+    state_path: str | None,
+    *,
+    burst: float | None = None,
+) -> RateLimiter:
+    if state_path:
+        return SharedSlidingWindowLimiter(int(rate_per_minute), state_path)
+    return TokenBucket(rate_per_minute, burst=burst)

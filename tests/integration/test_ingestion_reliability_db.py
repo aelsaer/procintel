@@ -390,6 +390,7 @@ async def test_data_quality_queries_are_typed_for_asyncpg() -> None:
             assert set(result.by_code) == {
                 "INVALID_AFM_CHECKSUM",
                 "INVALID_DATE_RANGE",
+                "INCOMPLETE_ADAMCHAIN_PLACEHOLDER",
                 "END_BEFORE_START",
                 "GROSS_BELOW_NET",
                 "NEGATIVE_PROCUREMENT_VALUE",
@@ -519,6 +520,74 @@ async def test_bad_values_and_lifecycle_order_are_quarantined() -> None:
             await conn.execute(
                 source_records.delete().where(source_records.c.id.in_(source_ids))
             )
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_empty_adamchain_evidence_is_quarantined_from_analytics() -> None:
+    engine = create_async_engine(_async_url(DATABASE_URL))
+    source_id = uuid.uuid4()
+    act_id = uuid.uuid4()
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                source_records.insert().values(
+                    id=source_id,
+                    source_system="KHMDHS",
+                    resource_type="adamChain",
+                    source_native_id=f"placeholder-{act_id}",
+                    content_sha256=uuid.uuid4().hex,
+                    payload_uri=f"/tmp/placeholder-{act_id}.json",
+                    fetched_at=datetime.now(timezone.utc),
+                    parse_status="PARSED",
+                )
+            )
+            await conn.execute(
+                procurement_acts.insert().values(
+                    id=act_id,
+                    act_type="NOTICE",
+                    source_record_id=source_id,
+                )
+            )
+
+        async with engine.connect() as conn:
+            result = await run_data_quality_checks(
+                conn,
+                date_from=datetime.now(timezone.utc).date(),
+                date_to=datetime.now(timezone.utc).date(),
+                repair_invalid_dates=False,
+            )
+            issue = (
+                await conn.execute(
+                    sa.select(data_quality_issues.c.severity).where(
+                        data_quality_issues.c.object_id == act_id,
+                        data_quality_issues.c.issue_code
+                        == "INCOMPLETE_ADAMCHAIN_PLACEHOLDER",
+                        data_quality_issues.c.status == "OPEN",
+                    )
+                )
+            ).scalar_one()
+            eligible = (
+                await conn.execute(
+                    sa.text(
+                        "SELECT procintel_act_is_analytics_eligible(:act_id)"
+                    ),
+                    {"act_id": act_id},
+                )
+            ).scalar_one()
+
+            assert result.by_code["INCOMPLETE_ADAMCHAIN_PLACEHOLDER"] == 1
+            assert issue == "ERROR"
+            assert eligible is False
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(
+                data_quality_issues.delete().where(
+                    data_quality_issues.c.object_id == act_id
+                )
+            )
+            await conn.execute(procurement_acts.delete().where(procurement_acts.c.id == act_id))
+            await conn.execute(source_records.delete().where(source_records.c.id == source_id))
         await engine.dispose()
 
 
