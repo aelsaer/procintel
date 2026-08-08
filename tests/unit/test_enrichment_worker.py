@@ -89,6 +89,7 @@ async def test_upstream_contract_failure_opens_provider_circuit_for_sweep(
         max_attempts=8,
     )
     claim_calls = 0
+    bulk_block_calls: list[dict[str, str]] = []
 
     class FakeDependencies:
         upstream_errors: dict[str, str] = {}
@@ -130,6 +131,11 @@ async def test_upstream_contract_failure_opens_provider_circuit_for_sweep(
     async def dispatch(*args, **kwargs):
         raise ProviderUpstreamContractError("provider contract unavailable")
 
+    async def bulk_block(*args, **kwargs):
+        upstream_errors = args[1]
+        bulk_block_calls.append(upstream_errors)
+        return {provider: 3} if upstream_errors else {}
+
     monkeypatch.setattr(
         "services.ingestion.enrichment_worker._Dependencies", FakeDependencies
     )
@@ -143,6 +149,10 @@ async def test_upstream_contract_failure_opens_provider_circuit_for_sweep(
         "services.ingestion.enrichment_worker.recover_stale_enrichment_jobs", recover
     )
     monkeypatch.setattr("services.ingestion.enrichment_worker._dispatch", dispatch)
+    monkeypatch.setattr(
+        "services.ingestion.enrichment_worker._block_static_upstream_jobs",
+        bulk_block,
+    )
 
     result = await run_pending_enrichment_jobs(
         FakeConnection(),
@@ -153,7 +163,10 @@ async def test_upstream_contract_failure_opens_provider_circuit_for_sweep(
     )
 
     assert claim_calls == 1
-    assert result.blocked_upstream == 1
+    assert bulk_block_calls == [{}, {provider: "provider contract unavailable"}]
+    assert result.blocked_upstream == 4
+    assert result.deferred == 0
+    assert result.by_provider == {provider: {"blocked_upstream": 4}}
 
 
 async def test_static_upstream_error_bulk_blocks_the_selected_provider() -> None:

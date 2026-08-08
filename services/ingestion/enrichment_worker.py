@@ -459,16 +459,26 @@ async def run_pending_enrichment_jobs(
             except ProviderUpstreamContractError as exc:
                 attempts[job.provider] = attempts.get(job.provider, 0) + 1
                 dependencies.runtime_unavailable_providers.add(job.provider)
+                error_message = str(exc)
                 await conn.rollback()
                 await fail_enrichment(
                     conn,
                     job.id,
-                    error={"type": type(exc).__name__, "message": str(exc)},
+                    error={"type": type(exc).__name__, "message": error_message},
                     blocked_upstream=True,
                 )
                 await conn.commit()
-                upstream_blocked += 1
+                runtime_blocked = await _block_static_upstream_jobs(
+                    conn,
+                    {job.provider: error_message},
+                    providers={job.provider},
+                )
+                bulk_count = runtime_blocked.get(job.provider, 0)
+                upstream_blocked += 1 + bulk_count
                 _increment(by_provider, job.provider, "blocked_upstream")
+                if bulk_count:
+                    counts = by_provider.setdefault(job.provider, {})
+                    counts["blocked_upstream"] += bulk_count
             except (
                 DocumentTooLargeError,
                 PdfPageLimitExceededError,
