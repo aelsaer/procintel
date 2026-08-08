@@ -92,6 +92,7 @@ async def _coverage(conn: AsyncConnection) -> dict[str, Any]:
                                AND a.start_date IS NULL
                                AND a.end_date IS NULL
                            )
+                           AND source.source_system <> 'TEST'
                            AND NOT EXISTS (
                                SELECT 1
                                FROM data_quality_issues issue

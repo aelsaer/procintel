@@ -651,6 +651,54 @@ async def test_empty_adamchain_evidence_is_quarantined_from_analytics() -> None:
 
 
 @pytest.mark.asyncio
+async def test_synthetic_source_act_is_quarantined_from_product_reads() -> None:
+    engine = create_async_engine(_async_url(DATABASE_URL))
+    source_id = uuid.uuid4()
+    act_id = uuid.uuid4()
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                source_records.insert().values(
+                    id=source_id,
+                    source_system="TEST",
+                    resource_type="pagination_seed",
+                    source_native_id=f"synthetic-{act_id}",
+                    content_sha256=uuid.uuid4().hex,
+                    payload_uri=f"/tmp/synthetic-{act_id}.json",
+                    fetched_at=datetime.now(timezone.utc),
+                    parse_status="PARSED",
+                )
+            )
+            await conn.execute(
+                procurement_acts.insert().values(
+                    id=act_id,
+                    act_type="CONTRACT",
+                    source_record_id=source_id,
+                    title="Synthetic contract",
+                    publication_date=datetime.now(timezone.utc).date(),
+                )
+            )
+
+        async with engine.connect() as conn:
+            eligible = (
+                await conn.execute(
+                    sa.text("SELECT procintel_act_is_analytics_eligible(:act_id)"),
+                    {"act_id": act_id},
+                )
+            ).scalar_one()
+            assert eligible is False
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(
+                procurement_acts.delete().where(procurement_acts.c.id == act_id)
+            )
+            await conn.execute(
+                source_records.delete().where(source_records.c.id == source_id)
+            )
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_diavgeia_fallback_is_queued_once_per_process() -> None:
     engine = create_async_engine(_async_url(DATABASE_URL))
     source_record_id = uuid.uuid4()

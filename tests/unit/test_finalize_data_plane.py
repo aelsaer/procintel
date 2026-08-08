@@ -1,4 +1,6 @@
-from scripts.finalize_data_plane import _build_parser, _verdict
+import inspect
+
+from scripts.finalize_data_plane import _build_parser, _coverage, _verdict
 
 
 def test_finalize_parser_supports_bounded_resume_stages() -> None:
@@ -62,3 +64,7 @@ def test_finalize_verdict_blocks_quality_errors_that_leak_from_quarantine() -> N
     }
 
     assert _verdict({}, coverage) == ("PARTIAL", ["open_quality_errors:1"])
+
+
+def test_finalize_coverage_excludes_synthetic_source_records() -> None:
+    assert "source.source_system <> 'TEST'" in inspect.getsource(_coverage)
