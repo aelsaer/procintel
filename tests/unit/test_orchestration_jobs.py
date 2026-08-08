@@ -3,7 +3,10 @@ based on env config, without touching a real scheduler run."""
 
 import pytest
 
-from services.ingestion.orchestration.jobs import default_jobs
+from services.ingestion.orchestration.jobs import (
+    DEFAULT_DAILY_GEMI_MAX_LOOKUPS,
+    default_jobs,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -81,6 +84,10 @@ def test_optional_provider_configuration_is_attached_to_daily_jobs(monkeypatch):
     assert not any("GEMI enrichment inactive" in reason for reason in skip_reasons)
     assert not any("ANAPTYXI_2014_2020 enrichment inactive" in reason for reason in skip_reasons)
     assert not any("VIES enrichment inactive" in reason for reason in skip_reasons)
+
+
+def test_default_gemi_budget_can_absorb_observed_daily_supplier_volume():
+    assert DEFAULT_DAILY_GEMI_MAX_LOOKUPS == 4000
 
 
 def test_ted_country_batch_has_independent_cursors_and_gap_safe_lookback(monkeypatch):

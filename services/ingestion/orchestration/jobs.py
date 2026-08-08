@@ -39,6 +39,7 @@ from .scheduler import ScheduledJob
 DEFAULT_BACKFILL_START_DATE = date(2024, 1, 1)
 DEFAULT_DAILY_LOOKBACK_DAYS = 3
 DEFAULT_DAILY_MIN_INTERVAL_HOURS = 23.0
+DEFAULT_DAILY_GEMI_MAX_LOOKUPS = 4000
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -79,7 +80,9 @@ def default_jobs(*, raw_root: str = "./raw") -> tuple[list[ScheduledJob], list[s
         hours=_positive_float_env("DAILY_INGEST_MIN_INTERVAL_HOURS", DEFAULT_DAILY_MIN_INTERVAL_HOURS)
     )
     diavgeia_budget = _positive_int_env("DAILY_DIAVGEIA_MAX_LOOKUPS", 1000)
-    gemi_budget = _positive_int_env("DAILY_GEMI_MAX_LOOKUPS", 500)
+    gemi_budget = _positive_int_env(
+        "DAILY_GEMI_MAX_LOOKUPS", DEFAULT_DAILY_GEMI_MAX_LOOKUPS
+    )
     mef_budget = _positive_int_env("DAILY_MEF_MAX_LOOKUPS", 500)
     anaptyxi_budget = _positive_int_env("DAILY_ANAPTYXI_MAX_LOOKUPS_PER_PERIOD", 500)
     vies_budget = _positive_int_env("DAILY_VIES_MAX_LOOKUPS", 500)

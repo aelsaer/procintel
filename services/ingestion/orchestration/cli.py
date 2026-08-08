@@ -63,12 +63,13 @@ from services.product.document_tools import evaluate_all_phrase_monitors
 from services.search_index.catalog import reindex_catalogs
 from services.search_index.config import OpenSearchConfig
 
-from .jobs import default_jobs
+from .jobs import DEFAULT_DAILY_GEMI_MAX_LOOKUPS, default_jobs
 from .scheduler import run_due_jobs
 
 DEFAULT_DAILY_AT = "02:30"
 DEFAULT_DAILY_TIMEZONE = "Europe/Athens"
 DEFAULT_DAILY_MAX_SLEEP_SECONDS = 300.0
+DEFAULT_DAILY_GEOSPATIAL_MAX_JOBS = 40000
 
 
 @dataclass(frozen=True)
@@ -214,7 +215,10 @@ async def _run_once(
                             os.environ.get("DAILY_DIAVGEIA_MAX_LOOKUPS", "1000")
                         ),
                         "GEMI": int(
-                            os.environ.get("DAILY_GEMI_MAX_LOOKUPS", "500")
+                            os.environ.get(
+                                "DAILY_GEMI_MAX_LOOKUPS",
+                                str(DEFAULT_DAILY_GEMI_MAX_LOOKUPS),
+                            )
                         ),
                         "MEF": int(
                             os.environ.get("DAILY_MEF_MAX_LOOKUPS", "500")
@@ -593,7 +597,12 @@ def main() -> None:
         sub.add_argument(
             "--geospatial-max-jobs",
             type=int,
-            default=int(os.environ.get("DAILY_GEOSPATIAL_MAX_JOBS", "12000")),
+            default=int(
+                os.environ.get(
+                    "DAILY_GEOSPATIAL_MAX_JOBS",
+                    str(DEFAULT_DAILY_GEOSPATIAL_MAX_JOBS),
+                )
+            ),
         )
         sub.add_argument(
             "--scoring-lookback-days",
