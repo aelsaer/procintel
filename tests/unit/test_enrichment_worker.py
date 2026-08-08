@@ -9,6 +9,7 @@ from services.ingestion.connectors.mef.client import MefUpstreamUnavailableError
 from services.ingestion.enrichment_queue import ClaimedEnrichmentJob
 from services.ingestion.enrichment_worker import (
     ProviderUpstreamContractError,
+    _block_static_upstream_jobs,
     _dispatch,
     run_pending_enrichment_jobs,
 )
@@ -153,6 +154,34 @@ async def test_upstream_contract_failure_opens_provider_circuit_for_sweep(
 
     assert claim_calls == 1
     assert result.blocked_upstream == 1
+
+
+async def test_static_upstream_error_bulk_blocks_the_selected_provider() -> None:
+    statements = []
+
+    class FakeConnection:
+        commits = 0
+
+        async def execute(self, statement):
+            statements.append(statement)
+            return SimpleNamespace(rowcount=3)
+
+        async def commit(self) -> None:
+            self.commits += 1
+
+    conn = FakeConnection()
+    result = await _block_static_upstream_jobs(
+        conn,
+        {
+            "ANAPTYXI_2021_2027": "validated API contract unavailable",
+            "IGNORED": "not selected",
+        },
+        providers={"ANAPTYXI_2021_2027"},
+    )
+
+    assert result == {"ANAPTYXI_2021_2027": 3}
+    assert len(statements) == 1
+    assert conn.commits == 1
 
 
 async def test_enrichment_sweep_claims_providers_round_robin(

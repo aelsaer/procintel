@@ -27,6 +27,7 @@ from services.ingestion.enrichment_queue import (
     enqueue_enrichment,
     fail_enrichment,
 )
+from services.ingestion.enrichment_worker import _block_static_upstream_jobs
 from services.ingestion.connectors.inspire.capabilities import (
     _capability_source_record_insert,
 )
@@ -214,6 +215,64 @@ async def test_upstream_blocked_provider_can_reactivate_after_contract_fix() -> 
             await conn.execute(
                 enrichment_jobs.delete().where(
                     enrichment_jobs.c.idempotency_key == key
+                )
+            )
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_static_upstream_contract_error_bulk_blocks_pending_queue() -> None:
+    engine = create_async_engine(_async_url(DATABASE_URL))
+    provider = "ANAPTYXI_2021_2027"
+    key_prefix = f"test-upstream-bulk-{uuid.uuid4()}"
+    job_ids = [uuid.uuid4() for _ in range(4)]
+    try:
+        async with engine.connect() as conn:
+            for index, status in enumerate(
+                ("QUEUED", "FAILED", "BLOCKED_CONFIG", "BLOCKED_UPSTREAM")
+            ):
+                await conn.execute(
+                    enrichment_jobs.insert().values(
+                        id=job_ids[index],
+                        provider=provider,
+                        idempotency_key=f"{key_prefix}-{index}",
+                        payload={"act_id": str(uuid.uuid4())},
+                        status=status,
+                    )
+                )
+            await conn.commit()
+
+            blocked = await _block_static_upstream_jobs(
+                conn,
+                {provider: "validated API contract unavailable"},
+                providers={provider},
+            )
+
+            rows = (
+                await conn.execute(
+                    sa.select(
+                        enrichment_jobs.c.status,
+                        enrichment_jobs.c.last_error,
+                    )
+                    .where(enrichment_jobs.c.id.in_(job_ids))
+                    .order_by(enrichment_jobs.c.created_at, enrichment_jobs.c.id)
+                )
+            ).all()
+            assert blocked == {provider: 3}
+            assert {row.status for row in rows} == {"BLOCKED_UPSTREAM"}
+            assert sum(
+                row.last_error
+                == {
+                    "type": "ProviderUpstreamContractError",
+                    "message": "validated API contract unavailable",
+                }
+                for row in rows
+            ) == 3
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(
+                enrichment_jobs.delete().where(
+                    enrichment_jobs.c.idempotency_key.like(f"{key_prefix}%")
                 )
             )
         await engine.dispose()

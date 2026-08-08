@@ -343,6 +343,45 @@ def _increment(
     counts[status] = counts.get(status, 0) + 1
 
 
+async def _block_static_upstream_jobs(
+    conn: AsyncConnection,
+    upstream_errors: dict[str, str],
+    *,
+    providers: set[str] | None = None,
+) -> dict[str, int]:
+    """Terminally classify queues whose provider contract is known unavailable."""
+    blocked: dict[str, int] = {}
+    for provider, message in sorted(upstream_errors.items()):
+        if providers is not None and provider not in providers:
+            continue
+        result = await conn.execute(
+            enrichment_jobs.update()
+            .where(
+                enrichment_jobs.c.provider == provider,
+                enrichment_jobs.c.status.in_(
+                    ("QUEUED", "FAILED", "BLOCKED_CONFIG")
+                ),
+            )
+            .values(
+                status="BLOCKED_UPSTREAM",
+                locked_at=None,
+                locked_by=None,
+                last_error={
+                    "type": "ProviderUpstreamContractError",
+                    "message": message,
+                },
+                finished_at=sa.func.now(),
+                updated_at=sa.func.now(),
+            )
+        )
+        count = int(result.rowcount or 0)
+        if count:
+            blocked[provider] = count
+    if blocked:
+        await conn.commit()
+    return blocked
+
+
 async def run_pending_enrichment_jobs(
     conn: AsyncConnection,
     *,
@@ -352,21 +391,21 @@ async def run_pending_enrichment_jobs(
     providers: set[str] | None = None,
 ) -> EnrichmentSweepResult:
     dependencies = _Dependencies(raw_root)
-    if dependencies.upstream_errors:
-        await conn.execute(
-            enrichment_jobs.update()
-            .where(
-                enrichment_jobs.c.provider.in_(dependencies.upstream_errors),
-                enrichment_jobs.c.status == "BLOCKED_CONFIG",
-            )
-            .values(status="BLOCKED_UPSTREAM")
-        )
-        await conn.commit()
+    preblocked_upstream = await _block_static_upstream_jobs(
+        conn,
+        dependencies.upstream_errors,
+        providers=providers,
+    )
+    dependencies.runtime_unavailable_providers.update(preblocked_upstream)
     await recover_stale_enrichment_jobs(conn)
     claimed = 0
-    succeeded = failed = blocked = upstream_blocked = deferred = 0
+    succeeded = failed = blocked = deferred = 0
+    upstream_blocked = sum(preblocked_upstream.values())
     attempts: dict[str, int] = {}
-    by_provider: dict[str, dict[str, int]] = {}
+    by_provider: dict[str, dict[str, int]] = {
+        provider: {"blocked_upstream": count}
+        for provider, count in preblocked_upstream.items()
+    }
     provider_order = sorted(
         provider
         for provider in dependencies.known_providers
