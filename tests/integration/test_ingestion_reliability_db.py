@@ -651,7 +651,7 @@ async def test_empty_adamchain_evidence_is_quarantined_from_analytics() -> None:
 
 
 @pytest.mark.asyncio
-async def test_synthetic_source_act_is_quarantined_from_product_reads() -> None:
+async def test_synthetic_source_act_is_quarantined_only_when_flagged() -> None:
     engine = create_async_engine(_async_url(DATABASE_URL))
     source_id = uuid.uuid4()
     act_id = uuid.uuid4()
@@ -680,15 +680,43 @@ async def test_synthetic_source_act_is_quarantined_from_product_reads() -> None:
             )
 
         async with engine.connect() as conn:
-            eligible = (
+            eligible_before_quarantine = (
                 await conn.execute(
                     sa.text("SELECT procintel_act_is_analytics_eligible(:act_id)"),
                     {"act_id": act_id},
                 )
             ).scalar_one()
-            assert eligible is False
+            assert eligible_before_quarantine is True
+
+        async with engine.begin() as conn:
+            await conn.execute(
+                data_quality_issues.insert().values(
+                    id=uuid.uuid4(),
+                    source_record_id=source_id,
+                    object_type="procurement_act",
+                    object_id=act_id,
+                    issue_code="TEST_SOURCE_RECORD_IN_PRODUCTION",
+                    severity="ERROR",
+                    details={"source_system": "TEST"},
+                    status="OPEN",
+                )
+            )
+
+        async with engine.connect() as conn:
+            eligible_after_quarantine = (
+                await conn.execute(
+                    sa.text("SELECT procintel_act_is_analytics_eligible(:act_id)"),
+                    {"act_id": act_id},
+                )
+            ).scalar_one()
+            assert eligible_after_quarantine is False
     finally:
         async with engine.begin() as conn:
+            await conn.execute(
+                data_quality_issues.delete().where(
+                    data_quality_issues.c.object_id == act_id
+                )
+            )
             await conn.execute(
                 procurement_acts.delete().where(procurement_acts.c.id == act_id)
             )

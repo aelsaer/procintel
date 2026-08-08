@@ -66,5 +66,8 @@ def test_finalize_verdict_blocks_quality_errors_that_leak_from_quarantine() -> N
     assert _verdict({}, coverage) == ("PARTIAL", ["open_quality_errors:1"])
 
 
-def test_finalize_coverage_excludes_synthetic_source_records() -> None:
-    assert "source.source_system <> 'TEST'" in inspect.getsource(_coverage)
+def test_finalize_coverage_uses_shared_quality_issue_quarantine() -> None:
+    source = inspect.getsource(_coverage)
+
+    assert "source.source_system <> 'TEST'" not in source
+    assert "issue.severity IN ('ERROR', 'BLOCKING')" in source
