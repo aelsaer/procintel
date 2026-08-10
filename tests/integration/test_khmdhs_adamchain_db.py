@@ -8,6 +8,7 @@ trail, public_id of the merged-away process still resolvable via
 merged_into_process_id).
 """
 
+import asyncio
 import os
 import uuid
 from datetime import date, datetime, timezone
@@ -15,6 +16,7 @@ from datetime import date, datetime, timezone
 import httpx
 import pytest
 import respx
+import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -27,7 +29,12 @@ from packages.domain.tables import (
     source_records,
 )
 from packages.source_clients.raw_store import LocalFilesystemRawStore
-from services.ingestion.connectors.khmdhs.adamchain import get_act_id_by_adam, resolve_adam_chain_for_act
+from services.ingestion.connectors.khmdhs.adamchain import (
+    _ensure_adamchain_source_record,
+    _ensure_link,
+    get_act_id_by_adam,
+    resolve_adam_chain_for_act,
+)
 from services.ingestion.connectors.khmdhs.client import KhmdhsClient
 from services.ingestion.connectors.khmdhs.config import KhmdhsConnectorConfig
 from services.ingestion.connectors.khmdhs.db_writer import ingest_khmdhs_record
@@ -54,10 +61,80 @@ def _minimal_record(adam: str) -> dict:
     }
 
 
+async def test_concurrent_evidence_and_link_writes_are_idempotent():
+    engine = create_async_engine(_asyncpg_url())
+    content_sha256 = f"sha-{uuid.uuid4()}"
+
+    async def store_evidence() -> tuple[uuid.UUID, bool]:
+        async with engine.begin() as conn:
+            return await _ensure_adamchain_source_record(
+                conn,
+                seed_adam_normalized="26PAY019562649",
+                content_sha256=content_sha256,
+                payload_uri="mem://concurrent-adamchain",
+                http_status=200,
+            )
+
+    source_ids: list[uuid.UUID] = []
+    act_ids = [uuid.uuid4(), uuid.uuid4()]
+    try:
+        stored = await asyncio.gather(store_evidence(), store_evidence())
+        source_ids = list({result[0] for result in stored})
+        assert len(source_ids) == 1
+        assert sorted(result[1] for result in stored) == [False, True]
+
+        async with engine.begin() as conn:
+            await conn.execute(
+                procurement_acts.insert(),
+                [
+                    {"id": act_id, "act_type": "PAYMENT", "source_record_id": source_ids[0]}
+                    for act_id in act_ids
+                ],
+            )
+
+        async def store_link() -> None:
+            async with engine.begin() as conn:
+                await _ensure_link(
+                    conn,
+                    from_act_id=act_ids[0],
+                    to_act_id=act_ids[1],
+                    link_type="APPROVES",
+                    source_record_id=source_ids[0],
+                )
+
+        await asyncio.gather(store_link(), store_link())
+
+        async with engine.connect() as conn:
+            link_count = (
+                await conn.execute(
+                    select(sa.func.count())
+                    .select_from(act_links)
+                    .where(
+                        act_links.c.from_act_id == act_ids[0],
+                        act_links.c.to_act_id == act_ids[1],
+                        act_links.c.link_type == "APPROVES",
+                    )
+                )
+            ).scalar_one()
+            assert link_count == 1
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(
+                act_links.delete().where(
+                    sa.or_(act_links.c.from_act_id.in_(act_ids), act_links.c.to_act_id.in_(act_ids))
+                )
+            )
+            await conn.execute(procurement_acts.delete().where(procurement_acts.c.id.in_(act_ids)))
+            if source_ids:
+                await conn.execute(source_records.delete().where(source_records.c.id.in_(source_ids)))
+        await engine.dispose()
+
+
 @respx.mock
 async def test_zero_then_one_then_merge_process_assignment(tmp_path):
-    request_adam = "25REQ000900001"
-    contract_adam = "25SYMV000900002"
+    run_suffix = f"{uuid.uuid4().int % 100_000_000:08d}"
+    request_adam = f"25REQ{run_suffix}1"
+    contract_adam = f"25SYMV{run_suffix}2"
 
     respx.get(f"{BASE_URL}/khmdhs-opendata/adamChain/{request_adam}").mock(
         return_value=httpx.Response(200, json={"relatedRecords": []})

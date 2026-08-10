@@ -30,6 +30,7 @@ from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.domain.tables import (
@@ -207,19 +208,9 @@ async def _ensure_link(
 ) -> None:
     if from_act_id == to_act_id:
         return
-    already_linked = (
-        await conn.execute(
-            select(act_links.c.id).where(
-                act_links.c.from_act_id == from_act_id,
-                act_links.c.to_act_id == to_act_id,
-                act_links.c.link_type == link_type,
-            )
-        )
-    ).first()
-    if already_linked is not None:
-        return
     await conn.execute(
-        act_links.insert().values(
+        pg_insert(act_links)
+        .values(
             id=uuid.uuid4(),
             from_act_id=from_act_id,
             to_act_id=to_act_id,
@@ -233,7 +224,60 @@ async def _ensure_link(
             },
             created_by="services.ingestion.connectors.khmdhs.adamchain",
         )
+        .on_conflict_do_nothing(
+            index_elements=[act_links.c.from_act_id, act_links.c.to_act_id, act_links.c.link_type]
+        )
     )
+
+
+async def _ensure_adamchain_source_record(
+    conn: AsyncConnection,
+    *,
+    seed_adam_normalized: str,
+    content_sha256: str,
+    payload_uri: str,
+    http_status: int,
+) -> tuple[uuid.UUID, bool]:
+    """Atomically store immutable chain evidence and report whether it was new."""
+    candidate_id = uuid.uuid4()
+    inserted_id = (
+        await conn.execute(
+            pg_insert(source_records)
+            .values(
+                id=candidate_id,
+                source_system="KHMDHS",
+                resource_type="adamChain",
+                source_native_id=seed_adam_normalized,
+                content_sha256=content_sha256,
+                payload_uri=payload_uri,
+                fetched_at=datetime.now(timezone.utc),
+                http_status=http_status,
+                license_code="CC-BY-4.0",
+                parse_status="PARSED",
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    source_records.c.source_system,
+                    source_records.c.resource_type,
+                    source_records.c.content_sha256,
+                ]
+            )
+            .returning(source_records.c.id)
+        )
+    ).scalar_one_or_none()
+    if inserted_id is not None:
+        return inserted_id, True
+
+    existing_id = (
+        await conn.execute(
+            select(source_records.c.id).where(
+                source_records.c.source_system == "KHMDHS",
+                source_records.c.resource_type == "adamChain",
+                source_records.c.content_sha256 == content_sha256,
+            )
+        )
+    ).scalar_one()
+    return existing_id, False
 
 
 async def _link_chain(
@@ -555,17 +599,15 @@ async def resolve_adam_chain_for_act(
         payload=response.raw_body or json.dumps(response.body).encode("utf-8"),
     )
 
-    already_seen = (
-        await conn.execute(
-            select(source_records.c.id).where(
-                source_records.c.source_system == "KHMDHS",
-                source_records.c.resource_type == "adamChain",
-                source_records.c.content_sha256 == raw_ref.content_sha256,
-            )
-        )
-    ).first()
+    source_record_id, source_record_is_new = await _ensure_adamchain_source_record(
+        conn,
+        seed_adam_normalized=seed_adam_normalized,
+        content_sha256=raw_ref.content_sha256,
+        payload_uri=raw_ref.payload_uri,
+        http_status=response.http_status,
+    )
 
-    if already_seen is not None:
+    if not source_record_is_new:
         # Same chain content already fully processed in an earlier run —
         # process assignment for this seed act may already be settled. Empty
         # chains from different ADAMs legitimately have identical payloads,
@@ -579,23 +621,6 @@ async def resolve_adam_chain_for_act(
             await _sync_process_summary(conn, member_row.process_id)
             await conn.commit()
             return member_row.process_id
-        source_record_id = already_seen.id
-    else:
-        source_record_id = uuid.uuid4()
-        await conn.execute(
-            source_records.insert().values(
-                id=source_record_id,
-                source_system="KHMDHS",
-                resource_type="adamChain",
-                source_native_id=seed_adam_normalized,
-                content_sha256=raw_ref.content_sha256,
-                payload_uri=raw_ref.payload_uri,
-                fetched_at=datetime.now(timezone.utc),
-                http_status=response.http_status,
-                license_code="CC-BY-4.0",
-                parse_status="PARSED",
-            )
-        )
 
     chain_entries = _extract_chain_entries(response.body)
     if not any(entry.adam == seed_adam_normalized for entry in chain_entries):
