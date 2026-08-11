@@ -91,7 +91,7 @@ def test_rolling_job_starts_with_recent_overlap_instead_of_historical_backfill()
     assert window == (date(2025, 6, 13), date(2025, 6, 15))
 
 
-def test_rolling_job_rechecks_overlap_after_interval_even_with_older_cursor():
+def test_rolling_job_catches_up_missed_window_before_recent_overlap():
     job = _job(min_interval=timedelta(hours=23), rolling_lookback_days=3)
 
     window = compute_window(
@@ -101,4 +101,17 @@ def test_rolling_job_rechecks_overlap_after_interval_even_with_older_cursor():
         now=NOW,
     )
 
-    assert window == (date(2025, 6, 13), date(2025, 6, 15))
+    assert window == (date(2025, 5, 2), date(2025, 5, 31))
+
+
+def test_rolling_job_recovers_short_outage_without_skipping_days():
+    job = _job(min_interval=timedelta(hours=23), rolling_lookback_days=3)
+
+    window = compute_window(
+        cursor_value={"last_ingested_date": "2025-06-08"},
+        last_success_at=NOW - timedelta(days=7),
+        job=job,
+        now=NOW,
+    )
+
+    assert window == (date(2025, 6, 9), date(2025, 6, 15))

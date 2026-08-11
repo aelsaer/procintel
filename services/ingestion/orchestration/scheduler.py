@@ -88,11 +88,22 @@ def compute_window(
 
     today = now.date()
     if job.rolling_lookback_days:
-        date_from = max(
+        rolling_date_from = max(
             job.backfill_start_date,
             today - timedelta(days=job.rolling_lookback_days - 1),
         )
-        return date_from, today
+        if cursor_value and cursor_value.get("last_ingested_date"):
+            next_unseen_date = date.fromisoformat(
+                str(cursor_value["last_ingested_date"])
+            ) + timedelta(days=1)
+            if next_unseen_date < rolling_date_from:
+                date_from = max(job.backfill_start_date, next_unseen_date)
+                date_to = min(
+                    date_from + timedelta(days=job.window_days - 1),
+                    today,
+                )
+                return date_from, date_to
+        return rolling_date_from, today
 
     if last_success_at is not None:
         last_ingested = date.fromisoformat(cursor_value["last_ingested_date"]) if cursor_value else job.backfill_start_date

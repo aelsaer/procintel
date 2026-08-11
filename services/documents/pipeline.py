@@ -52,7 +52,7 @@ from .entities import (
 from .mime import sniff_mime_type
 from .intelligence import PARSER_VERSION, extract_compliance_fields
 from .ocr import run_ocr
-from .pdf_text import extract_text_layer, open_pdf, rasterize_page
+from .pdf_text import PdfPageLimitExceededError, extract_text_layer, open_pdf, rasterize_page
 from .storage import DocumentBlobStore, LocalFilesystemDocumentBlobStore
 
 
@@ -178,7 +178,24 @@ async def process_document(
     )
 
     pdf_document = open_pdf(downloaded.payload)
-    text_layer_pages = extract_text_layer(pdf_document, config=config)
+    try:
+        text_layer_pages = extract_text_layer(pdf_document, config=config)
+    except PdfPageLimitExceededError as exc:
+        # The page cap protects extraction/OCR resources; it must not hide an
+        # otherwise valid official document from the product and evidence UI.
+        pdf_document.close()
+        await update_document_extraction_status(
+            conn,
+            document_id=upsert_result.document_id,
+            text_extraction_status="SKIPPED_PAGE_LIMIT",
+            page_count=exc.page_count,
+            language=None,
+        )
+        return ProcessDocumentResult(
+            document_id=upsert_result.document_id,
+            is_new=True,
+            page_count=exc.page_count,
+        )
 
     page_writes: list[PageWrite] = []
     any_ocr = False

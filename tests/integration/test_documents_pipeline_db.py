@@ -116,3 +116,38 @@ async def test_process_document_writes_documents_pages_and_provenance_and_is_ide
             assert len(provenance_rows_after) == first_provenance_count
     finally:
         await engine.dispose()
+
+
+@respx.mock
+async def test_process_document_retains_official_pdf_when_extraction_page_limit_is_exceeded(tmp_path):
+    page_limit_fixture = FIXTURE_BYTES + b"\n% page-limit retention test\n"
+    respx.get(URL).mock(return_value=httpx.Response(200, content=page_limit_fixture))
+    blob_store = LocalFilesystemDocumentBlobStore(tmp_path / "documents")
+    engine = create_async_engine(_asyncpg_url())
+
+    try:
+        async with engine.connect() as conn:
+            result = await process_document(
+                conn,
+                url=URL,
+                document_type="PAGE_LIMIT_TEST",
+                config=DocumentPipelineConfig(max_pages=0),
+                blob_store=blob_store,
+            )
+            await conn.commit()
+
+            document_row = (
+                await conn.execute(select(documents).where(documents.c.id == result.document_id))
+            ).one()
+            assert result.is_new is True
+            assert result.page_count == 1
+            assert document_row.text_extraction_status == "SKIPPED_PAGE_LIMIT"
+            assert document_row.page_count == 1
+            assert document_row.source_record_id is not None
+            assert not (
+                await conn.execute(
+                    select(document_pages).where(document_pages.c.document_id == result.document_id)
+                )
+            ).all()
+    finally:
+        await engine.dispose()
