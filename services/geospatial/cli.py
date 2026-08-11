@@ -18,6 +18,11 @@ from pathlib import Path
 import httpx
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from packages.source_clients.raw_store import LocalFilesystemRawStore
+from services.ingestion.connectors.inspire.config import InspireReferenceConfig
+from services.ingestion.connectors.inspire.nuts import load_greece_nuts
+from services.ingestion.connectors.inspire.postal import load_greece_postal_nuts
+
 from .config import GeocoderConfig
 from .geonames import (
     DEFAULT_ADMIN1_URL,
@@ -111,6 +116,39 @@ async def _load_gazetteer(
         await engine.dispose()
 
 
+async def _load_reference_layers(database_url: str, *, raw_root: str) -> None:
+    config = InspireReferenceConfig.from_env()
+    raw_store = LocalFilesystemRawStore(raw_root)
+    engine = create_async_engine(_asyncpg_url(database_url))
+    try:
+        async with httpx.AsyncClient(
+            timeout=config.request_timeout_seconds,
+            follow_redirects=True,
+            headers={"User-Agent": "Procintel/0.1 Greek reference loader"},
+        ) as client:
+            async with engine.connect() as conn:
+                nuts = await load_greece_nuts(
+                    conn,
+                    http_client=client,
+                    raw_store=raw_store,
+                    url=config.greece_nuts_url,
+                )
+                postal = await load_greece_postal_nuts(
+                    conn,
+                    http_client=client,
+                    raw_store=raw_store,
+                    url=config.greece_postal_nuts_url,
+                )
+        print(
+            "loaded Greek reference layers: "
+            f"nuts_areas={nuts.rows_written} "
+            f"postal_mappings={postal.mappings_written} "
+            f"postal_codes={postal.postal_codes}"
+        )
+    finally:
+        await engine.dispose()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL"))
@@ -132,6 +170,15 @@ def main() -> None:
     gazetteer.add_argument("--admin1-url", default=DEFAULT_ADMIN1_URL)
     gazetteer.add_argument("--admin2-url", default=DEFAULT_ADMIN2_URL)
     gazetteer.add_argument("--raw-root", default=os.environ.get("RAW_STORE_ROOT", "./raw"))
+
+    references = subparsers.add_parser(
+        "load-reference-layers",
+        help="load the official Greek NUTS hierarchy and postal-to-NUTS mapping",
+    )
+    references.add_argument(
+        "--raw-root",
+        default=os.environ.get("RAW_STORE_ROOT", "./raw"),
+    )
 
     args = parser.parse_args()
     if not args.database_url:
@@ -158,7 +205,7 @@ def main() -> None:
                 requeue_all=args.requeue_all,
             )
         )
-    else:
+    elif args.command == "load-place-gazetteer":
         asyncio.run(
             _load_gazetteer(
                 args.database_url,
@@ -166,6 +213,13 @@ def main() -> None:
                 url=args.url,
                 admin1_url=args.admin1_url,
                 admin2_url=args.admin2_url,
+                raw_root=args.raw_root,
+            )
+        )
+    else:
+        asyncio.run(
+            _load_reference_layers(
+                args.database_url,
                 raw_root=args.raw_root,
             )
         )

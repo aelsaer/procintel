@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import socket
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import httpx
 import sqlalchemy as sa
@@ -28,8 +29,19 @@ from packages.domain.tables import (
 )
 
 from .config import GeocoderConfig
-from .extract import AdminUnit, LocationCandidate, extract_location_candidates, normalize_place
-from .geonames import GazetteerPlace, load_gazetteer_places, match_gazetteer_place
+from .extract import (
+    AdminUnit,
+    LocationCandidate,
+    extract_location_candidates,
+    has_explicit_foreign_performance,
+    normalize_place,
+)
+from .geonames import (
+    GazetteerPlace,
+    build_gazetteer_alias_index,
+    load_gazetteer_places,
+    match_indexed_gazetteer_place,
+)
 from .geocoder import GeocodeResult, NominatimGeocoder, match_local_boundary
 
 ELIGIBLE_ACT_TYPES = ("REQUEST", "APPROVED_REQUEST", "NOTICE", "AWARD", "CONTRACT", "TED_NOTICE")
@@ -94,14 +106,38 @@ async def load_admin_units(conn: AsyncConnection) -> list[AdminUnit]:
     ]
 
 
-def _read_raw_payload(payload_uri: str) -> tuple[dict[str, Any], str | None]:
+def _raw_payload_paths(payload_uri: str) -> list[Path]:
     if payload_uri.startswith("file://"):
         payload_uri = payload_uri[7:]
     if "://" in payload_uri:
-        return {}, f"unsupported raw object URI: {payload_uri.split('://', 1)[0]}"
+        return []
     path = Path(payload_uri)
-    if not path.exists():
-        return {}, f"raw payload not found: {payload_uri}"
+    candidates = [path]
+    raw_root_value = os.environ.get("RAW_STORE_ROOT", "").strip()
+    if raw_root_value:
+        raw_root = Path(raw_root_value)
+        parts = path.parts
+        if not path.is_absolute():
+            candidates.append(raw_root / path)
+        raw_component_indexes = [
+            index
+            for index, part in enumerate(parts)
+            if part == raw_root.name
+        ]
+        if raw_component_indexes:
+            suffix = parts[raw_component_indexes[-1] + 1 :]
+            candidates.append(raw_root.joinpath(*suffix))
+    return list(dict.fromkeys(candidates))
+
+
+def _read_raw_payload(payload_uri: str) -> tuple[dict[str, Any], str | None]:
+    paths = _raw_payload_paths(payload_uri)
+    if not paths:
+        return {}, f"unsupported raw object URI: {payload_uri.split('://', 1)[0]}"
+    path = next((candidate for candidate in paths if candidate.exists()), None)
+    if path is None:
+        attempted = ", ".join(str(candidate) for candidate in paths)
+        return {}, f"raw payload not found: {payload_uri} (attempted: {attempted})"
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -213,9 +249,18 @@ async def _resolve_candidate(
     *,
     admin_units: Sequence[AdminUnit],
     gazetteer_places: Sequence[GazetteerPlace],
+    gazetteer_alias_index: Mapping[str, Sequence[GazetteerPlace]] | None,
     remote: NominatimGeocoder | None,
 ) -> GeocodeResult | None:
-    gazetteer = match_gazetteer_place(candidate, gazetteer_places)
+    if candidate.extraction_method == "NUTS_CODE" or candidate.granularity_hint == "POSTAL_CODE":
+        local = match_local_boundary(candidate, admin_units)
+        if local:
+            return local
+    gazetteer = match_indexed_gazetteer_place(
+        candidate,
+        gazetteer_places,
+        gazetteer_alias_index or {},
+    )
     if gazetteer:
         return gazetteer
     local = match_local_boundary(candidate, admin_units)
@@ -388,6 +433,7 @@ async def process_job(
     *,
     admin_units: Sequence[AdminUnit],
     gazetteer_places: Sequence[GazetteerPlace],
+    gazetteer_alias_index: Mapping[str, Sequence[GazetteerPlace]] | None = None,
     remote: NominatimGeocoder | None,
 ) -> JobResult:
     row = (
@@ -395,18 +441,25 @@ async def process_job(
             sa.select(
                 procurement_acts.c.source_record_id,
                 procurement_acts.c.title,
+                procurement_acts.c.is_current,
                 source_records.c.payload_uri,
             )
             .select_from(procurement_acts.join(source_records, source_records.c.id == job.source_record_id))
             .where(procurement_acts.c.id == job.act_id)
         )
     ).first()
-    if row is None or row.source_record_id != job.source_record_id:
+    if (
+        row is None
+        or row.source_record_id != job.source_record_id
+        or not row.is_current
+    ):
         return JobResult(job.id, "SUPERSEDED", 0, 0, 0)
 
     raw, raw_warning = _read_raw_payload(row.payload_uri)
     if row.title and "title" not in raw:
         raw["title"] = row.title
+    if has_explicit_foreign_performance(raw):
+        return JobResult(job.id, "OUTSIDE_GREECE", 0, 0, 0)
     texts = await _document_texts(conn, job.act_id)
     candidates = extract_location_candidates(raw, document_texts=texts, admin_units=admin_units)
     if not candidates:
@@ -419,6 +472,7 @@ async def process_job(
             candidate,
             admin_units=admin_units,
             gazetteer_places=gazetteer_places,
+            gazetteer_alias_index=gazetteer_alias_index,
             remote=remote,
         )
         for candidate in candidates
@@ -538,6 +592,7 @@ async def run_pending_jobs(
         return []
     units = await load_admin_units(conn)
     gazetteer_places = await load_gazetteer_places(conn)
+    gazetteer_alias_index = build_gazetteer_alias_index(gazetteer_places)
     remote = NominatimGeocoder(geocoder_config, client=http_client) if geocoder_config else None
     outcomes: list[JobResult] = []
     try:
@@ -548,6 +603,7 @@ async def run_pending_jobs(
                     job,
                     admin_units=units,
                     gazetteer_places=gazetteer_places,
+                    gazetteer_alias_index=gazetteer_alias_index,
                     remote=remote,
                 )
             except Exception as exc:  # noqa: BLE001 - job isolation/retry boundary
@@ -592,6 +648,36 @@ async def enqueue_existing_acts(
                       OR (:requeue_partial AND geospatial_enrichment_jobs.status IN ('PARTIAL', 'NO_LOCATION'))
                     THEN now()
                     ELSE geospatial_enrichment_jobs.available_at
+                END,
+                attempt_count = CASE
+                    WHEN :requeue_all
+                      OR (:requeue_partial AND geospatial_enrichment_jobs.status IN ('PARTIAL', 'NO_LOCATION'))
+                    THEN 0
+                    ELSE geospatial_enrichment_jobs.attempt_count
+                END,
+                locked_at = CASE
+                    WHEN :requeue_all
+                      OR (:requeue_partial AND geospatial_enrichment_jobs.status IN ('PARTIAL', 'NO_LOCATION'))
+                    THEN NULL
+                    ELSE geospatial_enrichment_jobs.locked_at
+                END,
+                locked_by = CASE
+                    WHEN :requeue_all
+                      OR (:requeue_partial AND geospatial_enrichment_jobs.status IN ('PARTIAL', 'NO_LOCATION'))
+                    THEN NULL
+                    ELSE geospatial_enrichment_jobs.locked_by
+                END,
+                last_error = CASE
+                    WHEN :requeue_all
+                      OR (:requeue_partial AND geospatial_enrichment_jobs.status IN ('PARTIAL', 'NO_LOCATION'))
+                    THEN NULL
+                    ELSE geospatial_enrichment_jobs.last_error
+                END,
+                finished_at = CASE
+                    WHEN :requeue_all
+                      OR (:requeue_partial AND geospatial_enrichment_jobs.status IN ('PARTIAL', 'NO_LOCATION'))
+                    THEN NULL
+                    ELSE geospatial_enrichment_jobs.finished_at
                 END
             """
         ),

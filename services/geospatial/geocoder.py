@@ -42,6 +42,9 @@ def match_local_boundary(candidate: LocationCandidate, units: Sequence[AdminUnit
     query = normalize_place(candidate.place_text)
     ranked: list[tuple[int, AdminUnit]] = []
     for unit in units:
+        exact_nuts = bool(
+            unit.nuts_code and unit.nuts_code in candidate.nuts_codes
+        )
         if unit.nuts_code and candidate.nuts_codes and not any(
             unit.nuts_code.startswith(code) or code.startswith(unit.nuts_code) for code in candidate.nuts_codes
         ):
@@ -51,6 +54,8 @@ def match_local_boundary(candidate: LocationCandidate, units: Sequence[AdminUnit
             rank = 100
         elif len(query) >= 5 and any(query in alias or alias in query for alias in aliases):
             rank = 80
+        elif exact_nuts:
+            rank = 90
         else:
             continue
         if candidate.granularity_hint == unit.boundary_type:

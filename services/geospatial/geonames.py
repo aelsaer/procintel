@@ -13,7 +13,7 @@ import zipfile
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from math import log10
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -240,3 +240,23 @@ def match_gazetteer_place(candidate: LocationCandidate, places: Sequence[Gazette
         confidence=min(candidate.confidence, 0.90),
         raw_response={"geoname_id": place.geoname_id, "feature_code": place.feature_code, "license": "CC-BY-4.0"},
     )
+
+
+def build_gazetteer_alias_index(
+    places: Sequence[GazetteerPlace],
+) -> dict[str, tuple[GazetteerPlace, ...]]:
+    mutable: dict[str, list[GazetteerPlace]] = {}
+    for place in places:
+        for alias in place.normalized_names:
+            mutable.setdefault(alias, []).append(place)
+    return {alias: tuple(matches) for alias, matches in mutable.items()}
+
+
+def match_indexed_gazetteer_place(
+    candidate: LocationCandidate,
+    places: Sequence[GazetteerPlace],
+    alias_index: Mapping[str, Sequence[GazetteerPlace]],
+) -> GeocodeResult | None:
+    query = normalize_place(candidate.place_text)
+    exact = alias_index.get(query)
+    return match_gazetteer_place(candidate, exact if exact else places)

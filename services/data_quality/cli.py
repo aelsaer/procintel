@@ -31,6 +31,7 @@ async def _run(database_url: str, date_from: date | None, date_to: date | None) 
                 f"data quality: opened={result.issues_opened} "
                 f"resolved={result.issues_resolved} "
                 f"invalid_dates_repaired={result.invalid_dates_repaired} "
+                f"placeholders_quarantined={result.placeholders_quarantined} "
                 f"by_code={result.by_code}"
             )
     finally:

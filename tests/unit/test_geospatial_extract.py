@@ -1,4 +1,8 @@
-from services.geospatial.extract import AdminUnit, extract_location_candidates
+from services.geospatial.extract import (
+    AdminUnit,
+    extract_location_candidates,
+    has_explicit_foreign_performance,
+)
 
 
 def test_structured_execution_city_wins_and_inherits_matching_postcode():
@@ -48,7 +52,11 @@ def test_explicit_admin_phrases_and_gazetteer_are_extracted_from_documents():
 
     assert any(candidate.granularity_hint == "MUNICIPALITY" for candidate in candidates)
     assert any("ΑΘΗΝΑΙΩΝ" in candidate.place_text.upper() for candidate in candidates)
-    assert any(candidate.extraction_method == "GAZETTEER_TEXT_MATCH" for candidate in candidates)
+    assert any(
+        "gazetteer" in source_path
+        for candidate in candidates
+        for source_path in candidate.source_paths
+    )
 
 
 def test_nationwide_place_is_not_misrepresented_as_a_point():
@@ -60,3 +68,76 @@ def test_nationwide_place_is_not_misrepresented_as_a_point():
     )
 
     assert candidates == []
+
+
+def test_nuts_code_alone_resolves_to_loaded_regional_unit():
+    units = [
+        AdminUnit(
+            "REGIONAL_UNIT",
+            "EL303",
+            "Κεντρικός Τομέας Αθηνών",
+            "EL303",
+            37.98,
+            23.73,
+        )
+    ]
+
+    candidates = extract_location_candidates(
+        {"nutsCode": {"key": "EL303"}},
+        admin_units=units,
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].place_text == "Κεντρικός Τομέας Αθηνών"
+    assert candidates[0].nuts_codes == ("EL303",)
+    assert candidates[0].granularity_hint == "REGIONAL_UNIT"
+    assert candidates[0].extraction_method == "NUTS_CODE"
+
+
+def test_legacy_gr_nuts_prefix_is_normalized_to_current_el_code():
+    units = [
+        AdminUnit("REGION", "EL30", "Αττική", "EL30", 37.9, 23.7),
+    ]
+
+    candidates = extract_location_candidates(
+        {"nutsCode": {"key": "GR30"}},
+        admin_units=units,
+    )
+
+    assert candidates[0].nuts_codes == ("EL30",)
+
+
+def test_object_details_and_postal_locality_are_supported():
+    candidates = extract_location_candidates(
+        {
+            "objectDetails": [
+                {
+                    "shortDescription": "Στοιχεία υπηρεσίας\nΤαχ. Κώδ.: 84100 Σύρος",
+                }
+            ]
+        }
+    )
+
+    locality = next(
+        candidate
+        for candidate in candidates
+        if candidate.extraction_method == "POSTAL_LOCALITY_PATTERN"
+    )
+    assert locality.place_text == "Σύρος"
+    assert locality.postal_code == "84100"
+    assert locality.source_paths == (
+        "$.objectDetails[0].shortDescription:postal-locality",
+    )
+
+
+def test_foreign_ted_place_is_classified_without_greek_geocoding():
+    raw = {"place-of-performance": ["HR031", "HRV"]}
+
+    assert has_explicit_foreign_performance(raw) is True
+    assert extract_location_candidates(raw) == []
+
+
+def test_mixed_greek_and_foreign_ted_place_is_not_classified_as_foreign():
+    raw = {"place-of-performance": ["EL303", "HR031"]}
+
+    assert has_explicit_foreign_performance(raw) is False

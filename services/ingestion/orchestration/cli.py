@@ -351,6 +351,7 @@ async def _run_once(
                     f"opened={quality_result.issues_opened} "
                     f"resolved={quality_result.issues_resolved} "
                     f"invalid_dates_repaired={quality_result.invalid_dates_repaired} "
+                    f"placeholders_quarantined={quality_result.placeholders_quarantined} "
                     f"by_code={quality_result.by_code}"
                 )
             except Exception as exc:  # noqa: BLE001 - marts can still refresh from existing data

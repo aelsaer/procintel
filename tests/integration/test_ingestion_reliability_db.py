@@ -15,6 +15,7 @@ from packages.domain.tables import (
     data_quality_issues,
     enrichment_jobs,
     entities,
+    field_provenance,
     procurement_acts,
     procurement_processes,
     source_records,
@@ -31,6 +32,7 @@ from services.ingestion.enrichment_worker import _block_static_upstream_jobs
 from services.ingestion.connectors.inspire.capabilities import (
     _capability_source_record_insert,
 )
+from services.ingestion.connectors.khmdhs.db_writer import ingest_khmdhs_record
 from services.data_quality.service import run_data_quality_checks
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -587,6 +589,8 @@ async def test_empty_adamchain_evidence_is_quarantined_from_analytics() -> None:
     engine = create_async_engine(_async_url(DATABASE_URL))
     source_id = uuid.uuid4()
     act_id = uuid.uuid4()
+    adam = f"26PROC{uuid.uuid4().int % 100_000_000:08d}"
+    real_source_id = None
     try:
         async with engine.begin() as conn:
             await conn.execute(
@@ -608,6 +612,16 @@ async def test_empty_adamchain_evidence_is_quarantined_from_analytics() -> None:
                     source_record_id=source_id,
                 )
             )
+            await conn.execute(
+                act_identifiers.insert().values(
+                    id=uuid.uuid4(),
+                    act_id=act_id,
+                    scheme="ADAM",
+                    value_raw=adam,
+                    value_normalized=adam,
+                    source_record_id=source_id,
+                )
+            )
 
         async with engine.connect() as conn:
             result = await run_data_quality_checks(
@@ -616,9 +630,9 @@ async def test_empty_adamchain_evidence_is_quarantined_from_analytics() -> None:
                 date_to=datetime.now(timezone.utc).date(),
                 repair_invalid_dates=False,
             )
-            issue = (
+            issue_count = (
                 await conn.execute(
-                    sa.select(data_quality_issues.c.severity).where(
+                    sa.select(sa.func.count()).select_from(data_quality_issues).where(
                         data_quality_issues.c.object_id == act_id,
                         data_quality_issues.c.issue_code
                         == "INCOMPLETE_ADAMCHAIN_PLACEHOLDER",
@@ -626,6 +640,14 @@ async def test_empty_adamchain_evidence_is_quarantined_from_analytics() -> None:
                     )
                 )
             ).scalar_one()
+            quarantined = (
+                await conn.execute(
+                    sa.select(
+                        procurement_acts.c.is_current,
+                        procurement_acts.c.source_details,
+                    ).where(procurement_acts.c.id == act_id)
+                )
+            ).one()
             eligible = (
                 await conn.execute(
                     sa.text(
@@ -635,9 +657,40 @@ async def test_empty_adamchain_evidence_is_quarantined_from_analytics() -> None:
                 )
             ).scalar_one()
 
-            assert result.by_code["INCOMPLETE_ADAMCHAIN_PLACEHOLDER"] == 1
-            assert issue == "ERROR"
+            assert result.placeholders_quarantined == 1
+            assert result.by_code["INCOMPLETE_ADAMCHAIN_PLACEHOLDER"] == 0
+            assert issue_count == 0
+            assert quarantined.is_current is False
+            assert quarantined.source_details["placeholder_state"] == "EVIDENCE_ONLY"
             assert eligible is False
+
+            ingested = await ingest_khmdhs_record(
+                conn,
+                resource="notice",
+                raw_record={
+                    "referenceNumber": adam,
+                    "title": "Πραγματική διακήρυξη",
+                    "submissionDate": "2026-08-11",
+                },
+                payload_uri=f"/tmp/real-{act_id}.json",
+                content_sha256=uuid.uuid4().hex,
+                http_status=200,
+                fetched_at=datetime.now(timezone.utc),
+            )
+            real_source_id = ingested.source_record_id
+            await conn.commit()
+            reactivated = (
+                await conn.execute(
+                    sa.select(
+                        procurement_acts.c.id,
+                        procurement_acts.c.is_current,
+                        procurement_acts.c.title,
+                    ).where(procurement_acts.c.id == act_id)
+                )
+            ).one()
+            assert reactivated.id == act_id
+            assert reactivated.is_current is True
+            assert reactivated.title == "Πραγματική διακήρυξη"
     finally:
         async with engine.begin() as conn:
             await conn.execute(
@@ -645,8 +698,26 @@ async def test_empty_adamchain_evidence_is_quarantined_from_analytics() -> None:
                     data_quality_issues.c.object_id == act_id
                 )
             )
+            await conn.execute(
+                act_identifiers.delete().where(
+                    act_identifiers.c.act_id == act_id
+                )
+            )
+            await conn.execute(
+                field_provenance.delete().where(
+                    field_provenance.c.object_id == act_id
+                )
+            )
             await conn.execute(procurement_acts.delete().where(procurement_acts.c.id == act_id))
-            await conn.execute(source_records.delete().where(source_records.c.id == source_id))
+            await conn.execute(
+                source_records.delete().where(
+                    source_records.c.id.in_(
+                        [source_id, real_source_id]
+                        if real_source_id is not None
+                        else [source_id]
+                    )
+                )
+            )
         await engine.dispose()
 
 

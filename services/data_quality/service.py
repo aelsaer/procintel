@@ -12,9 +12,18 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 @dataclass(frozen=True)
 class DataQualityResult:
     invalid_dates_repaired: int
+    placeholders_quarantined: int
     issues_opened: int
     issues_resolved: int
     by_code: dict[str, int]
+
+
+_INCOMPLETE_ADAMCHAIN_PREDICATE = (
+    "sr.source_system = 'KHMDHS' AND sr.resource_type = 'adamChain' "
+    "AND a.title IS NULL AND a.amount_net IS NULL AND a.amount_gross IS NULL "
+    "AND a.publication_date IS NULL AND a.submission_date IS NULL "
+    "AND a.decision_date IS NULL AND a.start_date IS NULL AND a.end_date IS NULL"
+)
 
 
 def _scope_clause() -> str:
@@ -150,6 +159,53 @@ async def _sync_invalid_afm_issues(conn: AsyncConnection) -> tuple[int, int]:
     return int(opened.rowcount or 0), int(resolved.rowcount or 0)
 
 
+async def _quarantine_incomplete_adamchain_placeholders(
+    conn: AsyncConnection,
+    *,
+    params: dict,
+) -> int:
+    quarantined = await conn.execute(
+        sa.text(
+            f"""
+            UPDATE procurement_acts a
+            SET is_current = FALSE,
+                source_details = COALESCE(a.source_details, '{{}}'::jsonb)
+                    || jsonb_build_object(
+                        'placeholder_state', 'EVIDENCE_ONLY',
+                        'placeholder_reason',
+                        'identifier-only adamChain lifecycle evidence'
+                    ),
+                updated_at = now()
+            FROM source_records sr
+            WHERE sr.id = a.source_record_id
+              AND a.is_current = TRUE
+              AND ({_INCOMPLETE_ADAMCHAIN_PREDICATE})
+              {_scope_clause()}
+            """
+        ),
+        params,
+    )
+    await conn.execute(
+        sa.text(
+            """
+            UPDATE geospatial_enrichment_jobs job
+            SET status = 'SUPERSEDED',
+                locked_at = NULL,
+                locked_by = NULL,
+                finished_at = now(),
+                result = COALESCE(job.result, '{}'::jsonb)
+                    || jsonb_build_object('reason', 'evidence-only adamChain placeholder')
+            FROM procurement_acts a
+            WHERE a.id = job.act_id
+              AND a.is_current = FALSE
+              AND a.source_details->>'placeholder_state' = 'EVIDENCE_ONLY'
+              AND job.status <> 'SUPERSEDED'
+            """
+        )
+    )
+    return int(quarantined.rowcount or 0)
+
+
 async def run_data_quality_checks(
     conn: AsyncConnection,
     *,
@@ -158,6 +214,10 @@ async def run_data_quality_checks(
     repair_invalid_dates: bool = True,
 ) -> DataQualityResult:
     params = {"date_from": date_from, "date_to": date_to}
+    placeholders_quarantined = await _quarantine_incomplete_adamchain_placeholders(
+        conn,
+        params=params,
+    )
     current_year = date.today().year
     date_fields = (
         "decision_date",
@@ -247,10 +307,7 @@ async def run_data_quality_checks(
         (
             "INCOMPLETE_ADAMCHAIN_PLACEHOLDER",
             "ERROR",
-            "sr.source_system = 'KHMDHS' AND sr.resource_type = 'adamChain' "
-            "AND a.title IS NULL AND a.amount_net IS NULL AND a.amount_gross IS NULL "
-            "AND a.publication_date IS NULL AND a.submission_date IS NULL "
-            "AND a.decision_date IS NULL AND a.start_date IS NULL AND a.end_date IS NULL",
+            _INCOMPLETE_ADAMCHAIN_PREDICATE,
             "jsonb_build_object('reason', 'identifier-only lifecycle evidence', "
             "'source_system', sr.source_system, 'resource_type', sr.resource_type)",
         ),
@@ -366,6 +423,7 @@ async def run_data_quality_checks(
     await conn.commit()
     return DataQualityResult(
         invalid_dates_repaired=invalid_dates_repaired,
+        placeholders_quarantined=placeholders_quarantined,
         issues_opened=sum(by_code.values()),
         issues_resolved=issues_resolved,
         by_code=by_code,

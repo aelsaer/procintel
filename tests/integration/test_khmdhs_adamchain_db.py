@@ -21,7 +21,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from packages.domain.tables import (
+    act_identifiers,
     act_links,
+    geospatial_enrichment_jobs,
     process_members,
     process_merge_log,
     procurement_acts,
@@ -30,6 +32,7 @@ from packages.domain.tables import (
 )
 from packages.source_clients.raw_store import LocalFilesystemRawStore
 from services.ingestion.connectors.khmdhs.adamchain import (
+    _ensure_act_for_adam,
     _ensure_adamchain_source_record,
     _ensure_link,
     get_act_id_by_adam,
@@ -59,6 +62,70 @@ def _minimal_record(adam: str) -> dict:
         "submissionDate": "2025-01-10",
         "organizationVatNumber": "094259216",
     }
+
+
+async def test_adamchain_placeholder_is_evidence_only_and_not_geocoded():
+    engine = create_async_engine(_asyncpg_url())
+    source_id = uuid.uuid4()
+    adam = f"26PROC{uuid.uuid4().int % 100_000_000:08d}"
+    act_id = None
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                source_records.insert().values(
+                    id=source_id,
+                    source_system="KHMDHS",
+                    resource_type="adamChain",
+                    source_native_id=adam,
+                    content_sha256=uuid.uuid4().hex,
+                    payload_uri=f"/tmp/{adam}.json",
+                    fetched_at=datetime.now(timezone.utc),
+                    parse_status="PARSED",
+                )
+            )
+            act_id = await _ensure_act_for_adam(
+                conn,
+                adam_normalized=adam,
+                fallback_source_record_id=source_id,
+                act_type="NOTICE",
+            )
+
+        async with engine.connect() as conn:
+            act = (
+                await conn.execute(
+                    select(
+                        procurement_acts.c.is_current,
+                        procurement_acts.c.source_details,
+                    ).where(procurement_acts.c.id == act_id)
+                )
+            ).one()
+            queued = (
+                await conn.execute(
+                    select(sa.func.count())
+                    .select_from(geospatial_enrichment_jobs)
+                    .where(geospatial_enrichment_jobs.c.act_id == act_id)
+                )
+            ).scalar_one()
+            assert act.is_current is False
+            assert act.source_details["placeholder_state"] == "EVIDENCE_ONLY"
+            assert queued == 0
+    finally:
+        if act_id is not None:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    act_identifiers.delete().where(
+                        act_identifiers.c.act_id == act_id
+                    )
+                )
+                await conn.execute(
+                    procurement_acts.delete().where(
+                        procurement_acts.c.id == act_id
+                    )
+                )
+                await conn.execute(
+                    source_records.delete().where(source_records.c.id == source_id)
+                )
+        await engine.dispose()
 
 
 async def test_concurrent_evidence_and_link_writes_are_idempotent():

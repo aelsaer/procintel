@@ -18,7 +18,11 @@ from packages.domain.tables import (
     source_records,
 )
 from services.geospatial.geonames import GazetteerPlace
-from services.geospatial.service import ClaimedJob, process_job
+from services.geospatial.service import (
+    ClaimedJob,
+    enqueue_existing_acts,
+    process_job,
+)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="DATABASE_URL not set")
@@ -110,6 +114,34 @@ async def test_geospatial_enrichment_and_locations_api(tmp_path, monkeypatch):
             )
             await conn.commit()
             assert result.status == "SUCCEEDED"
+
+            await conn.execute(
+                geospatial_enrichment_jobs.update()
+                .where(geospatial_enrichment_jobs.c.id == job_row.id)
+                .values(
+                    status="PARTIAL",
+                    attempt_count=5,
+                    locked_at=datetime.now(timezone.utc),
+                    locked_by="stale-worker",
+                    last_error={"type": "PreviousParserFailure"},
+                    finished_at=datetime.now(timezone.utc),
+                )
+            )
+            await conn.commit()
+            await enqueue_existing_acts(conn, requeue_partial=True)
+            replayed_job = (
+                await conn.execute(
+                    sa.select(geospatial_enrichment_jobs).where(
+                        geospatial_enrichment_jobs.c.id == job_row.id
+                    )
+                )
+            ).one()
+            assert replayed_job.status == "QUEUED"
+            assert replayed_job.attempt_count == 0
+            assert replayed_job.locked_at is None
+            assert replayed_job.locked_by is None
+            assert replayed_job.last_error is None
+            assert replayed_job.finished_at is None
 
             location = (
                 await conn.execute(

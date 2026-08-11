@@ -301,7 +301,8 @@ async def upsert_act(
         procedure_type=normalized.procedure_type,
         source_details=normalized.source_details,
         source_record_id=source_record_id,
-                updated_at=datetime.now(timezone.utc),
+        is_current=True,
+        updated_at=datetime.now(timezone.utc),
     )
 
     changed_fields: dict[str, tuple[Any, Any]] = {}

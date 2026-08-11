@@ -182,6 +182,11 @@ async def _ensure_act_for_adam(
             id=act_id,
             act_type=act_type or infer_act_type_from_adam(adam_normalized),
             source_record_id=fallback_source_record_id,
+            is_current=False,
+            source_details={
+                "placeholder_state": "EVIDENCE_ONLY",
+                "placeholder_reason": "identifier-only adamChain lifecycle evidence",
+            },
         )
     )
     await conn.execute(

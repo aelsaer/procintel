@@ -13,10 +13,11 @@ import unicodedata
 from dataclasses import dataclass, replace
 from typing import Any, Iterable, Iterator, Sequence
 
-_POSTAL_RE = re.compile(r"(?<!\d)(\d{5})(?!\d)")
+_POSTAL_RE = re.compile(r"(?<!\d)([1-8]\d{4})(?!\d)")
 _SPACE_RE = re.compile(r"\s+")
 _NON_WORD_RE = re.compile(r"[^0-9A-ZΑ-Ω]+")
-_NUTS_RE = re.compile(r"^(?:EL|GR)[0-9A-Z]{0,4}$", re.IGNORECASE)
+_GREEK_NUTS_RE = re.compile(r"^(?:EL|GR)([0-9][0-9A-Z]{0,2})$", re.IGNORECASE)
+_FOREIGN_NUTS_RE = re.compile(r"^[A-Z]{2}[0-9][0-9A-Z]{0,2}$", re.IGNORECASE)
 _NATIONWIDE = {
     "ΕΛΛΑΔΑ",
     "ΕΛΛΗΝΙΚΗ ΕΠΙΚΡΑΤΕΙΑ",
@@ -47,6 +48,10 @@ _STOP_PHRASES = re.compile(
     r"\s+(?:ΓΙΑ|ΣΤΟ|ΣΤΗ|ΣΤΟΝ|ΣΤΗΝ|ΜΕ|ΚΑΙ|ΠΟΥ|ΠΡΟΣ|ΑΠΟ|ΣΤΟ\s+ΠΛΑΙΣΙΟ|ΤΗΣ\s+ΠΡΟΜΗΘΕΙΑΣ)\b.*$",
     re.IGNORECASE,
 )
+_POSTAL_LOCALITY_STOP = re.compile(
+    r"\s{2,}|[;,|]|\b(?:ΤΗΛ(?:ΕΦΩΝΟ)?|FAX|EMAIL|E-MAIL|Δ/?ΝΣΗ|ΟΔΟΣ|ΑΡ(?:ΙΘΜΟΣ)?\.?)\b.*$",
+    re.IGNORECASE,
+)
 
 
 def normalize_place(value: str) -> str:
@@ -64,7 +69,11 @@ def _clean_place(value: Any) -> str | None:
     if isinstance(value, list):
         return None
     cleaned = _SPACE_RE.sub(" ", str(value).strip(" \t\r\n,;:."))
-    if len(cleaned) < 2 or normalize_place(cleaned) in _NATIONWIDE or _NUTS_RE.match(cleaned):
+    if (
+        len(cleaned) < 2
+        or normalize_place(cleaned) in _NATIONWIDE
+        or _canonical_greek_nuts(cleaned)
+    ):
         return None
     return cleaned
 
@@ -77,6 +86,27 @@ def _scalar(value: Any) -> str | None:
     return str(value).strip() or None
 
 
+def _canonical_greek_nuts(value: Any) -> str | None:
+    scalar = _scalar(value)
+    if not scalar:
+        return None
+    match = _GREEK_NUTS_RE.fullmatch(scalar.upper())
+    return f"EL{match.group(1).upper()}" if match else None
+
+
+def _flatten_values(value: Any) -> Iterator[str]:
+    if isinstance(value, list):
+        for item in value:
+            yield from _flatten_values(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _flatten_values(item)
+    else:
+        scalar = _scalar(value)
+        if scalar:
+            yield scalar
+
+
 def _flatten_codes(value: Any) -> Iterator[str]:
     if isinstance(value, list):
         for item in value:
@@ -84,15 +114,25 @@ def _flatten_codes(value: Any) -> Iterator[str]:
     elif isinstance(value, dict):
         for key, item in value.items():
             if key.lower() in {"key", "code"}:
-                scalar = _scalar(item)
-                if scalar and _NUTS_RE.match(scalar):
-                    yield scalar.upper()
+                code = _canonical_greek_nuts(item)
+                if code:
+                    yield code
             else:
                 yield from _flatten_codes(item)
     else:
-        scalar = _scalar(value)
-        if scalar and _NUTS_RE.match(scalar):
-            yield scalar.upper()
+        code = _canonical_greek_nuts(value)
+        if code:
+            yield code
+
+
+def has_explicit_foreign_performance(raw: dict[str, Any]) -> bool:
+    values = tuple(
+        _flatten_values(
+            raw.get("place-of-performance") or raw.get("placeOfPerformance")
+        )
+    )
+    codes = [value.upper() for value in values if _FOREIGN_NUTS_RE.fullmatch(value.upper())]
+    return bool(codes) and not any(_canonical_greek_nuts(code) for code in codes)
 
 
 @dataclass(frozen=True)
@@ -140,17 +180,25 @@ def _candidate(
     )
 
 
+def _detail_groups(raw: dict[str, Any]) -> Iterator[tuple[str, list[dict[str, Any]]]]:
+    for key in ("objectDetailsList", "objectDetails", "lots"):
+        value = raw.get(key)
+        if isinstance(value, dict):
+            yield key, [value]
+        elif isinstance(value, list):
+            yield key, [item for item in value if isinstance(item, dict)]
+
+
 def _text_sources(raw: dict[str, Any], document_texts: Sequence[str]) -> Iterator[tuple[str, str]]:
     for key in ("title", "description", "shortDescription", "subject"):
         value = raw.get(key)
         if isinstance(value, str) and value.strip():
             yield f"$.{key}", value
-    for index, detail in enumerate(raw.get("objectDetailsList") or []):
-        if not isinstance(detail, dict):
-            continue
-        description = detail.get("shortDescription") or detail.get("description")
-        if isinstance(description, str) and description.strip():
-            yield f"$.objectDetailsList[{index}].shortDescription", description
+    for group_name, details in _detail_groups(raw):
+        for index, detail in enumerate(details):
+            description = detail.get("shortDescription") or detail.get("description")
+            if isinstance(description, str) and description.strip():
+                yield f"$.{group_name}[{index}].shortDescription", description
     for index, text in enumerate(document_texts):
         if text.strip():
             yield f"document_pages[{index}]", text
@@ -188,6 +236,34 @@ def _text_candidates(
             )
             if candidate:
                 yield candidate
+
+    for line in text.splitlines() or (text,):
+        for postal_match in _POSTAL_RE.finditer(line):
+            postal_code = postal_match.group(1)
+            tail = line[postal_match.end() :].lstrip(" \t-–—,:.")
+            locality = _POSTAL_LOCALITY_STOP.sub("", tail).strip(" ,.;:()[]-")[:60]
+            if locality and any(character.isalpha() for character in locality):
+                candidate = _candidate(
+                    locality,
+                    path=f"{path}:postal-locality",
+                    confidence=0.79,
+                    nuts_codes=nuts_codes,
+                    postal_code=postal_code,
+                    granularity="LOCALITY",
+                    method="POSTAL_LOCALITY_PATTERN",
+                )
+                if candidate:
+                    yield candidate
+                    continue
+            yield LocationCandidate(
+                place_text=postal_code,
+                postal_code=postal_code,
+                nuts_codes=nuts_codes,
+                granularity_hint="POSTAL_CODE",
+                confidence=0.68,
+                source_paths=(f"{path}:postal-code",),
+                extraction_method="POSTAL_CODE_PATTERN",
+            )
 
     normalized_text = f" {normalize_place(text)} "
     matches = 0
@@ -249,21 +325,36 @@ def extract_location_candidates(
     top_postal = _scalar(raw.get("nutsPostalCode") or raw.get("postalCode"))
     candidates: list[LocationCandidate] = []
 
-    details = raw.get("objectDetailsList") or raw.get("lots") or []
-    if isinstance(details, list):
+    for group_name, details in _detail_groups(raw):
         for index, detail in enumerate(details):
-            if not isinstance(detail, dict):
-                continue
             for key in ("city", "placeOfPerformance", "deliveryPlace", "location"):
                 candidate = _candidate(
                     detail.get(key),
-                    path=f"$.objectDetailsList[{index}].{key}",
+                    path=f"$.{group_name}[{index}].{key}",
                     confidence=0.97,
                     nuts_codes=nuts_codes,
                     postal_code=_scalar(detail.get("postalCode")),
                 )
                 if candidate:
                     candidates.append(candidate)
+
+    for code in nuts_codes:
+        for unit in admin_units:
+            if unit.nuts_code != code:
+                continue
+            candidates.append(
+                LocationCandidate(
+                    place_text=unit.name,
+                    postal_code=top_postal,
+                    nuts_codes=(code,),
+                    granularity_hint=unit.boundary_type,
+                    confidence=0.94,
+                    source_paths=(
+                        "$.nutsCode|$.nutsCodes|$.place-of-performance|$.placeOfPerformance",
+                    ),
+                    extraction_method="NUTS_CODE",
+                )
+            )
 
     for key, confidence in (
         ("nutsCity", 0.88),
