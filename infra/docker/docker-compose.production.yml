@@ -31,7 +31,7 @@ services:
       - |
         /db/run_migrations_tracked.sh
         printf "ALTER ROLE procintel_app WITH PASSWORD :'app_password';\n" |
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -v app_password="$APP_DB_PASSWORD"
+          psql "$$DATABASE_URL" -v ON_ERROR_STOP=1 -v app_password="$$APP_DB_PASSWORD"
     networks: [private]
     restart: "no"
 
