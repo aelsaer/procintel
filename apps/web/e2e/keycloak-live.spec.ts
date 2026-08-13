@@ -31,38 +31,23 @@ test.describe("live Keycloak authentication", () => {
     expect(new URL(page.url()).port).toBe(workspacePort);
     await expect(page.getByRole("button", { name: "Αποσύνδεση" })).toBeVisible();
 
-    const accessTokenBeforeRefresh = await page.evaluate(() => {
-      const raw = window.localStorage.getItem("procintel_oidc_session");
-      if (!raw) return null;
-      const session = JSON.parse(raw) as { accessToken: string; expiresAt: number };
-      session.expiresAt = 0;
-      window.localStorage.setItem("procintel_oidc_session", JSON.stringify(session));
-      return session.accessToken;
-    });
     await page.locator("a.workspace-account").click();
     await expect(page.getByRole("heading", { name: "Ομάδα και πρόσβαση" })).toBeVisible();
-    await expect.poll(
-      () => page.evaluate(
-        () => JSON.parse(window.localStorage.getItem("procintel_oidc_session") ?? "{}").accessToken as string | undefined,
-      ),
-    ).not.toBe(accessTokenBeforeRefresh);
-    const accessTokenAfterRefresh = await page.evaluate(
-      () => JSON.parse(window.localStorage.getItem("procintel_oidc_session") ?? "{}").accessToken as string | undefined,
-    );
-    expect(accessTokenAfterRefresh).toBeTruthy();
     await page.goto("/");
     await expect(page.getByRole("button", { name: "Αποσύνδεση" })).toBeVisible();
 
     const identity = await page.evaluate(async () => {
-      const token = window.localStorage.getItem("procintel_access_token");
-      const session = window.localStorage.getItem("procintel_oidc_session");
-      const response = await fetch("/api/v1/workspace/me", {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      return { status: response.status, body: await response.json(), hasSession: Boolean(session) };
+      const response = await fetch("/api/v1/workspace/me");
+      return {
+        status: response.status,
+        body: await response.json(),
+        leakedToken: window.localStorage.getItem("procintel_access_token"),
+        leakedSession: window.localStorage.getItem("procintel_oidc_session"),
+      };
     });
     expect(identity.status).toBe(200);
-    expect(identity.hasSession).toBe(true);
+    expect(identity.leakedToken).toBeNull();
+    expect(identity.leakedSession).toBeNull();
     expect(identity.body).toMatchObject({
       email: "demo@procintel.local",
       tenant_id: "00000000-0000-0000-0000-000000000101",

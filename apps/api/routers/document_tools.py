@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import io
-import ipaddress
 import json
 import mimetypes
 import os
+import tempfile
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from starlette.responses import StreamingResponse
 
 from packages.auth.jwt_verifier import AuthenticatedUser
 from packages.domain.tables import (
+    document_act_links,
     document_pages,
     document_phrase_matches,
     document_phrase_monitors,
@@ -31,8 +33,9 @@ from packages.domain.tables import (
     procurement_processes,
     sector_profile_templates,
 )
+from packages.object_storage import configured_object_store
+from packages.network_safety import validate_public_http_url
 from services.product.document_tools import (
-    build_document_archive,
     evaluate_phrase_monitor,
     render_editable_document_docx,
     safe_archive_name,
@@ -46,6 +49,7 @@ from ..workspace import ensure_workspace_user, tenant_uuid
 router = APIRouter(tags=["document-tools"])
 _WRITE_ROLES = ("OWNER", "ADMIN", "ANALYST", "SALES", "BID_MANAGER")
 _MAX_DOCUMENT_BYTES = int(os.environ.get("DOCUMENT_TOOL_MAX_BYTES", str(50 * 1024 * 1024)))
+_MAX_ARCHIVE_BYTES = int(os.environ.get("DOCUMENT_TOOL_MAX_ARCHIVE_BYTES", str(500 * 1024 * 1024)))
 
 
 class SectorProfileResponse(BaseModel):
@@ -91,46 +95,49 @@ class PhraseMonitorResponse(BaseModel):
     updated_at: datetime
 
 
-def _safe_remote_url(value: str | None) -> bool:
-    if not value:
-        return False
-    parsed = urlparse(value)
-    if parsed.scheme not in {"https", "http"} or not parsed.hostname:
-        return False
-    if parsed.hostname.casefold() in {"localhost", "localhost.localdomain"}:
-        return False
-    try:
-        address = ipaddress.ip_address(parsed.hostname)
-        return not (
-            address.is_private
-            or address.is_loopback
-            or address.is_link_local
-            or address.is_reserved
-        )
-    except ValueError:
-        return True
-
-
 async def _document_payload(
     row: Any,
     *,
     http_client: httpx.AsyncClient,
 ) -> bytes:
     object_uri = str(row.object_uri or "")
-    if object_uri and "://" not in object_uri:
-        path = Path(object_uri)
-        if path.is_file():
-            if path.stat().st_size > _MAX_DOCUMENT_BYTES:
-                raise ValueError("stored document exceeds size limit")
-            return path.read_bytes()
-    if not _safe_remote_url(row.source_url):
+    if object_uri:
+        object_store = configured_object_store(
+            local_root=os.environ.get("DOCUMENT_STORE_ROOT", "./data/documents"),
+            s3_prefix=os.environ.get("OBJECT_STORAGE_DOCUMENT_PREFIX", "documents"),
+        )
+        try:
+            return await object_store.get(object_uri, max_bytes=_MAX_DOCUMENT_BYTES)
+        except (FileNotFoundError, OSError, ValueError):
+            pass
+    if not row.source_url:
         raise ValueError("no safe retrievable official URL")
-    response = await http_client.get(row.source_url)
-    response.raise_for_status()
-    payload = response.content
-    if len(payload) > _MAX_DOCUMENT_BYTES:
-        raise ValueError("downloaded document exceeds size limit")
-    return payload
+    await validate_public_http_url(
+        row.source_url,
+        allow_test_hosts=os.environ.get("PROCINTEL_ENV", "development").casefold() != "production",
+    )
+    chunks: list[bytes] = []
+    total = 0
+    async with http_client.stream("GET", row.source_url, follow_redirects=False) as response:
+        response.raise_for_status()
+        declared_size = int(response.headers.get("content-length") or 0)
+        if declared_size > _MAX_DOCUMENT_BYTES:
+            raise ValueError("downloaded document exceeds size limit")
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > _MAX_DOCUMENT_BYTES:
+                raise ValueError("downloaded document exceeds size limit")
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _stream_file_and_remove(path: Path):
+    try:
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                yield chunk
+    finally:
+        path.unlink(missing_ok=True)
 
 
 async def _monitor_response(
@@ -344,42 +351,69 @@ async def bulk_download_process_documents(
     rows = (
         await conn.execute(
             sa.select(documents)
-            .join(procurement_acts, procurement_acts.c.id == documents.c.act_id)
+            .join(
+                document_act_links,
+                document_act_links.c.document_id == documents.c.id,
+            )
+            .join(
+                procurement_acts,
+                procurement_acts.c.id == document_act_links.c.act_id,
+            )
             .where(procurement_acts.c.process_id == process_id)
             .order_by(documents.c.created_at)
+            .distinct()
             .limit(50)
         )
     ).all()
     if not rows:
         raise HTTPException(status_code=404, detail="No downloaded documents are linked to this process")
-    files: list[tuple[str, bytes]] = []
     manifest_items: list[dict[str, Any]] = []
-    for index, row in enumerate(rows, start=1):
-        extension = mimetypes.guess_extension(row.mime_type or "") or Path(urlparse(row.source_url or "").path).suffix or ".bin"
-        name = safe_archive_name(row.title or f"document-{index}", fallback=f"document-{index}") + extension
-        item = {
-            "document_id": str(row.id),
-            "title": row.title,
-            "official_url": row.source_url,
-            "sha256": row.sha256,
-            "status": "FAILED",
-        }
-        try:
-            files.append((name, await _document_payload(row, http_client=http_client)))
-            item["status"] = "INCLUDED"
-        except (OSError, ValueError, httpx.HTTPError) as exc:
-            item["error"] = f"{type(exc).__name__}: {exc}"
-        manifest_items.append(item)
-    payload = build_document_archive(
-        files,
-        manifest={
+    archive_handle = tempfile.NamedTemporaryFile(prefix="procintel-documents-", suffix=".zip", delete=False)
+    archive_path = Path(archive_handle.name)
+    archive_handle.close()
+    included = 0
+    total_uncompressed = 0
+    seen_names: dict[str, int] = {}
+    try:
+        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
+            for index, row in enumerate(rows, start=1):
+                extension = mimetypes.guess_extension(row.mime_type or "") or Path(urlparse(row.source_url or "").path).suffix or ".bin"
+                name = safe_archive_name(row.title or f"document-{index}", fallback=f"document-{index}") + extension
+                duplicate_count = seen_names.get(name, 0)
+                seen_names[name] = duplicate_count + 1
+                if duplicate_count:
+                    stem, dot, suffix = name.rpartition(".")
+                    name = f"{stem or suffix}-{duplicate_count + 1}{dot}{suffix if dot else ''}"
+                item = {
+                    "document_id": str(row.id),
+                    "title": row.title,
+                    "official_url": row.source_url,
+                    "sha256": row.sha256,
+                    "status": "FAILED",
+                }
+                try:
+                    payload = await _document_payload(row, http_client=http_client)
+                    if total_uncompressed + len(payload) > _MAX_ARCHIVE_BYTES:
+                        raise ValueError("archive exceeds aggregate size limit")
+                    archive.writestr(name, payload)
+                    total_uncompressed += len(payload)
+                    included += 1
+                    item["status"] = "INCLUDED"
+                except (OSError, ValueError, httpx.HTTPError) as exc:
+                    item["error"] = f"{type(exc).__name__}: {exc}"
+                manifest_items.append(item)
+            manifest = {
             "process_id": str(process_id),
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "documents": manifest_items,
-            "included": len(files),
-            "failed": len(rows) - len(files),
-        },
-    )
+            "included": included,
+            "failed": len(rows) - included,
+            "uncompressed_bytes": total_uncompressed,
+            }
+            archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2, default=str))
+    except Exception:
+        archive_path.unlink(missing_ok=True)
+        raise
     file_name = f"procintel-documents-{process_id}.zip"
     await conn.execute(
         document_transformation_jobs.insert().values(
@@ -394,7 +428,7 @@ async def bulk_download_process_documents(
         )
     )
     return StreamingResponse(
-        io.BytesIO(payload),
+        _stream_file_and_remove(archive_path),
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
     )

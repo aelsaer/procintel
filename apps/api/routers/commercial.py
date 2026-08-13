@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from packages.auth.jwt_verifier import AuthenticatedUser
 from packages.domain.tables import (
     account_success_tasks,
+    audit_log,
     entitlement_usage,
     saas_plans,
     service_incidents,
@@ -223,7 +224,7 @@ async def provision_organization(
 ) -> ProvisionResponse:
     if user.auth_method == "API_KEY":
         raise HTTPException(status_code=403, detail="API keys cannot provision organizations")
-    if not user.email:
+    if not user.email or (user.auth_method == "OIDC" and not user.email_verified):
         raise HTTPException(status_code=422, detail="A verified email claim is required")
     issuer = os.environ.get("OIDC_ISSUER_URL", "procintel-local").rstrip("/")
     row = (
@@ -244,6 +245,21 @@ async def provision_organization(
             },
         )
     ).one()
+    await conn.execute(
+        sa.text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+        {"tenant_id": str(row.tenant_id)},
+    )
+    await conn.execute(
+        audit_log.insert().values(
+            id=uuid.uuid4(),
+            tenant_id=row.tenant_id,
+            actor_user_id=row.user_id,
+            action="organization.provisioned" if row.created else "organization.login_bound",
+            object_type="tenant",
+            object_id=row.tenant_id,
+            details={"issuer": issuer, "subject": user.subject},
+        )
+    )
     await conn.commit()
     return ProvisionResponse(
         tenant_id=str(row.tenant_id),

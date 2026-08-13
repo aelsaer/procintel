@@ -465,7 +465,7 @@ async def _build_data_coverage(conn: AsyncConnection) -> DataCoverageResponse:
           (SELECT COUNT(*) FROM act_links WHERE link_type='PUBLISHED_AS') AS ted_links,
           (SELECT COUNT(*) FROM funding_links) AS funding_links,
           (SELECT COUNT(*) FROM mef_expenses WHERE linked_act_id IS NOT NULL) AS mef_links,
-          (SELECT COUNT(*) FROM documents WHERE act_id IS NOT NULL) AS document_links,
+          (SELECT COUNT(*) FROM document_act_links) AS document_links,
           (SELECT COUNT(*) FROM act_locations WHERE geom IS NOT NULL) AS geocoding_links
           ,(SELECT COUNT(*) FROM administrative_boundaries) AS ckan_boundaries
           ,(SELECT COUNT(*) FROM nuts_areas

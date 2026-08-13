@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date
 from enum import Enum
 from typing import Any
-from xml.etree import ElementTree
+from defusedxml import ElementTree
 
 import httpx
 

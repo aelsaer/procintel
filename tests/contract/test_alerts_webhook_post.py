@@ -17,7 +17,13 @@ URL = "https://example.test/incoming-webhook"
 async def test_attempt_delivery_signs_body_and_posts_json():
     route = respx.post(URL).mock(return_value=httpx.Response(200))
     async with httpx.AsyncClient() as client:
-        status = await _attempt_delivery(client, url=URL, body={"event_type": "contract.created"}, secret="shh")
+        status = await _attempt_delivery(
+            client,
+            url=URL,
+            body={"event_type": "contract.created"},
+            secret="shh",
+            allow_test_hosts=True,
+        )
 
     assert status == 200
     request = route.calls[0].request
@@ -29,7 +35,13 @@ async def test_attempt_delivery_signs_body_and_posts_json():
 async def test_attempt_delivery_without_a_secret_sends_no_signature_header():
     route = respx.post(URL).mock(return_value=httpx.Response(200))
     async with httpx.AsyncClient() as client:
-        await _attempt_delivery(client, url=URL, body={"a": 1}, secret=None)
+        await _attempt_delivery(
+            client,
+            url=URL,
+            body={"a": 1},
+            secret=None,
+            allow_test_hosts=True,
+        )
 
     request = route.calls[0].request
     assert "X-Procintel-Signature" not in request.headers
@@ -39,5 +51,26 @@ async def test_attempt_delivery_without_a_secret_sends_no_signature_header():
 async def test_attempt_delivery_returns_the_response_status_on_failure():
     respx.post(URL).mock(return_value=httpx.Response(500))
     async with httpx.AsyncClient() as client:
-        status = await _attempt_delivery(client, url=URL, body={"a": 1}, secret=None)
+        status = await _attempt_delivery(
+            client,
+            url=URL,
+            body={"a": 1},
+            secret=None,
+            allow_test_hosts=True,
+        )
     assert status == 500
+
+
+async def test_attempt_delivery_rejects_private_destinations():
+    async with httpx.AsyncClient() as client:
+        try:
+            await _attempt_delivery(
+                client,
+                url="http://127.0.0.1/internal",
+                body={"a": 1},
+                secret=None,
+            )
+        except ValueError as exc:
+            assert "non-public" in str(exc)
+        else:  # pragma: no cover - documents the security invariant
+            raise AssertionError("private webhook destination was accepted")

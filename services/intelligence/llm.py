@@ -19,6 +19,7 @@ class LlmConfig:
     api_key: str
     model: str
     endpoint: str
+    max_output_tokens: int = 1200
 
     @classmethod
     def from_env(cls) -> LlmConfig | None:
@@ -29,7 +30,16 @@ class LlmConfig:
             endpoint = "https://api.openai.com/v1/responses"
         if not api_key or not model or not endpoint:
             return None
-        return cls(api_key=api_key, model=model, endpoint=endpoint)
+        max_output_tokens = max(
+            64,
+            min(int(os.getenv("PROCINTEL_LLM_MAX_OUTPUT_TOKENS", "1200")), 4000),
+        )
+        return cls(
+            api_key=api_key,
+            model=model,
+            endpoint=endpoint,
+            max_output_tokens=max_output_tokens,
+        )
 
 
 def response_text(payload: dict[str, Any]) -> str:
@@ -78,6 +88,7 @@ async def generate_text(
             "instructions": instructions,
             "input": input_text,
             "store": False,
+            "max_output_tokens": config.max_output_tokens,
         },
     )
     response.raise_for_status()

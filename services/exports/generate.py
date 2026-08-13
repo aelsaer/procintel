@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import io
 import os
 import uuid
 import zipfile
@@ -17,6 +16,8 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 from packages.domain.tables import export_jobs
+from packages.object_storage import configured_object_store
+from packages.tenancy import all_tenant_ids, tenant_session
 from services.search_index.lexical import query_concept_pattern
 
 
@@ -246,12 +247,24 @@ async def process_export_job(conn: AsyncConnection, job_id: uuid.UUID) -> None:
         else:
             _write_xlsx(path, columns, rows)
             mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        object_store = configured_object_store(
+            local_root=root,
+            s3_prefix=os.environ.get("OBJECT_STORAGE_EXPORT_PREFIX", "exports"),
+        )
+        storage_path = await object_store.put(
+            f"{job.tenant_id}/{file_name}",
+            path.read_bytes(),
+            content_type=mime_type,
+        )
+        if storage_path.startswith("s3://"):
+            path.unlink(missing_ok=True)
         await conn.execute(export_jobs.update().where(export_jobs.c.id == job_id).values(
             status="SUCCEEDED", row_count=len(rows), file_name=file_name, mime_type=mime_type,
-            storage_path=str(path), finished_at=datetime.now(timezone.utc), expires_at=now + timedelta(days=7),
+            storage_path=storage_path, finished_at=datetime.now(timezone.utc), expires_at=now + timedelta(days=7),
         ))
         await conn.commit()
     except Exception as exc:
+        await conn.rollback()
         await conn.execute(export_jobs.update().where(export_jobs.c.id == job_id).values(
             status="FAILED", error={"message": str(exc)}, finished_at=datetime.now(timezone.utc),
         ))
@@ -259,14 +272,56 @@ async def process_export_job(conn: AsyncConnection, job_id: uuid.UUID) -> None:
         raise
 
 
-async def process_export_job_by_id(job_id: uuid.UUID) -> None:
+async def process_export_job_by_id(job_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
     database_url = os.environ["DATABASE_URL"]
     engine = create_async_engine(_async_url(database_url))
     try:
         async with engine.connect() as conn:
-            await process_export_job(conn, job_id)
+            async with tenant_session(conn, tenant_id):
+                await process_export_job(conn, job_id)
     finally:
         await engine.dispose()
+
+
+async def process_pending_export_jobs(conn: AsyncConnection, *, limit: int = 20) -> int:
+    """Drain durable exports across tenants without bypassing RLS."""
+    processed = 0
+    stale_before = datetime.now(timezone.utc) - timedelta(minutes=30)
+    for tenant_id in await all_tenant_ids(conn):
+        async with tenant_session(conn, tenant_id):
+            await conn.execute(
+                export_jobs.update()
+                .where(
+                    export_jobs.c.tenant_id == tenant_id,
+                    export_jobs.c.status == "RUNNING",
+                    sa.or_(
+                        export_jobs.c.started_at.is_(None),
+                        export_jobs.c.started_at < stale_before,
+                    ),
+                )
+                .values(status="PENDING", started_at=None, error={"message": "Recovered stale worker lease"})
+            )
+            await conn.commit()
+            job_ids = (
+                await conn.execute(
+                    sa.select(export_jobs.c.id)
+                    .where(
+                        export_jobs.c.tenant_id == tenant_id,
+                        export_jobs.c.status == "PENDING",
+                    )
+                    .order_by(export_jobs.c.created_at)
+                    .limit(max(limit - processed, 0))
+                )
+            ).scalars().all()
+            for job_id in job_ids:
+                try:
+                    await process_export_job(conn, job_id)
+                except Exception:
+                    pass
+                processed += 1
+                if processed >= limit:
+                    return processed
+    return processed
 
 
 async def cleanup_expired_exports(
@@ -278,6 +333,10 @@ async def cleanup_expired_exports(
     """Expire completed jobs and remove only files contained by EXPORT_ROOT."""
     cutoff = now or datetime.now(timezone.utc)
     root = (export_root or Path(os.environ.get("EXPORT_ROOT", "raw/exports"))).resolve()
+    object_store = configured_object_store(
+        local_root=root,
+        s3_prefix=os.environ.get("OBJECT_STORAGE_EXPORT_PREFIX", "exports"),
+    )
     rows = (
         await conn.execute(
             sa.select(export_jobs.c.id, export_jobs.c.storage_path)
@@ -291,9 +350,10 @@ async def cleanup_expired_exports(
     ).all()
     for row in rows:
         if row.storage_path:
-            path = _safe_export_path(row.storage_path, root)
-            if path is not None:
-                path.unlink(missing_ok=True)
+            try:
+                await object_store.delete(row.storage_path)
+            except (OSError, ValueError):
+                pass
         await conn.execute(
             export_jobs.update()
             .where(export_jobs.c.id == row.id)

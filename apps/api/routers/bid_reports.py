@@ -253,7 +253,8 @@ async def _build_report(
                     identifier.value_normalized AS source_identifier
                 FROM procurement_acts act
                 JOIN source_records source ON source.id = act.source_record_id
-                LEFT JOIN documents document ON document.act_id = act.id
+                LEFT JOIN document_act_links document_link ON document_link.act_id = act.id
+                LEFT JOIN documents document ON document.id = document_link.document_id
                 LEFT JOIN act_identifiers identifier
                   ON identifier.act_id = act.id
                  AND identifier.scheme IN ('ADAM', 'ADA', 'TED_NOTICE_ID')

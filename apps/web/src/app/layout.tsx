@@ -5,6 +5,10 @@ import { Providers } from "@/lib/providers";
 import "leaflet/dist/leaflet.css";
 import "./globals.css";
 
+// Per-request rendering lets Next attach the CSP nonce supplied by proxy.ts
+// to every framework and application script.
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "Procintel",
   description: "Greek public procurement intelligence workspace",

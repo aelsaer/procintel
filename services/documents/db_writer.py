@@ -22,10 +22,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from packages.domain.tables import document_pages, documents, field_provenance
+from packages.domain.tables import (
+    document_act_links,
+    document_pages,
+    documents,
+    field_provenance,
+)
 
 
 @dataclass(frozen=True)
@@ -47,28 +53,86 @@ async def upsert_document(
     title: str | None,
     source_url: str | None,
 ) -> DocumentUpsertResult:
-    existing = await conn.execute(select(documents.c.id).where(documents.c.sha256 == sha256))
-    row = existing.first()
-    if row is not None:
-        return DocumentUpsertResult(document_id=row.id, is_new=False)
-
     document_id = uuid.uuid4()
-    await conn.execute(
-        documents.insert().values(
-            id=document_id,
+    inserted = (
+        await conn.execute(
+            pg_insert(documents)
+            .values(
+                id=document_id,
+                act_id=act_id,
+                source_record_id=source_record_id,
+                document_type=document_type,
+                title=title,
+                source_url=source_url,
+                object_uri=object_uri,
+                mime_type=mime_type,
+                file_size=file_size,
+                sha256=sha256,
+                text_extraction_status="PENDING",
+            )
+            .on_conflict_do_nothing(index_elements=[documents.c.sha256])
+            .returning(documents.c.id)
+        )
+    ).scalar_one_or_none()
+    is_new = inserted is not None
+    if inserted is None:
+        document_id = (
+            await conn.execute(
+                sa.select(documents.c.id).where(documents.c.sha256 == sha256)
+            )
+        ).scalar_one()
+        if act_id is not None:
+            await conn.execute(
+                documents.update()
+                .where(documents.c.id == document_id)
+                .values(
+                    act_id=sa.func.coalesce(documents.c.act_id, act_id),
+                    source_record_id=sa.func.coalesce(
+                        documents.c.source_record_id,
+                        source_record_id,
+                    ),
+                    document_type=sa.func.coalesce(documents.c.document_type, document_type),
+                    title=sa.func.coalesce(documents.c.title, title),
+                    source_url=sa.func.coalesce(documents.c.source_url, source_url),
+                )
+            )
+
+    if act_id is not None:
+        link_insert = pg_insert(document_act_links).values(
+            document_id=document_id,
             act_id=act_id,
             source_record_id=source_record_id,
             document_type=document_type,
             title=title,
             source_url=source_url,
-            object_uri=object_uri,
-            mime_type=mime_type,
-            file_size=file_size,
-            sha256=sha256,
-            text_extraction_status="PENDING",
         )
-    )
-    return DocumentUpsertResult(document_id=document_id, is_new=True)
+        await conn.execute(
+            link_insert.on_conflict_do_update(
+                index_elements=[
+                    document_act_links.c.document_id,
+                    document_act_links.c.act_id,
+                ],
+                set_={
+                    "source_record_id": sa.func.coalesce(
+                        link_insert.excluded.source_record_id,
+                        document_act_links.c.source_record_id,
+                    ),
+                    "document_type": sa.func.coalesce(
+                        link_insert.excluded.document_type,
+                        document_act_links.c.document_type,
+                    ),
+                    "title": sa.func.coalesce(
+                        link_insert.excluded.title,
+                        document_act_links.c.title,
+                    ),
+                    "source_url": sa.func.coalesce(
+                        link_insert.excluded.source_url,
+                        document_act_links.c.source_url,
+                    ),
+                },
+            )
+        )
+    return DocumentUpsertResult(document_id=document_id, is_new=is_new)
 
 
 async def update_document_extraction_status(

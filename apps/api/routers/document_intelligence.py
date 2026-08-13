@@ -19,6 +19,7 @@ from packages.domain.tables import (
     bid_workspaces,
     document_comparisons,
     document_compliance_fields,
+    document_act_links,
     document_pages,
     documents,
     procurement_acts,
@@ -29,6 +30,7 @@ from services.documents.intelligence import (
     extract_compliance_fields,
 )
 from services.intelligence.llm import generate_text
+from services.product.entitlements import EntitlementLimitExceeded, consume_entitlement
 
 from ..auth import get_current_user, require_role
 from ..db import get_conn, get_tenant_scoped_conn
@@ -123,8 +125,13 @@ async def _retrieve(
                            ) AS rank
                     FROM document_pages dp
                     JOIN documents d ON d.id = dp.document_id
-                    JOIN procurement_acts a ON a.id = d.act_id
-                    WHERE a.process_id = :process_id
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM document_act_links dal
+                        JOIN procurement_acts a ON a.id = dal.act_id
+                        WHERE dal.document_id = d.id
+                          AND a.process_id = :process_id
+                    )
                       AND (
                           dp.text_search @@ websearch_to_tsquery('simple', :query)
                           OR dp.text ILIKE :fallback
@@ -171,10 +178,26 @@ async def search_document_pages(
 @router.post("/ask", response_model=DocumentAnswer)
 async def ask_documents(
     body: DocumentQuestion,
-    conn: AsyncConnection = Depends(get_conn),
+    conn: AsyncConnection = Depends(get_tenant_scoped_conn),
     http_client: httpx.AsyncClient = Depends(get_http_client),
-    _: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> DocumentAnswer:
+    try:
+        await consume_entitlement(
+            conn,
+            tenant_id=tenant_uuid(user),
+            metric_code="ai_reports_month",
+        )
+    except EntitlementLimitExceeded as exc:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "ENTITLEMENT_LIMIT",
+                "metric": exc.metric_code,
+                "limit": exc.limit,
+                "usage": exc.usage,
+            },
+        ) from exc
     citations = await _retrieve(conn, process_id=body.process_id, query=body.question, limit=8)
     if not citations:
         return DocumentAnswer(
@@ -272,8 +295,21 @@ async def _process_pages(
             document_pages.c.text,
         )
         .join(documents, documents.c.id == document_pages.c.document_id)
-        .join(procurement_acts, procurement_acts.c.id == documents.c.act_id)
-        .where(procurement_acts.c.process_id == process_id)
+        .where(
+            sa.exists(
+                sa.select(1)
+                .select_from(
+                    document_act_links.join(
+                        procurement_acts,
+                        procurement_acts.c.id == document_act_links.c.act_id,
+                    )
+                )
+                .where(
+                    document_act_links.c.document_id == documents.c.id,
+                    procurement_acts.c.process_id == process_id,
+                )
+            )
+        )
         .order_by(document_pages.c.document_id, document_pages.c.page_number)
     )
     if document_ids:
@@ -373,8 +409,13 @@ async def compare_process_documents(
                         """
                         SELECT d.id
                         FROM documents d
-                        JOIN procurement_acts a ON a.id = d.act_id
-                        WHERE a.process_id = :process_id
+                        WHERE EXISTS (
+                            SELECT 1
+                            FROM document_act_links dal
+                            JOIN procurement_acts a ON a.id = dal.act_id
+                            WHERE dal.document_id = d.id
+                              AND a.process_id = :process_id
+                        )
                           AND EXISTS (SELECT 1 FROM document_pages p WHERE p.document_id = d.id)
                         ORDER BY d.created_at DESC
                         LIMIT 2
@@ -453,8 +494,14 @@ async def extract_bid_requirements(
                 SELECT dp.document_id, dp.page_number, dp.text
                 FROM document_pages dp
                 JOIN documents d ON d.id = dp.document_id
-                JOIN procurement_acts a ON a.id = d.act_id
-                WHERE a.process_id = :process_id AND length(dp.text) > 20
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM document_act_links dal
+                    JOIN procurement_acts a ON a.id = dal.act_id
+                    WHERE dal.document_id = d.id
+                      AND a.process_id = :process_id
+                )
+                  AND length(dp.text) > 20
                 ORDER BY dp.document_id, dp.page_number
                 """
             ),

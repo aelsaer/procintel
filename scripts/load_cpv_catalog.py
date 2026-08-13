@@ -18,12 +18,13 @@ import asyncio
 import os
 import sys
 import tempfile
-import urllib.request
-import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from pathlib import Path
+from urllib.parse import urlparse
 
+import httpx
 import sqlalchemy as sa
+from defusedxml import ElementTree as ET
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -32,6 +33,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 DEFAULT_SOURCE = "https://raw.githubusercontent.com/OP-TED/eForms-SDK/1.15.1/codelists/cpv.gc"
+MAX_CPV_SOURCE_BYTES = 100 * 1024 * 1024
+REMOTE_CPV_HOSTS = frozenset({"raw.githubusercontent.com"})
 
 cpv_codes = sa.table(
     "cpv_codes",
@@ -92,10 +95,25 @@ def _batches(rows: list[dict[str, str | None]], size: int) -> Iterator[list[dict
 def _resolve_source(source: str) -> tuple[Path, bool]:
     if not source.startswith(("http://", "https://")):
         return Path(source).expanduser().resolve(), False
+    parsed = urlparse(source)
+    if parsed.scheme != "https" or parsed.hostname not in REMOTE_CPV_HOSTS:
+        raise ValueError("remote CPV sources must use HTTPS on an approved OP-TED mirror")
     handle = tempfile.NamedTemporaryFile(prefix="procintel-cpv-", suffix=".gc", delete=False)
     handle.close()
     destination = Path(handle.name)
-    urllib.request.urlretrieve(source, destination)
+    try:
+        downloaded = 0
+        with httpx.stream("GET", source, follow_redirects=False, timeout=60.0) as response:
+            response.raise_for_status()
+            with destination.open("wb") as output:
+                for chunk in response.iter_bytes():
+                    downloaded += len(chunk)
+                    if downloaded > MAX_CPV_SOURCE_BYTES:
+                        raise ValueError("remote CPV source exceeds the 100 MiB limit")
+                    output.write(chunk)
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
     return destination, True
 
 

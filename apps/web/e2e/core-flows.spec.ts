@@ -24,7 +24,6 @@ type PipelineItem = {
   due_at: string | null;
 };
 
-type Opportunity = { process_id: string; title: string | null };
 type SavedSearch = { id: string; name: string };
 type AlertRule = { id: string; name: string };
 type Watch = { id: string; object_id: string; object_type: "COMPETITOR" };
@@ -263,12 +262,6 @@ test("opportunity can be saved, staged, persisted, and restored", async ({ page,
     amount_min: 0,
     amount_max: null,
   });
-  const opportunities = await apiGet<Opportunity[]>(request, "/v1/intelligence/opportunities?limit=10");
-  expect(opportunities.length).toBeGreaterThan(0);
-  const target = opportunities[0];
-  const initial = await apiGet<PipelineItem[]>(request, "/v1/workspace/pipeline");
-  const previous = initial.find((item) => item.process_id === target.process_id) ?? null;
-  if (previous) await apiDelete(request, `/v1/workspace/pipeline/${previous.id}`);
   let createdId: string | null = null;
 
   try {
@@ -276,38 +269,37 @@ test("opportunity can be saved, staged, persisted, and restored", async ({ page,
     await openSidebarView(page, "Ευκαιρίες");
     const saveButton = page.getByRole("button", { name: "Αποθήκευση στο pipeline" }).first();
     await expect(saveButton).toBeVisible();
+    const opportunityCard = saveButton.locator("xpath=ancestor::article");
+    const opportunityHref = await opportunityCard.getByRole("link", { name: "Άνοιγμα ευκαιρίας" }).getAttribute("href");
+    expect(opportunityHref).toMatch(/^\/processes\/[0-9a-f-]+$/);
+    const processId = opportunityHref!.split("/").at(-1)!;
     const created = page.waitForResponse((response) =>
       response.url().includes("/api/v1/workspace/pipeline") && response.request().method() === "POST",
     );
     await saveButton.click();
-    expect((await created).status()).toBe(201);
-    await expect(page.getByRole("button", { name: "Αποθηκευμένη ευκαιρία" }).first()).toBeDisabled();
+    const createdResponse = await created;
+    expect(createdResponse.status()).toBe(201);
+    const createdItem = await createdResponse.json() as PipelineItem;
+    expect(createdItem.process_id).toBe(processId);
+    createdId = createdItem.id;
+    const savedOpportunityCard = page.locator("article").filter({
+      has: page.locator(`a[href="/processes/${processId}"]`),
+    });
+    await expect(savedOpportunityCard.getByRole("button", { name: "Αποθηκευμένη ευκαιρία" })).toBeDisabled();
 
     await page.getByRole("button", { name: "Pipeline", exact: true }).click();
-    const stage = page.getByLabel(new RegExp(`Stage για ${target.title?.slice(0, 25) ?? ""}`)).first();
+    const pipelineRow = page.getByRole("row").filter({
+      has: page.locator(`a[href="/processes/${processId}"]`),
+    });
+    const stage = pipelineRow.getByRole("combobox");
     await expect(stage).toBeVisible();
     await stage.selectOption("BIDDING");
     await expect(stage).toHaveValue("BIDDING");
 
     const after = await apiGet<PipelineItem[]>(request, "/v1/workspace/pipeline");
-    const createdItem = after.find((item) => item.process_id === target.process_id);
-    expect(createdItem?.stage).toBe("BIDDING");
-    createdId = createdItem?.id ?? null;
+    expect(after.find((item) => item.id === createdId)?.stage).toBe("BIDDING");
   } finally {
     if (createdId) await apiDelete(request, `/v1/workspace/pipeline/${createdId}`);
-    if (previous) {
-      const response = await request.post("/api/v1/workspace/pipeline", {
-        data: {
-          process_id: previous.process_id,
-          stage: previous.stage,
-          priority: previous.priority,
-          expected_value: previous.expected_value,
-          next_action: previous.next_action,
-          due_at: previous.due_at,
-        },
-      });
-      expect(response.ok()).toBeTruthy();
-    }
     await restoreProfile(request, originalProfile);
   }
 });

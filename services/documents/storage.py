@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from packages.object_storage import ObjectStore, configured_object_store
+
 _EXTENSION_BY_MIME = {
     "application/pdf": ".pdf",
     "image/png": ".png",
@@ -49,3 +51,31 @@ class LocalFilesystemDocumentBlobStore:
         if not file_path.exists():
             file_path.write_bytes(payload)
         return DocumentBlobRef(object_uri=str(file_path), sha256=sha256, size_bytes=len(payload))
+
+
+class ObjectDocumentBlobStore:
+    def __init__(self, store: ObjectStore) -> None:
+        self._store = store
+
+    async def put(self, *, payload: bytes, mime_type: str | None) -> DocumentBlobRef:
+        sha256 = hashlib.sha256(payload).hexdigest()
+        extension = _EXTENSION_BY_MIME.get(mime_type or "", ".bin")
+        uri = await self._store.put(
+            f"{sha256[:2]}/{sha256}{extension}",
+            payload,
+            content_type=mime_type,
+        )
+        return DocumentBlobRef(object_uri=uri, sha256=sha256, size_bytes=len(payload))
+
+
+def configured_document_blob_store(root: Path | str) -> DocumentBlobStore:
+    from os import environ
+
+    if environ.get("OBJECT_STORAGE_BACKEND", "local").casefold() == "local":
+        return LocalFilesystemDocumentBlobStore(root)
+    return ObjectDocumentBlobStore(
+        configured_object_store(
+            local_root=root,
+            s3_prefix=environ.get("OBJECT_STORAGE_DOCUMENT_PREFIX", "documents"),
+        )
+    )

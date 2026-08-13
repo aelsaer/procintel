@@ -20,9 +20,6 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from packages.source_clients.raw_store import LocalFilesystemRawStore
-from services.ingestion.connectors.khmdhs.client import KhmdhsClient
-from services.ingestion.connectors.khmdhs.config import KhmdhsConnectorConfig
 from services.ingestion.connectors.khmdhs.db_writer import ingest_khmdhs_record
 from services.search_index.client import (
     alias_targets,

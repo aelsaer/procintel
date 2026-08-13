@@ -37,6 +37,7 @@ from services.search_index.lexical import (
     query_prefilter,
     query_token_patterns,
 )
+from services.product.entitlements import EntitlementLimitExceeded, consume_entitlement
 
 from ..auth import get_current_user, require_role
 from ..db import get_conn, get_tenant_scoped_conn
@@ -906,8 +907,12 @@ async def buyer_intelligence(buyer_id: str, conn: AsyncConnection = Depends(get_
             ORDER BY CASE i.scheme WHEN 'ADAM' THEN 1 WHEN 'ADA' THEN 2 ELSE 3 END LIMIT 1
         ) identifier ON TRUE
         LEFT JOIN LATERAL (
-            SELECT source_url FROM documents WHERE act_id=a.id AND source_url IS NOT NULL
-            ORDER BY created_at DESC LIMIT 1
+            SELECT COALESCE(dal.source_url, d.source_url) AS source_url
+            FROM document_act_links dal
+            JOIN documents d ON d.id=dal.document_id
+            WHERE dal.act_id=a.id
+              AND COALESCE(dal.source_url, d.source_url) IS NOT NULL
+            ORDER BY dal.created_at DESC LIMIT 1
         ) d ON TRUE
         WHERE p.entity_id=CAST(:id AS uuid)
           AND p.party_role IN ('BUYER','CONTRACTING_AUTHORITY')
@@ -1099,8 +1104,12 @@ async def supplier_intelligence(supplier_id: str, conn: AsyncConnection = Depend
             ORDER BY CASE i.scheme WHEN 'ADAM' THEN 1 WHEN 'ADA' THEN 2 ELSE 3 END LIMIT 1
         ) identifier ON TRUE
         LEFT JOIN LATERAL (
-            SELECT source_url FROM documents WHERE act_id=a.id AND source_url IS NOT NULL
-            ORDER BY created_at DESC LIMIT 1
+            SELECT COALESCE(dal.source_url, d.source_url) AS source_url
+            FROM document_act_links dal
+            JOIN documents d ON d.id=dal.document_id
+            WHERE dal.act_id=a.id
+              AND COALESCE(dal.source_url, d.source_url) IS NOT NULL
+            ORDER BY dal.created_at DESC LIMIT 1
         ) d ON TRUE
         WHERE p.entity_id=CAST(:id AS uuid)
           AND p.party_role IN ('SUPPLIER','CONTRACTOR','CONSORTIUM_MEMBER')
@@ -1454,9 +1463,12 @@ async def relationship_explorer(
             LIMIT 1
         ) official ON TRUE
         LEFT JOIN LATERAL (
-            SELECT d.source_url FROM documents d
-            WHERE d.act_id=a.id AND d.source_url IS NOT NULL
-            ORDER BY d.created_at DESC LIMIT 1
+            SELECT COALESCE(dal.source_url, d.source_url) AS source_url
+            FROM document_act_links dal
+            JOIN documents d ON d.id=dal.document_id
+            WHERE dal.act_id=a.id
+              AND COALESCE(dal.source_url, d.source_url) IS NOT NULL
+            ORDER BY dal.created_at DESC LIMIT 1
         ) doc ON TRUE
         WHERE (CAST(:entity_id AS uuid) IS NULL OR buyer.id=CAST(:entity_id AS uuid) OR supplier.id=CAST(:entity_id AS uuid))
           AND (CAST(:date_from AS date) IS NULL OR COALESCE(a.publication_date,a.decision_date,a.submission_date) >= CAST(:date_from AS date))
@@ -1617,9 +1629,26 @@ async def relationship_explorer(
 @router.post("/assistant", response_model=AssistantResponse)
 async def analytics_assistant(
     body: AssistantRequest,
-    conn: AsyncConnection = Depends(get_conn),
+    user: AuthenticatedUser = Depends(get_current_user),
+    conn: AsyncConnection = Depends(get_tenant_scoped_conn),
     http_client: httpx.AsyncClient = Depends(get_http_client),
 ) -> AssistantResponse:
+    try:
+        await consume_entitlement(
+            conn,
+            tenant_id=tenant_uuid(user),
+            metric_code="ai_reports_month",
+        )
+    except EntitlementLimitExceeded as exc:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "ENTITLEMENT_LIMIT",
+                "metric": exc.metric_code,
+                "limit": exc.limit,
+                "usage": exc.usage,
+            },
+        ) from exc
     normalized = body.question.casefold()
     cpv_prefixes = list(dict.fromkeys([
         value.strip().split("-", 1)[0][:8]

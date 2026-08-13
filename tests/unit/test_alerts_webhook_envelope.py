@@ -5,7 +5,7 @@ tests/integration/test_alerts_delivery_channels_db.py.
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from services.alerts.webhook_delivery import (
     BACKOFF_CAP_SECONDS,

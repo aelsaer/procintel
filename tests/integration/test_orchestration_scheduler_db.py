@@ -9,6 +9,7 @@ import os
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
+import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -120,6 +121,47 @@ async def test_a_failing_run_window_records_the_error_without_advancing_the_curs
                 assert cursor_row.last_success_at is None  # never advanced
                 assert cursor_row.last_error == {"message": "upstream API exploded"}
 
+                run_row = (
+                    await conn.execute(
+                        select(connector_runs).where(connector_runs.c.source_system == job.source_system)
+                    )
+                ).one()
+                assert run_row.status == "FAILED"
+            finally:
+                await _cleanup(conn, job.source_system)
+    finally:
+        await engine.dispose()
+
+
+async def test_a_database_failure_is_rolled_back_before_recording_run_state():
+    async def failing_run_window(conn, date_from, date_to):
+        await conn.execute(sa.text("SELECT * FROM table_that_does_not_exist_for_scheduler_test"))
+        return {}
+
+    job = ScheduledJob(
+        source_system="TEST_SOURCE_ABORTED_TRANSACTION",
+        resource_type="ALL",
+        partition_key="GLOBAL",
+        window_days=1,
+        backfill_start_date=date(2025, 1, 1),
+        min_interval=timedelta(hours=1),
+        run_window=failing_run_window,
+    )
+
+    engine = create_async_engine(_asyncpg_url())
+    try:
+        async with engine.connect() as conn:
+            await _cleanup(conn, job.source_system)
+            try:
+                outcomes = await run_due_jobs(conn, [job], now=datetime(2025, 6, 15, tzinfo=timezone.utc))
+                assert outcomes[0].ran is False
+                cursor_row = (
+                    await conn.execute(
+                        select(source_cursors).where(source_cursors.c.source_system == job.source_system)
+                    )
+                ).one()
+                assert cursor_row.last_success_at is None
+                assert "table_that_does_not_exist" in cursor_row.last_error["message"]
                 run_row = (
                     await conn.execute(
                         select(connector_runs).where(connector_runs.c.source_system == job.source_system)

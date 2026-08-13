@@ -1,7 +1,6 @@
 """SMTP email delivery — smtplib mocked (no real network/SMTP server
 needed), same pattern the OCR contract test uses for `subprocess.run`."""
 
-import os
 
 import pytest
 

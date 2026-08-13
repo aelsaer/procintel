@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 
 import sqlalchemy as sa
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.auth.jwt_verifier import AuthenticatedUser
 from packages.domain.tables import audit_log, export_jobs
-from services.exports.generate import process_export_job_by_id
+from packages.object_storage import configured_object_store
 from services.product.entitlements import EntitlementLimitExceeded, consume_entitlement
 
 from ..auth import get_current_user, require_role
@@ -76,7 +77,7 @@ async def list_exports(
 
 @router.post("", response_model=ExportJobResponse, status_code=202)
 async def create_export(
-    body: ExportCreateRequest, background_tasks: BackgroundTasks,
+    body: ExportCreateRequest,
     conn: AsyncConnection = Depends(get_tenant_scoped_conn),
     user: AuthenticatedUser = Depends(require_role(*_EXPORT_ROLES)),
 ) -> ExportJobResponse:
@@ -109,13 +110,12 @@ async def create_export(
     ))
     row = (await conn.execute(sa.select(export_jobs).where(export_jobs.c.id == job_id))).one()
     await conn.commit()
-    background_tasks.add_task(process_export_job_by_id, job_id)
     return _job(row)
 
 
 @router.post("/{job_id}/retry", response_model=ExportJobResponse, status_code=202)
 async def retry_export(
-    job_id: str, background_tasks: BackgroundTasks,
+    job_id: str,
     conn: AsyncConnection = Depends(get_tenant_scoped_conn),
     user: AuthenticatedUser = Depends(require_role(*_EXPORT_ROLES)),
 ) -> ExportJobResponse:
@@ -127,16 +127,15 @@ async def retry_export(
     if row is None:
         raise HTTPException(status_code=409, detail="Only failed exports can be retried")
     await conn.commit()
-    background_tasks.add_task(process_export_job_by_id, target)
     return _job(row)
 
 
-@router.get("/{job_id}/download")
+@router.get("/{job_id}/download", response_model=None)
 async def download_export(
     job_id: str,
     conn: AsyncConnection = Depends(get_tenant_scoped_conn),
     user: AuthenticatedUser = Depends(get_current_user),
-) -> FileResponse:
+) -> FileResponse | RedirectResponse:
     row = (await conn.execute(sa.select(export_jobs).where(
         export_jobs.c.id == _uuid(job_id), export_jobs.c.tenant_id == tenant_uuid(user),
     ))).first()
@@ -146,4 +145,17 @@ async def download_export(
         raise HTTPException(status_code=409, detail="Export is not ready")
     if row.expires_at and row.expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=410, detail="Export has expired")
+    object_store = configured_object_store(
+        local_root=os.environ.get("EXPORT_ROOT", "raw/exports"),
+        s3_prefix=os.environ.get("OBJECT_STORAGE_EXPORT_PREFIX", "exports"),
+    )
+    try:
+        signed_url = await object_store.presign_get(
+            row.storage_path,
+            expires_seconds=300,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="Export file is unavailable") from exc
+    if signed_url:
+        return RedirectResponse(signed_url, status_code=307)
     return FileResponse(row.storage_path, media_type=row.mime_type, filename=row.file_name)

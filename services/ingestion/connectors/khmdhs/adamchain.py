@@ -45,7 +45,7 @@ from packages.domain.tables import (
 )
 from packages.source_clients.raw_store import RawStore
 from services.alerts.delivery import DeliveryChannel
-from services.alerts.evaluate import evaluate_buyer_new_procurement_and_fire
+from services.alerts.evaluate import evaluate_buyer_new_procurement_for_all_tenants
 
 from .client import KhmdhsClient
 from .normalize import normalize_adam
@@ -668,7 +668,7 @@ async def resolve_adam_chain_for_act(
     if is_new_process and delivery_channel is not None:
         buyer_entity_id = await _buyer_entity_id_for_act(conn, seed_act_id)
         if buyer_entity_id is not None:
-            await evaluate_buyer_new_procurement_and_fire(
+            await evaluate_buyer_new_procurement_for_all_tenants(
                 conn, process_id=process_id, buyer_entity_id=buyer_entity_id, delivery_channel=delivery_channel
             )
 

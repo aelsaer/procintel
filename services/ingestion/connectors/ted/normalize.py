@@ -6,7 +6,7 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal, InvalidOperation
 import re
 from typing import Any
-from xml.etree import ElementTree
+from defusedxml import ElementTree
 
 from pydantic import BaseModel
 

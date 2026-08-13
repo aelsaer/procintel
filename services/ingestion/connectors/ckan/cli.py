@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
-from packages.source_clients.raw_store import LocalFilesystemRawStore
+from packages.source_clients.raw_store import configured_raw_store
 
 from .client import CkanClient
 from .config import CkanConnectorConfig
@@ -110,7 +110,7 @@ async def _validate_download(
 async def _sync_population(dataset_id: str, reference_year: int, database_url: str, raw_root: str) -> None:
     config = CkanConnectorConfig.from_env()
     client = CkanClient(config)
-    raw_store = LocalFilesystemRawStore(raw_root)
+    raw_store = configured_raw_store(raw_root)
     engine = create_async_engine(_to_asyncpg_url(database_url))
 
     try:
@@ -174,7 +174,7 @@ async def _sync_population(dataset_id: str, reference_year: int, database_url: s
 async def _sync_boundaries(dataset_id: str, boundary_type: str, database_url: str, raw_root: str) -> None:
     config = CkanConnectorConfig.from_env()
     client = CkanClient(config)
-    raw_store = LocalFilesystemRawStore(raw_root)
+    raw_store = configured_raw_store(raw_root)
     engine = create_async_engine(_to_asyncpg_url(database_url))
 
     try:
@@ -238,7 +238,7 @@ async def _sync_metric(
 ) -> None:
     config = CkanConnectorConfig.from_env()
     client = CkanClient(config)
-    raw_store = LocalFilesystemRawStore(raw_root)
+    raw_store = configured_raw_store(raw_root)
     engine = create_async_engine(_to_asyncpg_url(database_url))
     value_field_candidates = (value_field, *DEFAULT_VALUE_FIELD_CANDIDATES) if value_field else DEFAULT_VALUE_FIELD_CANDIDATES
 
@@ -317,7 +317,7 @@ async def _sync_facilities(
 ) -> None:
     config = CkanConnectorConfig.from_env()
     client = CkanClient(config)
-    raw_store = LocalFilesystemRawStore(raw_root)
+    raw_store = configured_raw_store(raw_root)
     engine = create_async_engine(_to_asyncpg_url(database_url))
     capacity_field_candidates = (
         (capacity_field, *DEFAULT_CAPACITY_FIELD_CANDIDATES) if capacity_field else DEFAULT_CAPACITY_FIELD_CANDIDATES

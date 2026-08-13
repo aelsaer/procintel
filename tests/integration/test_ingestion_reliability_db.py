@@ -25,6 +25,7 @@ from services.ingestion.enrichment_reconciliation import (
 )
 from services.ingestion.enrichment_queue import (
     claim_enrichment_jobs,
+    defer_enrichment,
     enqueue_enrichment,
     fail_enrichment,
 )
@@ -325,6 +326,69 @@ async def test_reenqueue_resets_terminal_provider_attempts() -> None:
             await conn.commit()
             assert reopened.status == "QUEUED"
             assert reopened.attempt_count == 0
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(
+                enrichment_jobs.delete().where(
+                    enrichment_jobs.c.idempotency_key == key
+                )
+            )
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_circuit_deferral_refunds_claim_attempt_and_delays_retry() -> None:
+    engine = create_async_engine(_async_url(DATABASE_URL))
+    key = f"test-circuit-defer-{uuid.uuid4()}"
+    try:
+        async with engine.connect() as conn:
+            ref = await enqueue_enrichment(
+                conn,
+                provider="KHMDHS_ADAMCHAIN",
+                idempotency_key=key,
+                payload={"adam": "26PROC019999999"},
+            )
+            await conn.commit()
+            claimed = await claim_enrichment_jobs(
+                conn,
+                limit=1,
+                providers={"KHMDHS_ADAMCHAIN"},
+            )
+            assert [job.id for job in claimed] == [ref.id]
+            assert claimed[0].attempt_count == 1
+
+            before_defer = datetime.now(timezone.utc)
+            await defer_enrichment(
+                conn,
+                ref.id,
+                refund_attempt=True,
+                retry_after=30.0,
+            )
+            await conn.commit()
+            row = (
+                await conn.execute(
+                    sa.select(
+                        enrichment_jobs.c.status,
+                        enrichment_jobs.c.attempt_count,
+                        enrichment_jobs.c.available_at,
+                    ).where(enrichment_jobs.c.id == ref.id)
+                )
+            ).one()
+
+            assert row.status == "QUEUED"
+            assert row.attempt_count == 0
+            assert (row.available_at - before_defer).total_seconds() >= 29.0
+
+            await defer_enrichment(conn, ref.id)
+            await conn.commit()
+            preserved_available_at = (
+                await conn.execute(
+                    sa.select(enrichment_jobs.c.available_at).where(
+                        enrichment_jobs.c.id == ref.id
+                    )
+                )
+            ).scalar_one()
+            assert preserved_available_at == row.available_at
     finally:
         async with engine.begin() as conn:
             await conn.execute(

@@ -16,11 +16,12 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal, Mapping
 
 import httpx
+import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from packages.domain.tables import act_identifiers, fetch_requests, procurement_acts, process_members
-from packages.source_clients.raw_store import LocalFilesystemRawStore
+from packages.source_clients.raw_store import RawStore, configured_raw_store
 from services.ingestion.connectors.diavgeia.client import DiavgeiaClient
 from services.ingestion.connectors.diavgeia.config import DiavgeiaConnectorConfig
 from services.ingestion.connectors.diavgeia.db_writer import ingest_decision_record
@@ -300,24 +301,24 @@ async def ensure_fetch_request(conn: AsyncConnection, identifier: str) -> uuid.U
 
 
 async def mark_fetch_request_running(conn: AsyncConnection, request_id: uuid.UUID) -> bool:
-    row = (await conn.execute(select(fetch_requests).where(fetch_requests.c.id == request_id))).first()
-    if row is None or row.status != "QUEUED":
-        return False
     now = datetime.now(timezone.utc)
-    await conn.execute(
+    claimed = (
+        await conn.execute(
         fetch_requests.update()
-        .where(fetch_requests.c.id == request_id)
+        .where(fetch_requests.c.id == request_id, fetch_requests.c.status == "QUEUED")
         .values(
             status="RUNNING",
             message="Provider request is running in the background.",
-            started_at=row.started_at or now,
+            started_at=sa.func.coalesce(fetch_requests.c.started_at, now),
             last_attempt_at=now,
-            attempt_count=(row.attempt_count or 0) + 1,
+            attempt_count=fetch_requests.c.attempt_count + 1,
             updated_at=now,
         )
-    )
+        .returning(fetch_requests.c.id)
+        )
+    ).first()
     await conn.commit()
-    return True
+    return claimed is not None
 
 
 async def finish_fetch_request(conn: AsyncConnection, request_id: uuid.UUID, outcome: FetchOutcome) -> None:
@@ -341,7 +342,7 @@ async def finish_fetch_request(conn: AsyncConnection, request_id: uuid.UUID, out
 async def _run_optional_diavgeia_links(
     conn: AsyncConnection,
     *,
-    raw_store: LocalFilesystemRawStore,
+    raw_store: RawStore,
     result: IngestResult,
     raw_record: dict[str, Any],
 ) -> None:
@@ -441,7 +442,7 @@ async def _fetch_khmdhs_adam(
     windows = _windows_for_year(year)
     config = KhmdhsConnectorConfig.from_env()
     client = KhmdhsClient(config)
-    raw_store = LocalFilesystemRawStore(raw_root)
+    raw_store = configured_raw_store(raw_root)
     pages_fetched = 0
     records_seen = 0
     records_upserted = 0
@@ -577,7 +578,7 @@ async def _fetch_diavgeia_ada(conn: AsyncConnection, *, target: IdentifierTarget
 
     config = DiavgeiaConnectorConfig.from_env()
     client = DiavgeiaClient(config)
-    raw_store = LocalFilesystemRawStore(raw_root)
+    raw_store = configured_raw_store(raw_root)
     metadata = {"provider_rate_policy": PROVIDER_RATE_POLICIES["DIAVGEIA"]}
     try:
         try:
@@ -647,15 +648,73 @@ async def process_fetch_request(engine: AsyncEngine, request_id: uuid.UUID, *, r
             else:
                 outcome = await _fetch_diavgeia_ada(conn, target=target, raw_root=raw_root)
         except RuntimeError as exc:
+            await conn.rollback()
             outcome = FetchOutcome(
                 status="WAITING_FOR_CONFIG",
                 message=str(exc),
                 metadata={"provider_rate_policy": PROVIDER_RATE_POLICIES[target.source_system]},
             )
         except Exception as exc:  # noqa: BLE001 - persisted failure is more useful than a lost background exception
+            await conn.rollback()
             outcome = FetchOutcome(
                 status="FAILED",
                 message=str(exc),
                 metadata={"provider_rate_policy": PROVIDER_RATE_POLICIES[target.source_system]},
             )
         await finish_fetch_request(conn, request_id, outcome)
+
+
+async def recover_stale_fetch_requests(
+    conn: AsyncConnection,
+    *,
+    stale_after: timedelta = timedelta(minutes=30),
+    now: datetime | None = None,
+) -> int:
+    cutoff = (now or datetime.now(timezone.utc)) - stale_after
+    result = await conn.execute(
+        fetch_requests.update()
+        .where(
+            fetch_requests.c.status == "RUNNING",
+            sa.or_(
+                fetch_requests.c.last_attempt_at.is_(None),
+                fetch_requests.c.last_attempt_at < cutoff,
+            ),
+        )
+        .values(
+            status="QUEUED",
+            started_at=None,
+            message="Recovered after an interrupted worker attempt.",
+            updated_at=now or datetime.now(timezone.utc),
+        )
+    )
+    await conn.commit()
+    return result.rowcount
+
+
+async def process_pending_fetch_requests(
+    engine: AsyncEngine,
+    *,
+    raw_root: str = "./raw",
+    limit: int = 10,
+) -> int:
+    """Recover stale leases and process a bounded durable fetch batch."""
+    now = datetime.now(timezone.utc)
+    async with engine.connect() as conn:
+        await recover_stale_fetch_requests(conn, now=now)
+        request_ids = (
+            await conn.execute(
+                select(fetch_requests.c.id)
+                .where(
+                    fetch_requests.c.status == "QUEUED",
+                    sa.or_(
+                        fetch_requests.c.next_retry_at.is_(None),
+                        fetch_requests.c.next_retry_at <= now,
+                    ),
+                )
+                .order_by(fetch_requests.c.requested_at)
+                .limit(limit)
+            )
+        ).scalars().all()
+    for request_id in request_ids:
+        await process_fetch_request(engine, request_id, raw_root=raw_root)
+    return len(request_ids)

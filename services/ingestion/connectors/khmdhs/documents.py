@@ -9,10 +9,10 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from packages.domain.tables import documents, procurement_acts
+from packages.domain.tables import document_act_links, procurement_acts
 from packages.source_clients.rate_limit import RateLimiter
 from services.documents.pipeline import ProcessDocumentResult, process_document
-from services.documents.storage import LocalFilesystemDocumentBlobStore
+from services.documents.storage import configured_document_blob_store
 from services.intelligence.tender_brief import khmdhs_attachment_url
 
 from .client import ALL_RESOURCES
@@ -33,10 +33,10 @@ async def has_khmdhs_attachment(
     document_type = khmdhs_document_type(resource)
     return (
         await conn.execute(
-            select(documents.c.id)
+            select(document_act_links.c.document_id)
             .where(
-                documents.c.act_id == act_id,
-                documents.c.document_type == document_type,
+                document_act_links.c.act_id == act_id,
+                document_act_links.c.document_type == document_type,
             )
             .limit(1)
         )
@@ -70,7 +70,7 @@ async def process_khmdhs_attachment(
         title=title or adam,
         http_client=http_client,
         download_rate_limiter=rate_limiter,
-        blob_store=LocalFilesystemDocumentBlobStore(
+        blob_store=configured_document_blob_store(
             os.environ.get("DOCUMENT_STORE_ROOT", "./data/documents")
         ),
     )

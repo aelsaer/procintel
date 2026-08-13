@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tesseract-ocr tzdata fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends postgresql-client tesseract-ocr tzdata fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -15,6 +15,7 @@ COPY packages ./packages
 COPY services ./services
 COPY apps ./apps
 COPY scripts ./scripts
+COPY db ./db
 
 RUN pip install .
 

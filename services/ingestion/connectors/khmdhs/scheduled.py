@@ -37,9 +37,12 @@ from packages.domain.tables import (
     entity_identifiers,
     procurement_acts,
 )
-from packages.source_clients.raw_store import LocalFilesystemRawStore
+from packages.source_clients.raw_store import configured_raw_store
 from services.alerts.delivery import DeliveryChannel
-from services.alerts.evaluate import evaluate_and_fire, evaluate_company_status_change_and_fire
+from services.alerts.evaluate import (
+    evaluate_and_fire_all_tenants,
+    evaluate_company_status_change_for_all_tenants,
+)
 from services.alerts.factory import build_delivery_channel
 from services.ingestion.enrichment_queue import (
     complete_enrichment,
@@ -182,7 +185,7 @@ async def run_scheduled_window(
 ) -> dict[str, Any]:
     config = KhmdhsConnectorConfig.from_env()
     client = KhmdhsClient(config)
-    raw_store = LocalFilesystemRawStore(raw_root)
+    raw_store = configured_raw_store(raw_root)
     alert_http_client = httpx.AsyncClient(timeout=10.0) if delivery_channel is None else None
     delivery_channel = delivery_channel or build_delivery_channel(alert_http_client)
     opensearch_http_client = httpx.AsyncClient(timeout=10.0) if opensearch_config is not None else None
@@ -334,7 +337,7 @@ async def run_scheduled_window(
             await _attempt(
                 "ALERTS",
                 result.adam_normalized,
-                lambda: evaluate_and_fire(
+                lambda: evaluate_and_fire_all_tenants(
                     inner_conn,
                     act_upsert=result.act_upsert,
                     delivery_channel=delivery_channel,
@@ -447,7 +450,7 @@ async def run_scheduled_window(
                     await _attempt(
                         "COMPANY_STATUS_ALERTS",
                         f"{result.adam_normalized}:{contractor_afm}",
-                        lambda contractor_entity_id=contractor_entity_id, snapshot_result=snapshot_result: evaluate_company_status_change_and_fire(
+                        lambda contractor_entity_id=contractor_entity_id, snapshot_result=snapshot_result: evaluate_company_status_change_for_all_tenants(
                             inner_conn,
                             entity_id=contractor_entity_id,
                             old_status=snapshot_result.old_status,

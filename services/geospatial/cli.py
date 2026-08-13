@@ -18,7 +18,7 @@ from pathlib import Path
 import httpx
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from packages.source_clients.raw_store import LocalFilesystemRawStore
+from packages.source_clients.raw_store import configured_raw_store
 from services.ingestion.connectors.inspire.config import InspireReferenceConfig
 from services.ingestion.connectors.inspire.nuts import load_greece_nuts
 from services.ingestion.connectors.inspire.postal import load_greece_postal_nuts
@@ -118,7 +118,7 @@ async def _load_gazetteer(
 
 async def _load_reference_layers(database_url: str, *, raw_root: str) -> None:
     config = InspireReferenceConfig.from_env()
-    raw_store = LocalFilesystemRawStore(raw_root)
+    raw_store = configured_raw_store(raw_root)
     engine = create_async_engine(_asyncpg_url(database_url))
     try:
         async with httpx.AsyncClient(

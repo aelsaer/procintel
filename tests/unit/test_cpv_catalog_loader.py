@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from scripts.load_cpv_catalog import parse_cpv_rows
+import pytest
+
+from scripts.load_cpv_catalog import _resolve_source, parse_cpv_rows
 
 
 def test_genericode_parser_extracts_greek_english_and_hierarchy(tmp_path):
@@ -34,3 +36,10 @@ def test_genericode_parser_extracts_greek_english_and_hierarchy(tmp_path):
         "description_el": "Υπηρεσίες εκκαθάρισης από αγριόχορτα",
         "description_en": "Weed-clearance services",
     }]
+
+
+def test_remote_catalog_source_is_limited_to_the_official_https_host():
+    with pytest.raises(ValueError, match="approved OP-TED mirror"):
+        _resolve_source("http://raw.githubusercontent.com/OP-TED/cpv.gc")
+    with pytest.raises(ValueError, match="approved OP-TED mirror"):
+        _resolve_source("https://127.0.0.1/cpv.gc")

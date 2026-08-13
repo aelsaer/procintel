@@ -24,7 +24,7 @@ export default function CallbackPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ organization_name: result.organizationName ?? null }),
         });
-        const loginResult = await login({ token: result.accessToken, redirectTo: result.returnTo });
+        const loginResult = await login({ redirectTo: result.returnTo });
         if (!loginResult.success) {
           throw loginResult.error ?? new Error("Το workspace δεν αποδέχτηκε τη σύνδεση.");
         }

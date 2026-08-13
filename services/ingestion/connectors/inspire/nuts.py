@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from packages.domain.tables import (
     administrative_boundaries,
     external_datasets,
-    nuts_areas,
     source_records,
 )
 from packages.source_clients.raw_store import RawStore

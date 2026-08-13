@@ -11,7 +11,8 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.domain.tables import enrichment_jobs, procurement_acts
-from packages.source_clients.raw_store import LocalFilesystemRawStore
+from packages.source_clients.raw_store import configured_raw_store
+from packages.source_clients.retry import CircuitOpenError
 from services.documents.download import DocumentTooLargeError
 from services.documents.pdf_text import (
     PdfPageLimitExceededError,
@@ -56,6 +57,7 @@ from services.ingestion.enrichment_queue import (
     ClaimedEnrichmentJob,
     claim_enrichment_jobs,
     complete_enrichment,
+    defer_enrichment,
     fail_enrichment,
     recover_stale_enrichment_jobs,
 )
@@ -84,7 +86,7 @@ class EnrichmentSweepResult:
 
 class _Dependencies:
     def __init__(self, raw_root: str) -> None:
-        self.raw_store = LocalFilesystemRawStore(raw_root)
+        self.raw_store = configured_raw_store(raw_root)
         khmdhs_config = KhmdhsConnectorConfig.from_env()
         self.khmdhs = KhmdhsClient(khmdhs_config)
         self.khmdhs_rate_limiter = self.khmdhs.request_rate_limiter
@@ -444,6 +446,17 @@ async def run_pending_enrichment_jobs(
             claimed += 1
             try:
                 result = await _dispatch(conn, dependencies, job)
+            except CircuitOpenError as exc:
+                await conn.rollback()
+                await defer_enrichment(
+                    conn,
+                    job.id,
+                    refund_attempt=True,
+                    retry_after=exc.retry_after,
+                )
+                await conn.commit()
+                _increment(by_provider, job.provider, "circuit_deferred")
+                exhausted_providers.add(job.provider)
             except ProviderConfigurationError as exc:
                 attempts[job.provider] = attempts.get(job.provider, 0) + 1
                 await conn.rollback()

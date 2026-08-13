@@ -127,14 +127,18 @@ lots_agg AS (
 
 documents_agg AS (
     SELECT a.process_id, jsonb_agg(jsonb_build_object(
-        'document_id', d.id, 'act_id', d.act_id, 'document_type', d.document_type,
-        'title', d.title, 'source_url', d.source_url, 'object_uri', d.object_uri,
+        'document_id', d.id, 'act_id', dal.act_id,
+        'document_type', COALESCE(dal.document_type, d.document_type),
+        'title', COALESCE(dal.title, d.title),
+        'source_url', COALESCE(dal.source_url, d.source_url),
+        'object_uri', d.object_uri,
         'mime_type', d.mime_type, 'file_size', d.file_size,
         'text_extraction_status', d.text_extraction_status, 'page_count', d.page_count,
         'language', d.language
     )) AS documents
     FROM documents d
-    JOIN procurement_acts a ON a.id = d.act_id
+    JOIN document_act_links dal ON dal.document_id = d.id
+    JOIN procurement_acts a ON a.id = dal.act_id
     WHERE a.process_id IS NOT NULL
     GROUP BY a.process_id
 ),

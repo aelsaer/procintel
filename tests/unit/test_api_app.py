@@ -73,6 +73,7 @@ EXPECTED_PATHS = {
     "/v1/bids/{process_id}/comments/{comment_id}",
     "/v1/bids/{process_id}/reminders",
     "/v1/bids/{process_id}/reminders/{reminder_id}",
+    "/v1/bids/{process_id}/reminders/{reminder_id}/retry",
     "/v1/bids/{process_id}/crm-handoffs",
     "/v1/workspace/me",
     "/v1/workspace/login",

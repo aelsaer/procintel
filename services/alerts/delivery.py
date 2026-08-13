@@ -80,6 +80,7 @@ class MultiplexingDeliveryChannel:
         event_type: str,
         payload: dict[str, Any],
     ) -> None:
+        errors: list[str] = []
         for channel in self._channels:
             try:
                 await channel.deliver(
@@ -94,3 +95,12 @@ class MultiplexingDeliveryChannel:
                 self._logger.exception(
                     "delivery channel %s failed for alert_event=%s", type(channel).__name__, alert_event_id
                 )
+                errors.append(type(channel).__name__)
+        if errors:
+            raise DeliveryChannelError(errors)
+
+
+class DeliveryChannelError(RuntimeError):
+    def __init__(self, failed_channels: list[str]) -> None:
+        self.failed_channels = tuple(failed_channels)
+        super().__init__(f"delivery failed for channel(s): {', '.join(failed_channels)}")

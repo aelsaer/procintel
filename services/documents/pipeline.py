@@ -23,7 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.domain.tables import (
     document_compliance_fields,
-    documents,
     procurement_acts,
     source_records,
 )
@@ -52,8 +51,14 @@ from .entities import (
 from .mime import sniff_mime_type
 from .intelligence import PARSER_VERSION, extract_compliance_fields
 from .ocr import run_ocr
-from .pdf_text import PdfPageLimitExceededError, extract_text_layer, open_pdf, rasterize_page
-from .storage import DocumentBlobStore, LocalFilesystemDocumentBlobStore
+from .pdf_text import (
+    PdfPageLimitExceededError,
+    PdfPageTooLargeError,
+    extract_text_layer,
+    open_pdf,
+    rasterize_page,
+)
+from .storage import DocumentBlobStore, configured_document_blob_store
 
 
 class UnsupportedMimeTypeError(Exception):
@@ -85,32 +90,42 @@ async def _ensure_document_source_record(
     `field_provenance.source_record_id` is NOT NULL — every extracted
     field needs one to point at, even on the rare path where a prior run
     wrote the `source_records` row but crashed before the `documents` row."""
-    existing = await conn.execute(
-        select(source_records.c.id).where(
-            source_records.c.source_system == "DOCUMENTS",
-            source_records.c.resource_type == document_type,
-            source_records.c.content_sha256 == sha256,
-        )
-    )
-    row = existing.first()
-    if row is not None:
-        return row.id
-
     source_record_id = uuid.uuid4()
-    await conn.execute(
-        source_records.insert().values(
-            id=source_record_id,
-            source_system="DOCUMENTS",
-            resource_type=document_type,
-            source_native_id=url,
-            content_sha256=sha256,
-            payload_uri=url,
-            fetched_at=datetime.now(timezone.utc),
-            http_status=http_status,
-            parse_status="PARSED",
+    inserted = (
+        await conn.execute(
+            pg_insert(source_records)
+            .values(
+                id=source_record_id,
+                source_system="DOCUMENTS",
+                resource_type=document_type,
+                source_native_id=url,
+                content_sha256=sha256,
+                payload_uri=url,
+                fetched_at=datetime.now(timezone.utc),
+                http_status=http_status,
+                parse_status="PARSED",
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    source_records.c.source_system,
+                    source_records.c.resource_type,
+                    source_records.c.content_sha256,
+                ]
+            )
+            .returning(source_records.c.id)
         )
-    )
-    return source_record_id
+    ).scalar_one_or_none()
+    if inserted is not None:
+        return inserted
+    return (
+        await conn.execute(
+            select(source_records.c.id).where(
+                source_records.c.source_system == "DOCUMENTS",
+                source_records.c.resource_type == document_type,
+                source_records.c.content_sha256 == sha256,
+            )
+        )
+    ).scalar_one()
 
 
 async def process_document(
@@ -127,7 +142,7 @@ async def process_document(
     av_scanner: AntivirusScanner | None = None,
 ) -> ProcessDocumentResult:
     config = config or DocumentPipelineConfig()
-    blob_store = blob_store or LocalFilesystemDocumentBlobStore(
+    blob_store = blob_store or configured_document_blob_store(
         root=os.environ.get("DOCUMENT_STORE_ROOT", "./data/documents")
     )
     av_scanner = av_scanner or configured_antivirus_scanner()
@@ -150,22 +165,6 @@ async def process_document(
 
     blob_ref = await blob_store.put(payload=downloaded.payload, mime_type=sniffed)
 
-    upsert_result = await upsert_document(
-        conn,
-        sha256=sha256,
-        object_uri=blob_ref.object_uri,
-        mime_type=sniffed,
-        file_size=blob_ref.size_bytes,
-        act_id=act_id,
-        source_record_id=None,
-        document_type=document_type,
-        title=title,
-        source_url=url,
-    )
-    if not upsert_result.is_new:
-        # Same content already fully processed — skip re-running OCR/extraction.
-        return ProcessDocumentResult(document_id=upsert_result.document_id, is_new=False, page_count=0)
-
     source_record_id = await _ensure_document_source_record(
         conn,
         sha256=sha256,
@@ -173,9 +172,22 @@ async def process_document(
         document_type=document_type,
         http_status=downloaded.http_status,
     )
-    await conn.execute(
-        documents.update().where(documents.c.id == upsert_result.document_id).values(source_record_id=source_record_id)
+
+    upsert_result = await upsert_document(
+        conn,
+        sha256=sha256,
+        object_uri=blob_ref.object_uri,
+        mime_type=sniffed,
+        file_size=blob_ref.size_bytes,
+        act_id=act_id,
+        source_record_id=source_record_id,
+        document_type=document_type,
+        title=title,
+        source_url=url,
     )
+    if not upsert_result.is_new:
+        # Same content already fully processed — skip re-running OCR/extraction.
+        return ProcessDocumentResult(document_id=upsert_result.document_id, is_new=False, page_count=0)
 
     pdf_document = open_pdf(downloaded.payload)
     try:
@@ -199,6 +211,7 @@ async def process_document(
 
     page_writes: list[PageWrite] = []
     any_ocr = False
+    skipped_oversized_pages = 0
     all_amounts: list[ExtractedAmount] = []
 
     for page_content in text_layer_pages:
@@ -208,8 +221,20 @@ async def process_document(
             ocr_mean_confidence = None
             field_confidence_scale = 1.0
         else:
+            try:
+                image = rasterize_page(pdf_document, page_number=page_content.page_number, config=config)
+            except PdfPageTooLargeError:
+                skipped_oversized_pages += 1
+                page_writes.append(
+                    PageWrite(
+                        page_number=page_content.page_number,
+                        text="",
+                        extraction_method="SKIPPED_PIXEL_LIMIT",
+                        ocr_mean_confidence=None,
+                    )
+                )
+                continue
             any_ocr = True
-            image = rasterize_page(pdf_document, page_number=page_content.page_number, config=config)
             ocr_result = await run_ocr(image, config=config)
             page_text = ocr_result.text
             extraction_method = "OCR"
@@ -350,7 +375,13 @@ async def process_document(
     await update_document_extraction_status(
         conn,
         document_id=upsert_result.document_id,
-        text_extraction_status="OCR_DONE" if any_ocr else "TEXT_LAYER",
+        text_extraction_status=(
+            "PARTIAL_PIXEL_LIMIT"
+            if skipped_oversized_pages
+            else "OCR_DONE"
+            if any_ocr
+            else "TEXT_LAYER"
+        ),
         page_count=len(page_writes),
         language=None,
     )

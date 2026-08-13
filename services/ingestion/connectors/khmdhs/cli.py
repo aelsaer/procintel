@@ -34,8 +34,11 @@ from packages.domain.tables import (
     entity_identifiers,
     procurement_acts,
 )
-from packages.source_clients.raw_store import LocalFilesystemRawStore
-from services.alerts.evaluate import evaluate_and_fire, evaluate_company_status_change_and_fire
+from packages.source_clients.raw_store import configured_raw_store
+from services.alerts.evaluate import (
+    evaluate_and_fire_all_tenants,
+    evaluate_company_status_change_for_all_tenants,
+)
 from services.alerts.factory import build_delivery_channel
 from services.ingestion.connectors.anaptyxi.client import AnaptyxiClient
 from services.ingestion.connectors.anaptyxi.config import (
@@ -173,7 +176,7 @@ async def _run_backfill(
 
     config = KhmdhsConnectorConfig.from_env()
     client = KhmdhsClient(config)
-    raw_store = LocalFilesystemRawStore(raw_root)
+    raw_store = configured_raw_store(raw_root)
     alert_http_client = httpx.AsyncClient(timeout=10.0)
     delivery_channel = build_delivery_channel(alert_http_client)
     engine = create_async_engine(_to_asyncpg_url(database_url))
@@ -226,7 +229,7 @@ async def _run_backfill(
                 delivery_channel=delivery_channel if fire_alerts else None,
             )
         if fire_alerts and result.act_upsert is not None:
-            fired = await evaluate_and_fire(
+            fired = await evaluate_and_fire_all_tenants(
                 conn, act_upsert=result.act_upsert, delivery_channel=delivery_channel
             )
             if fired:
@@ -277,7 +280,7 @@ async def _run_backfill(
                 )
                 if snapshot_result.wrote_new_snapshot:
                     print(f"  refreshed ΓΕΜΗ snapshot for {contractor_afm}")
-                    status_fired = await evaluate_company_status_change_and_fire(
+                    status_fired = await evaluate_company_status_change_for_all_tenants(
                         conn,
                         entity_id=contractor_entity_id,
                         old_status=snapshot_result.old_status,
@@ -457,6 +460,8 @@ async def _run_backfill(
                         # the original) — printing just str(exc) then shows a blank
                         # "FAILED:" with no way to tell what actually happened.
                         description = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+                        if conn.in_transaction():
+                            await conn.rollback()
                         await _mark_finished(conn, run_id=run_id, status="FAILED", error=description)
                         if not continue_on_error:
                             raise

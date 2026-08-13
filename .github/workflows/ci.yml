@@ -19,7 +19,12 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -e ".[dev]"
+      - run: python -m ruff check .
       - run: python -m compileall apps packages services scripts
+      # Dynamic SQL fragments are selected from internal whitelists; values
+      # remain bound parameters. Bandit B608 cannot distinguish that pattern.
+      - run: bandit -r apps packages services scripts -x apps/web -ll --skip B608
+      - run: pip-audit .
       - run: pytest tests/unit tests/contract -q
 
   frontend:
@@ -56,9 +61,29 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      opensearch:
+        image: opensearchproject/opensearch:2.19.6
+        env:
+          discovery.type: single-node
+          DISABLE_SECURITY_PLUGIN: "true"
+          OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -fsS http://localhost:9200/_cluster/health"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+      clamav:
+        image: clamav/clamav:1.4
+        ports:
+          - 3310:3310
     env:
       DATABASE_URL: postgresql://procintel:procintel@127.0.0.1:5432/procintel
       PROCINTEL_APP_DATABASE_URL: postgresql://procintel_app:CHANGE_ME_procintel_app@127.0.0.1:5432/procintel
+      OPENSEARCH_URL: http://127.0.0.1:9200
+      CLAMD_HOST: 127.0.0.1
+      CLAMD_PORT: "3310"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -66,6 +91,25 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -e ".[dev]"
+      - name: Wait for ClamAV
+        run: |
+          python - <<'PY'
+          import socket
+          import time
+
+          for attempt in range(60):
+              try:
+                  with socket.create_connection(("127.0.0.1", 3310), timeout=2) as client:
+                      client.sendall(b"zPING\0")
+                      if client.recv(64).strip(b"\0") == b"PONG":
+                          break
+              except OSError:
+                  pass
+              time.sleep(2)
+          else:
+              raise SystemExit("ClamAV did not become ready within 120 seconds")
+          PY
+      - run: ./db/run_migrations.sh
       - run: ./db/run_migrations.sh
       - run: pytest tests/integration -q
 
@@ -84,10 +128,27 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npx playwright test e2e/auth.spec.ts
+        env:
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:3013
+          PLAYWRIGHT_WEB_COMMAND: npm run build && npm run start -- --hostname 127.0.0.1 --port 3013
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
 
   containers:
     runs-on: ubuntu-latest
-    needs: [backend, frontend, integration, ui-smoke]
+    needs: [backend, frontend, integration, ui-smoke, terraform]
     steps:
       - uses: actions/checkout@v4
       - run: docker compose --env-file infra/docker/.env.production.example -f infra/docker/docker-compose.production.yml config >/dev/null

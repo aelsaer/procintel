@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import csv
 import zipfile
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from services.alerts.digests import _is_due, _period_key
+from services.alerts.digests import _is_due, _period_key, _retry_at
 from services.analytics.profile_classification import CpvCatalogEntry, classify_business_description
 from services.analytics.opportunity_scoring import _score_candidate
 from services.exports.generate import _write_csv, _write_xlsx
@@ -109,6 +109,14 @@ def test_digest_due_logic_respects_local_time_and_weekday():
     assert not _is_due("WEEKLY_DIGEST", tuesday, tuesday.replace(hour=8).time())
     assert _period_key("DAILY_DIGEST", monday) == "2026-07-20"
     assert _period_key("WEEKLY_DIGEST", monday) == "2026-W30"
+
+
+def test_digest_retry_uses_bounded_exponential_backoff():
+    now = datetime(2026, 7, 20, 6, 0, tzinfo=timezone.utc)
+
+    assert (_retry_at(now, 1) - now).total_seconds() == 300
+    assert (_retry_at(now, 3) - now).total_seconds() == 1200
+    assert (_retry_at(now, 99) - now).total_seconds() == 6 * 60 * 60
 
 
 def test_csv_and_xlsx_exports_are_valid_files(tmp_path):

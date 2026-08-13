@@ -1,24 +1,19 @@
 """Scheduled analytics-mart refresh (spec §37's dependency chain, applied
 to `db/marts/analytics_marts.sql`'s materialized views).
 
-The 9 materialized views (`opportunity_scores` is a plain table populated
-by application code that doesn't exist yet — see that table's own comment
-in `analytics_marts.sql` — and is deliberately untouched here) are
+The 10 materialized views (`opportunity_scores` is a plain table populated
+by application code and is deliberately untouched here) are
 refreshed with plain `REFRESH MATERIALIZED VIEW`, not `CONCURRENTLY`:
 `CONCURRENTLY` requires a unique index on the view, and only
 `market_value_metrics` has one today. Adding unique indexes to the other
-eight so they can refresh without blocking concurrent reads is a
+remaining views so they can refresh without blocking concurrent reads is a
 legitimate future optimization, not attempted here.
 
 Refresh order matters: `market_hhi` reads from `supplier_market_share` +
 `market_value_metrics`, and `renewal_signals` reads from
 `cycle_time_metrics` — both refreshed strictly after their dependencies
-below. `REFRESH MATERIALIZED VIEW` re-runs the view's defining query
-against current base-table state regardless of whether an upstream view
-is fresh or stale; a failed refresh of one view doesn't block attempting
-the rest, it just means a dependent view's *next* refresh reads
-still-stale upstream data until that upstream view's own refresh
-succeeds.
+below. A dependent view is skipped when one of its inputs failed in the
+same pass, which avoids recording stale derived metrics as freshly rebuilt.
 """
 
 from __future__ import annotations
@@ -46,6 +41,11 @@ MATERIALIZED_VIEWS_IN_DEPENDENCY_ORDER: tuple[str, ...] = (
 )
 
 _LOCK_KEY = "procintel:analytics:mart_refresh"
+
+MART_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "market_hhi": ("market_value_metrics", "supplier_market_share"),
+    "renewal_signals": ("cycle_time_metrics",),
+}
 
 
 @dataclass(frozen=True)
@@ -79,12 +79,13 @@ async def refresh_all_marts(conn: AsyncConnection, *, now: datetime | None = Non
     advisory lock (a single global lock, not one per mart — the whole
     point is a strictly ordered pass, so running two overlapping passes
     concurrently is never useful). Returns one outcome per mart; a failure
-    on one mart doesn't stop the rest from being attempted."""
+    on one mart doesn't stop independent marts from being attempted."""
     now = now or datetime.now(timezone.utc)
     if not await try_advisory_lock(conn, _LOCK_KEY):
         return []
 
     outcomes: list[MartRefreshOutcome] = []
+    failed_marts: set[str] = set()
     try:
         for mart_name in MATERIALIZED_VIEWS_IN_DEPENDENCY_ORDER:
             await _ensure_state_row(conn, mart_name)
@@ -95,15 +96,42 @@ async def refresh_all_marts(conn: AsyncConnection, *, now: datetime | None = Non
             )
             await conn.commit()
 
-            try:
-                await refresh_mart(conn, mart_name)
-            except Exception as exc:  # noqa: BLE001 — recorded per-mart, doesn't stop the rest
+            failed_dependencies = [
+                dependency
+                for dependency in MART_DEPENDENCIES.get(mart_name, ())
+                if dependency in failed_marts
+            ]
+            if failed_dependencies:
+                message = f"skipped because dependencies failed: {', '.join(failed_dependencies)}"
                 await conn.execute(
                     mart_refresh_state.update()
                     .where(mart_refresh_state.c.mart_name == mart_name)
-                    .values(last_error={"message": str(exc)})
+                    .values(
+                        last_error={
+                            "type": "DependencyRefreshFailed",
+                            "message": message,
+                            "dependencies": failed_dependencies,
+                        }
+                    )
                 )
                 await conn.commit()
+                failed_marts.add(mart_name)
+                outcomes.append(MartRefreshOutcome(mart_name=mart_name, succeeded=False, error=message))
+                continue
+
+            try:
+                await refresh_mart(conn, mart_name)
+            except Exception as exc:  # noqa: BLE001 — recorded per-mart, doesn't stop the rest
+                # A failed REFRESH leaves PostgreSQL's transaction aborted.
+                # Roll it back before writing durable failure state.
+                await conn.rollback()
+                await conn.execute(
+                    mart_refresh_state.update()
+                    .where(mart_refresh_state.c.mart_name == mart_name)
+                    .values(last_error={"type": type(exc).__name__, "message": str(exc)})
+                )
+                await conn.commit()
+                failed_marts.add(mart_name)
                 outcomes.append(MartRefreshOutcome(mart_name=mart_name, succeeded=False, error=str(exc)))
                 continue
 
@@ -115,6 +143,9 @@ async def refresh_all_marts(conn: AsyncConnection, *, now: datetime | None = Non
             await conn.commit()
             outcomes.append(MartRefreshOutcome(mart_name=mart_name, succeeded=True))
     finally:
+        if conn.in_transaction():
+            await conn.rollback()
         await advisory_unlock(conn, _LOCK_KEY)
+        await conn.commit()
 
     return outcomes

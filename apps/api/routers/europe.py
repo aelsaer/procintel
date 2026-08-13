@@ -14,7 +14,6 @@ from packages.auth.jwt_verifier import AuthenticatedUser
 from packages.domain.tables import (
     business_profiles,
     eu_benchmark_snapshots,
-    tenant_cross_border_matches,
 )
 from services.intelligence.eu_benchmarking import (
     refresh_cross_border_matches_for_tenant,

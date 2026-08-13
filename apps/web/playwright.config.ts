@@ -25,8 +25,8 @@ export default defineConfig({
     { name: "mobile", use: { ...devices["Pixel 7"] } },
   ],
   webServer: {
-    command: "npm run dev -- --hostname 127.0.0.1 --port 3000",
-    url: "http://127.0.0.1:3000",
+    command: process.env.PLAYWRIGHT_WEB_COMMAND ?? "npm run dev -- --hostname 127.0.0.1 --port 3000",
+    url: process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3000",
     reuseExistingServer: true,
     timeout: 120_000,
   },

@@ -8,12 +8,14 @@ from datetime import date
 from decimal import Decimal
 
 import sqlalchemy as sa
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from packages.auth.jwt_verifier import AuthenticatedUser
 from packages.schemas.responses import PaginationBlock, SearchResponse, SearchResultItem
 from services.ingestion.on_demand import classify_identifier, ensure_fetch_request
 from services.intelligence.tender_brief import links_for_display_identifier
+from services.product.entitlements import EntitlementLimitExceeded, consume_entitlement
 from services.search_index.lexical import (
     normalize_lexical_text,
     normalized_text_sql,
@@ -21,8 +23,10 @@ from services.search_index.lexical import (
     query_token_patterns,
 )
 
-from ..db import get_conn
-from .fetch_requests import build_fetch_request_response, load_fetch_request, schedule_fetch_request
+from ..auth import get_current_user
+from ..db import get_tenant_scoped_conn
+from ..workspace import tenant_uuid
+from .fetch_requests import build_fetch_request_response, load_fetch_request
 
 router = APIRouter(prefix="/v1/search", tags=["search"])
 
@@ -47,7 +51,6 @@ def _decode_cursor(cursor: str | None) -> int:
 
 @router.get("", response_model=SearchResponse)
 async def search(
-    background_tasks: BackgroundTasks,
     q: str = Query(..., min_length=1, max_length=200),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=DEFAULT_LIMIT, le=100, gt=0),
@@ -60,7 +63,8 @@ async def search(
     cpv_prefix: str | None = Query(default=None, max_length=12),
     nuts_code: str | None = Query(default=None, max_length=8),
     municipality: str | None = Query(default=None, max_length=160),
-    conn: AsyncConnection = Depends(get_conn),
+    user: AuthenticatedUser = Depends(get_current_user),
+    conn: AsyncConnection = Depends(get_tenant_scoped_conn),
 ) -> SearchResponse:
     raw_query = q.strip()
     normalized_query = normalize_lexical_text(raw_query)
@@ -267,11 +271,25 @@ async def search(
 
     fetch_request_response = None
     if auto_fetch and cursor is None and not results and classify_identifier(q) is not None:
+        try:
+            await consume_entitlement(
+                conn,
+                tenant_id=tenant_uuid(user),
+                metric_code="provider_fetches_month",
+            )
+        except EntitlementLimitExceeded as exc:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "code": "ENTITLEMENT_LIMIT",
+                    "metric": exc.metric_code,
+                    "limit": exc.limit,
+                    "usage": exc.usage,
+                },
+            ) from exc
         fetch_request_id = await ensure_fetch_request(conn, q)
         if fetch_request_id is not None:
             fetch_request_row = await load_fetch_request(conn, fetch_request_id)
-            if fetch_request_row.status == "QUEUED":
-                schedule_fetch_request(background_tasks, fetch_request_id)
             fetch_request_response = build_fetch_request_response(fetch_request_row)
 
     return SearchResponse(

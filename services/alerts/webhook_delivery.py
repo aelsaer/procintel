@@ -35,10 +35,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.domain.tables import alert_delivery_targets, webhook_deliveries
+from packages.network_safety import validate_public_http_url
 
 MAX_ATTEMPTS = 8
 BACKOFF_BASE_SECONDS = 60
 BACKOFF_CAP_SECONDS = 6 * 3600
+DELIVERY_LEASE_TIMEOUT = timedelta(minutes=15)
 
 
 def _next_retry_at(now: datetime, attempt_count: int) -> datetime:
@@ -118,14 +120,28 @@ def _build_body(
     )
 
 
-async def _attempt_delivery(http_client: httpx.AsyncClient, *, url: str, body: dict[str, Any], secret: str | None) -> int:
+async def _attempt_delivery(
+    http_client: httpx.AsyncClient,
+    *,
+    url: str,
+    body: dict[str, Any],
+    secret: str | None,
+    allow_test_hosts: bool = False,
+) -> int:
+    await validate_public_http_url(url, allow_test_hosts=allow_test_hosts)
     body_bytes = json.dumps(body, sort_keys=True).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     signature = _sign(secret, body_bytes)
     if signature:
         headers["X-Procintel-Signature"] = f"sha256={signature}"
-    response = await http_client.post(url, content=body_bytes, headers=headers)
-    return response.status_code
+    async with http_client.stream(
+        "POST",
+        url,
+        content=body_bytes,
+        headers=headers,
+        follow_redirects=False,
+    ) as response:
+        return response.status_code
 
 
 class WebhookLikeDeliveryChannel:
@@ -133,12 +149,19 @@ class WebhookLikeDeliveryChannel:
     `channel_type` this instance handles. Each fans out to every active
     `alert_delivery_targets` row of that type for the firing rule."""
 
-    def __init__(self, channel_type: str, http_client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        channel_type: str,
+        http_client: httpx.AsyncClient | None = None,
+        *,
+        allow_test_hosts: bool = False,
+    ) -> None:
         if channel_type not in ("WEBHOOK", "TEAMS", "SLACK"):
             raise ValueError(f"unsupported channel_type: {channel_type!r}")
         self._channel_type = channel_type
         self._http = http_client or httpx.AsyncClient(timeout=10.0)
         self._owns_client = http_client is None
+        self._allow_test_hosts = allow_test_hosts
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -189,7 +212,9 @@ class WebhookLikeDeliveryChannel:
                     endpoint_url=target.target,
                     idempotency_key=idempotency_key,
                     signature=signature,
-                    status="PENDING",
+                    request_body=body_bytes.decode("utf-8"),
+                    status="DELIVERING",
+                    last_attempt_at=now,
                 )
                 .on_conflict_do_nothing(index_elements=["tenant_id", "idempotency_key"])
                 .returning(webhook_deliveries.c.id)
@@ -201,10 +226,14 @@ class WebhookLikeDeliveryChannel:
 
             try:
                 status_code = await _attempt_delivery(
-                    self._http, url=target.target, body=body, secret=target.secret
+                    self._http,
+                    url=target.target,
+                    body=body,
+                    secret=target.secret,
+                    allow_test_hosts=self._allow_test_hosts,
                 )
                 succeeded = 200 <= status_code < 300
-            except httpx.HTTPError:
+            except (httpx.HTTPError, ValueError):
                 succeeded = False
                 status_code = None
 
@@ -217,6 +246,8 @@ class WebhookLikeDeliveryChannel:
                         attempt_count=1,
                         last_attempt_at=now,
                         response_status=status_code,
+                        next_retry_at=None,
+                        last_error=None,
                     )
                 )
             else:
@@ -229,41 +260,87 @@ class WebhookLikeDeliveryChannel:
                         last_attempt_at=now,
                         next_retry_at=_next_retry_at(now, 1),
                         response_status=status_code,
+                        last_error={"message": "Initial delivery failed"},
                     )
                 )
             await conn.commit()
 
 
-async def retry_pending_deliveries(conn: AsyncConnection, http_client: httpx.AsyncClient, *, now: datetime | None = None) -> int:
-    """Retries every `webhook_deliveries` row still `PENDING` and due
-    (`next_retry_at` in the past). Returns how many rows were retried.
+async def retry_pending_deliveries(
+    conn: AsyncConnection,
+    http_client: httpx.AsyncClient,
+    *,
+    now: datetime | None = None,
+    limit: int = 100,
+    allow_test_hosts: bool = False,
+) -> int:
+    """Lease and retry a bounded batch of due `webhook_deliveries` rows.
+    Interrupted `DELIVERING` leases are recovered after fifteen minutes.
+    Returns how many rows were retried.
     Doesn't know or care which channel type produced the row — the
     envelope/signature/idempotency-key are already fixed at first-attempt
     time, a retry just re-POSTs the exact same recorded intent."""
     now = now or datetime.now(timezone.utc)
+    await conn.execute(
+        webhook_deliveries.update()
+        .where(
+            webhook_deliveries.c.status == "DELIVERING",
+            (webhook_deliveries.c.last_attempt_at.is_(None))
+            | (webhook_deliveries.c.last_attempt_at < now - DELIVERY_LEASE_TIMEOUT),
+        )
+        .values(
+            status="PENDING",
+            next_retry_at=now,
+            last_error={"message": "Recovered stale delivery lease"},
+        )
+    )
+    candidate_ids = (
+        select(webhook_deliveries.c.id)
+        .where(
+            webhook_deliveries.c.status == "PENDING",
+            (webhook_deliveries.c.next_retry_at.is_(None))
+            | (webhook_deliveries.c.next_retry_at <= now),
+        )
+        .order_by(webhook_deliveries.c.created_at)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
     rows = (
         await conn.execute(
-            select(webhook_deliveries).where(
-                webhook_deliveries.c.status == "PENDING",
-                (webhook_deliveries.c.next_retry_at.is_(None)) | (webhook_deliveries.c.next_retry_at <= now),
-            )
+            webhook_deliveries.update()
+            .where(webhook_deliveries.c.id.in_(candidate_ids))
+            .values(status="DELIVERING", last_attempt_at=now)
+            .returning(webhook_deliveries)
         )
     ).all()
+    await conn.commit()
 
     retried = 0
     for row in rows:
         retried += 1
-        # The original signed body isn't stored verbatim (only its
-        # signature/hash), so a retry re-signs an equivalent minimal
-        # envelope carrying the same idempotency key — a real receiver
-        # keys deduplication off `idempotency_key`, not byte-for-byte body
-        # equality.
-        body = {"idempotency_key": row.idempotency_key, "retry": True}
+        body_bytes = (
+            row.request_body.encode("utf-8")
+            if row.request_body
+            else json.dumps({"idempotency_key": row.idempotency_key, "retry": True}, sort_keys=True).encode("utf-8")
+        )
+        headers = {"Content-Type": "application/json"}
+        if row.signature:
+            headers["X-Procintel-Signature"] = f"sha256={row.signature}"
         try:
-            response = await http_client.post(row.endpoint_url, json=body)
-            succeeded = 200 <= response.status_code < 300
-            status_code = response.status_code
-        except httpx.HTTPError:
+            await validate_public_http_url(
+                row.endpoint_url,
+                allow_test_hosts=allow_test_hosts,
+            )
+            async with http_client.stream(
+                "POST",
+                row.endpoint_url,
+                content=body_bytes,
+                headers=headers,
+                follow_redirects=False,
+            ) as response:
+                succeeded = 200 <= response.status_code < 300
+                status_code = response.status_code
+        except (httpx.HTTPError, ValueError):
             succeeded = False
             status_code = None
 
@@ -271,24 +348,49 @@ async def retry_pending_deliveries(conn: AsyncConnection, http_client: httpx.Asy
         if succeeded:
             await conn.execute(
                 webhook_deliveries.update()
-                .where(webhook_deliveries.c.id == row.id)
-                .values(status="DELIVERED", attempt_count=new_attempt_count, last_attempt_at=now, response_status=status_code)
+                .where(
+                    webhook_deliveries.c.id == row.id,
+                    webhook_deliveries.c.status == "DELIVERING",
+                )
+                .values(
+                    status="DELIVERED",
+                    attempt_count=new_attempt_count,
+                    last_attempt_at=now,
+                    next_retry_at=None,
+                    response_status=status_code,
+                    last_error=None,
+                )
             )
         elif new_attempt_count >= MAX_ATTEMPTS:
             await conn.execute(
                 webhook_deliveries.update()
-                .where(webhook_deliveries.c.id == row.id)
-                .values(status="FAILED", attempt_count=new_attempt_count, last_attempt_at=now, response_status=status_code)
+                .where(
+                    webhook_deliveries.c.id == row.id,
+                    webhook_deliveries.c.status == "DELIVERING",
+                )
+                .values(
+                    status="FAILED",
+                    attempt_count=new_attempt_count,
+                    last_attempt_at=now,
+                    next_retry_at=None,
+                    response_status=status_code,
+                    last_error={"message": "Delivery attempts exhausted"},
+                )
             )
         else:
             await conn.execute(
                 webhook_deliveries.update()
-                .where(webhook_deliveries.c.id == row.id)
+                .where(
+                    webhook_deliveries.c.id == row.id,
+                    webhook_deliveries.c.status == "DELIVERING",
+                )
                 .values(
+                    status="PENDING",
                     attempt_count=new_attempt_count,
                     last_attempt_at=now,
                     next_retry_at=_next_retry_at(now, new_attempt_count),
                     response_status=status_code,
+                    last_error={"message": "Delivery attempt failed"},
                 )
             )
         await conn.commit()

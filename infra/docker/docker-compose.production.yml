@@ -66,6 +66,8 @@ services:
       RAW_STORE_ROOT: /var/lib/procintel/raw
       DOCUMENT_STORE_ROOT: /var/lib/procintel/documents
       EXPORT_ROOT: /var/lib/procintel/exports
+      OBJECT_STORAGE_BACKEND: ${OBJECT_STORAGE_BACKEND:-local}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-}
       DAILY_SCHEDULER_MAX_SLEEP_SECONDS: ${DAILY_SCHEDULER_MAX_SLEEP_SECONDS:-300}
     volumes:
       - raw_data:/var/lib/procintel/raw
@@ -89,8 +91,11 @@ services:
     environment:
       API_BASE_URL: http://api:8000
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:?set OIDC_ISSUER_URL}
+      OIDC_INTERNAL_ISSUER_URL: ${OIDC_INTERNAL_ISSUER_URL:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?set OIDC_CLIENT_ID}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?set OIDC_CLIENT_SECRET}
       OIDC_REDIRECT_URI: https://${PROCINTEL_HOSTNAME:?set PROCINTEL_HOSTNAME}/callback
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:?set AUTH_SESSION_SECRET}
     networks: [private]
 
   scheduler:
@@ -114,9 +119,35 @@ services:
       RAW_STORE_ROOT: /var/lib/procintel/raw
       DOCUMENT_STORE_ROOT: /var/lib/procintel/documents
       EXPORT_ROOT: /var/lib/procintel/exports
+      OBJECT_STORAGE_BACKEND: ${OBJECT_STORAGE_BACKEND:-local}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-}
     volumes:
       - raw_data:/var/lib/procintel/raw
       - document_data:/var/lib/procintel/documents
+      - export_data:/var/lib/procintel/exports
+    networks: [private]
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.scheduler
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "services.ingestion.orchestration.cli", "run-worker", "--poll-interval-seconds", "${JOB_WORKER_POLL_SECONDS:-5}"]
+    env_file:
+      - path: .env.production
+        required: false
+    environment:
+      DATABASE_URL: postgresql://procintel_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-procintel}
+      PROCINTEL_ENV: production
+      RAW_STORE_ROOT: /var/lib/procintel/raw
+      EXPORT_ROOT: /var/lib/procintel/exports
+      OBJECT_STORAGE_BACKEND: ${OBJECT_STORAGE_BACKEND:-local}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-}
+    volumes:
+      - raw_data:/var/lib/procintel/raw
       - export_data:/var/lib/procintel/exports
     networks: [private]
 

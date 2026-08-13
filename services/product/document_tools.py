@@ -148,6 +148,7 @@ async def evaluate_phrase_monitor(
 ) -> int:
     from packages.domain.tables import (
         act_cpv_codes,
+        document_act_links,
         document_pages,
         document_phrase_matches,
         document_phrase_monitors,
@@ -164,15 +165,33 @@ async def evaluate_phrase_monitor(
     ).first()
     if monitor is None or not monitor.is_active:
         return 0
+    linked_act = procurement_acts.alias("phrase_monitor_linked_act")
+    document_process = (
+        sa.select(
+            document_act_links.c.document_id,
+            linked_act.c.process_id,
+        )
+        .join(linked_act, linked_act.c.id == document_act_links.c.act_id)
+        .where(linked_act.c.process_id.is_not(None))
+        .order_by(
+            document_act_links.c.document_id,
+            document_act_links.c.created_at,
+        )
+        .distinct(document_act_links.c.document_id)
+        .subquery("phrase_monitor_document_process")
+    )
     query = (
         sa.select(
             documents.c.id.label("document_id"),
-            procurement_acts.c.process_id,
+            document_process.c.process_id,
             document_pages.c.page_number,
             document_pages.c.text,
         )
         .join(documents, documents.c.id == document_pages.c.document_id)
-        .outerjoin(procurement_acts, procurement_acts.c.id == documents.c.act_id)
+        .outerjoin(
+            document_process,
+            document_process.c.document_id == documents.c.id,
+        )
         .where(document_pages.c.text != "")
     )
     cpv_prefixes = list(monitor.cpv_prefixes or [])
@@ -189,7 +208,7 @@ async def evaluate_phrase_monitor(
                     )
                 )
                 .where(
-                    related_act.c.process_id == procurement_acts.c.process_id,
+                    related_act.c.process_id == document_process.c.process_id,
                     sa.or_(
                         *(
                             related_cpv.c.cpv_code.like(f"{prefix}%")

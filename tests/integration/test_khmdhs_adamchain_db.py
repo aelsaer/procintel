@@ -11,7 +11,7 @@ merged_into_process_id).
 import asyncio
 import os
 import uuid
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 import httpx
 import pytest

@@ -8,7 +8,6 @@ inserted PENDING row.
 Skipped automatically unless $DATABASE_URL is set.
 """
 
-import json
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -120,7 +119,7 @@ async def test_multiplexing_channel_delivers_email_and_webhook_and_records_webho
     channel = MultiplexingDeliveryChannel(
         [
             EmailDeliveryChannel(SmtpConfig(host="smtp.example.test")),
-            WebhookLikeDeliveryChannel("WEBHOOK"),
+            WebhookLikeDeliveryChannel("WEBHOOK", allow_test_hosts=True),
         ]
     )
     try:
@@ -170,7 +169,7 @@ async def test_multiplexing_channel_delivers_email_and_webhook_and_records_webho
 
 
 @respx.mock
-async def test_retry_pending_deliveries_succeeds_and_marks_delivered():
+async def test_retry_recovers_a_stale_delivery_lease_and_marks_delivered():
     route = respx.post(WEBHOOK_URL).mock(return_value=httpx.Response(200))
     engine = create_async_engine(_asyncpg_url())
     try:
@@ -197,15 +196,19 @@ async def test_retry_pending_deliveries_succeeds_and_marks_delivered():
                     endpoint_url=WEBHOOK_URL,
                     idempotency_key=f"{alert_event_id}:retry-test",
                     signature="deadbeef",
-                    status="PENDING",
+                    status="DELIVERING",
                     attempt_count=1,
-                    next_retry_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+                    last_attempt_at=datetime.now(timezone.utc) - timedelta(minutes=20),
                 )
             )
             await conn.commit()
             try:
                 async with httpx.AsyncClient() as client:
-                    retried = await retry_pending_deliveries(conn, client)
+                    retried = await retry_pending_deliveries(
+                        conn,
+                        client,
+                        allow_test_hosts=True,
+                    )
                 assert retried == 1
                 assert route.called
 
@@ -258,7 +261,11 @@ async def test_retry_pending_deliveries_gives_up_after_max_attempts():
             await conn.commit()
             try:
                 async with httpx.AsyncClient() as client:
-                    await retry_pending_deliveries(conn, client)
+                    await retry_pending_deliveries(
+                        conn,
+                        client,
+                        allow_test_hosts=True,
+                    )
 
                 row = (
                     await conn.execute(select(webhook_deliveries).where(webhook_deliveries.c.id == delivery_id))

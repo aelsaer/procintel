@@ -265,14 +265,18 @@ _FUNDING_QUERY = sa.text(
 _DOCUMENT_QUERY = sa.text(
     """
     SELECT d.id::text AS id, 'document' AS kind,
-           d.id::text AS document_id, a.process_id::text AS process_id,
+           d.id::text AS document_id,
+           (ARRAY_AGG(DISTINCT a.process_id)
+              FILTER (WHERE a.process_id IS NOT NULL))[1]::text AS process_id,
+           ARRAY_REMOVE(ARRAY_AGG(DISTINCT a.process_id::text), NULL) AS process_ids,
            d.title, d.document_type AS status, d.created_at AS updated_at,
            STRING_AGG(dp.text, E'\n' ORDER BY dp.page_number) AS document_text,
            ARRAY_REMOVE(ARRAY[d.sha256, d.source_url], NULL) AS identifiers
     FROM documents d
-    LEFT JOIN procurement_acts a ON a.id=d.act_id
+    LEFT JOIN document_act_links dal ON dal.document_id=d.id
+    LEFT JOIN procurement_acts a ON a.id=dal.act_id
     LEFT JOIN document_pages dp ON dp.document_id=d.id
-    GROUP BY d.id, a.process_id
+    GROUP BY d.id
     ORDER BY d.id
     """
 )

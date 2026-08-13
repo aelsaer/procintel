@@ -35,6 +35,8 @@ class AuthenticatedUser:
     scopes: frozenset[str] = frozenset()
     auth_method: str = "OIDC"
     mfa_verified: bool = False
+    email_verified: bool = False
+    user_id: str | None = None
 
 
 class JwtVerifier:
@@ -144,6 +146,7 @@ class JwtVerifier:
             role=role,
             scopes=frozenset(str(claim) for claim in str(claims.get("scope") or "").split()),
             mfa_verified=mfa_verified,
+            email_verified=claims.get("email_verified") is True,
         )
 
     def _extract_role(self, claims: dict[str, Any]) -> str:

@@ -39,7 +39,7 @@ from packages.domain.tables import (  # noqa: E402
     procurement_acts,
     source_records,
 )
-from packages.source_clients.raw_store import LocalFilesystemRawStore  # noqa: E402
+from packages.source_clients.raw_store import configured_raw_store  # noqa: E402
 from services.ingestion.connectors.diavgeia.client import DiavgeiaClient  # noqa: E402
 from services.ingestion.connectors.diavgeia.config import DiavgeiaConnectorConfig  # noqa: E402
 from services.ingestion.connectors.diavgeia.resolve import (  # noqa: E402
@@ -194,7 +194,7 @@ async def _run(args: argparse.Namespace) -> None:
         os.environ["MEF_RATE_LIMIT_PER_MINUTE"] = str(args.mef_rate)
 
     engine = create_async_engine(_to_asyncpg_url(args.database_url))
-    raw_store = LocalFilesystemRawStore(args.raw_root)
+    raw_store = configured_raw_store(args.raw_root)
     diavgeia_client = (
         DiavgeiaClient(DiavgeiaConnectorConfig.from_env())
         if "diavgeia" in providers and not args.local_only

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from packages.domain.tables import (
     act_cpv_codes,
     act_identifiers,
+    document_act_links,
     document_pages,
     documents,
     procurement_acts,
@@ -264,7 +265,29 @@ async def load_tender_publication_bundle(
 
     document_rows = (
         await conn.execute(
-            sa.select(documents).where(documents.c.act_id.in_(act_ids))
+            sa.select(
+                documents,
+                document_act_links.c.act_id.label("linked_act_id"),
+                sa.func.coalesce(
+                    document_act_links.c.document_type,
+                    documents.c.document_type,
+                ).label("linked_document_type"),
+                sa.func.coalesce(
+                    document_act_links.c.title,
+                    documents.c.title,
+                ).label("linked_title"),
+                sa.func.coalesce(
+                    document_act_links.c.source_url,
+                    documents.c.source_url,
+                ).label("linked_source_url"),
+            )
+            .join(
+                document_act_links,
+                document_act_links.c.document_id == documents.c.id,
+            )
+            .where(document_act_links.c.act_id.in_(act_ids))
+            .order_by(documents.c.id, document_act_links.c.created_at)
+            .distinct(documents.c.id)
         )
     ).mappings().all()
     document_ids = [row["id"] for row in document_rows]
@@ -297,10 +320,10 @@ async def load_tender_publication_bundle(
         )
         document_items.append({
             "document_id": str(row["id"]),
-            "act_id": str(row["act_id"]) if row["act_id"] else None,
-            "document_type": row["document_type"],
-            "title": row["title"],
-            "source_url": row["source_url"],
+            "act_id": str(row["linked_act_id"]),
+            "document_type": row["linked_document_type"],
+            "title": row["linked_title"],
+            "source_url": row["linked_source_url"],
             "object_uri": row["object_uri"],
             "mime_type": row["mime_type"],
             "file_size": row["file_size"],

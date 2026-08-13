@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -21,6 +22,7 @@ from packages.domain.tables import (
     tenant_invitations,
     tenant_memberships,
     tenant_subscriptions,
+    oidc_subject_tenant_bindings,
     saas_plans,
     users,
 )
@@ -405,6 +407,20 @@ async def accept_invitation(
         raise HTTPException(status_code=404, detail="invitation is invalid or expired")
     if not user.email or user.email.casefold() != invitation.email.casefold():
         raise HTTPException(status_code=403, detail="invitation email does not match authenticated user")
+    if user.auth_method == "OIDC" and not user.email_verified:
+        raise HTTPException(status_code=403, detail="invitation acceptance requires a verified email")
+    issuer = os.environ.get("OIDC_ISSUER_URL", "procintel-local").rstrip("/")
+    if user.auth_method == "OIDC":
+        existing_binding = (
+            await conn.execute(
+                sa.select(oidc_subject_tenant_bindings.c.tenant_id).where(
+                    oidc_subject_tenant_bindings.c.issuer == issuer,
+                    oidc_subject_tenant_bindings.c.subject == user.subject,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_binding is not None and existing_binding != invitation.tenant_id:
+            raise HTTPException(status_code=409, detail="identity is already bound to another organization")
     await conn.execute(
         pg_insert(users)
         .values(id=uuid.uuid4(), email=user.email, display_name=user.email.split("@", 1)[0])
@@ -432,6 +448,25 @@ async def accept_invitation(
                 .returning(tenant_memberships)
             )
         ).one()
+    if user.auth_method == "OIDC":
+        await conn.execute(
+            pg_insert(oidc_subject_tenant_bindings)
+            .values(
+                id=uuid.uuid4(),
+                issuer=issuer,
+                subject=user.subject,
+                tenant_id=invitation.tenant_id,
+                user_id=member.id,
+                last_login_at=datetime.now(timezone.utc),
+            )
+            .on_conflict_do_update(
+                index_elements=[
+                    oidc_subject_tenant_bindings.c.issuer,
+                    oidc_subject_tenant_bindings.c.subject,
+                ],
+                set_={"last_login_at": datetime.now(timezone.utc)},
+            )
+        )
     await conn.execute(
         tenant_invitations.update()
         .where(tenant_invitations.c.id == invitation.id)

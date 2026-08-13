@@ -13,10 +13,16 @@ function clearClientSession() {
 
 export const procurementAuthProvider: AuthProvider = {
   login: async ({ token, mode, redirectTo }: { token?: string; mode?: "local"; redirectTo?: string }) => {
-    if (token && typeof window !== "undefined") window.localStorage.setItem(ACCESS_TOKEN_KEY, token);
+    if (token && typeof window !== "undefined") {
+      // Remove bearer tokens left by pre-BFF releases; new sessions never
+      // expose credentials to JavaScript.
+      window.localStorage.removeItem(ACCESS_TOKEN_KEY);
+    }
     try {
       await api.getMe();
       if (mode === "local" && typeof window !== "undefined") {
+        // This is only a non-secret development UX marker. OIDC credentials
+        // remain exclusively in the encrypted HttpOnly cookie.
         window.localStorage.setItem(LOCAL_SESSION_KEY, "true");
       }
       try {
@@ -39,9 +45,10 @@ export const procurementAuthProvider: AuthProvider = {
   },
   check: async () => {
     if (typeof window !== "undefined") {
-      const hasToken = Boolean(window.localStorage.getItem(ACCESS_TOKEN_KEY));
+      const hasLegacyToken = Boolean(window.localStorage.getItem(ACCESS_TOKEN_KEY));
       const hasLocalSession = window.localStorage.getItem(LOCAL_SESSION_KEY) === "true";
-      if (!hasToken && !hasLocalSession) return { authenticated: false };
+      const oidcConfigured = Boolean(await (await import("@/lib/oidc")).getOidcConfig());
+      if (!oidcConfigured && !hasLegacyToken && !hasLocalSession) return { authenticated: false };
     }
     try {
       await api.getMe();

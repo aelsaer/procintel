@@ -189,6 +189,9 @@ async def run_due_jobs(
             try:
                 result = await job.run_window(conn, date_from, date_to)
             except Exception as exc:  # noqa: BLE001 — deliberately broad: any failure must not advance the watermark
+                # Connector SQL failures abort the active PostgreSQL
+                # transaction. Recover it before persisting run state.
+                await conn.rollback()
                 await conn.execute(
                     source_cursors.update()
                     .where(
@@ -280,5 +283,6 @@ async def run_due_jobs(
             outcomes.append(JobRunOutcome(job=job, ran=True, date_from=date_from, date_to=date_to, result=result))
         finally:
             await advisory_unlock(conn, lock_key)
+            await conn.commit()
 
     return outcomes

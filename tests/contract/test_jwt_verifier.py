@@ -49,6 +49,7 @@ def _make_token(rsa_keypair, *, claims_override=None, headers_override=None):
         "aud": AUDIENCE,
         "sub": "user-123",
         "email": "analyst@example.test",
+        "email_verified": True,
         "role": "ANALYST",
         "tenant_id": "11111111-1111-1111-1111-111111111111",
         "iat": now,
@@ -81,6 +82,20 @@ async def test_verify_a_valid_token_returns_authenticated_user(rsa_keypair, jwks
     assert user.email == "analyst@example.test"
     assert user.role == "ANALYST"
     assert user.tenant_id == "11111111-1111-1111-1111-111111111111"
+    assert user.email_verified is True
+
+
+@respx.mock
+async def test_unverified_email_claim_is_preserved_as_unverified(rsa_keypair, jwks_body):
+    respx.get(JWKS_URL).mock(return_value=httpx.Response(200, json=jwks_body))
+    verifier = JwtVerifier(_config())
+    try:
+        user = await verifier.verify(
+            _make_token(rsa_keypair, claims_override={"email_verified": False})
+        )
+    finally:
+        await verifier.aclose()
+    assert user.email_verified is False
 
 
 @respx.mock

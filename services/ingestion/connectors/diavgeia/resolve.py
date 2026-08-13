@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from packages.domain.tables import (
     act_identifiers,
     act_links,
-    documents,
+    document_act_links,
     procurement_acts,
     process_members,
 )
@@ -273,10 +273,10 @@ async def _maybe_process_decision_document(
         return "SKIPPED"
     existing = (
         await conn.execute(
-            select(documents.c.id)
+            select(document_act_links.c.document_id)
             .where(
-                documents.c.act_id == result.act_id,
-                documents.c.document_type == "DIAVGEIA_DECISION_PDF",
+                document_act_links.c.act_id == result.act_id,
+                document_act_links.c.document_type == "DIAVGEIA_DECISION_PDF",
             )
             .limit(1)
         )

@@ -122,7 +122,7 @@ def render_proposal_docx(
 ) -> bytes:
     """Render a standards-compliant minimal DOCX without native dependencies."""
     generated_at = generated_at or datetime.now(timezone.utc)
-    document = ET.Element(f"{{{_W}}}document", {f"xmlns:r": _R})
+    document = ET.Element(f"{{{_W}}}document", {"xmlns:r": _R})
     body = ET.SubElement(document, f"{{{_W}}}body")
     _paragraph(body, title, style="Title")
     _paragraph(body, f"Generated {generated_at.isoformat()}")

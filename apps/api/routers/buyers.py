@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from packages.domain.tables import act_parties, entities, entity_identifiers, procurement_acts
+from packages.domain.tables import act_parties, entities, procurement_acts
 from packages.schemas.responses import BuyerSuppliersResponse, BuyerSummaryResponse, SupplierShareResponse
 
 from ..db import get_conn

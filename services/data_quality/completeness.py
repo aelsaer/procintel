@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -226,8 +226,7 @@ async def collect_source_completeness(
                 ),
                 document_acts AS MATERIALIZED (
                     SELECT DISTINCT document.act_id
-                    FROM documents document
-                    WHERE document.act_id IS NOT NULL
+                    FROM document_act_links document
                 ),
                 party_acts AS MATERIALIZED (
                     SELECT DISTINCT party.act_id

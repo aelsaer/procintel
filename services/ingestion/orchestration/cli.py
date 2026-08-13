@@ -21,7 +21,6 @@ from datetime import datetime, time, timedelta
 from typing import Awaitable, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import create_async_engine
 
 import httpx
@@ -62,6 +61,8 @@ from services.intelligence.eu_benchmarking import (
 from services.product.document_tools import evaluate_all_phrase_monitors
 from services.search_index.catalog import reindex_catalogs
 from services.search_index.config import OpenSearchConfig
+from services.workers.durable import run_durable_worker
+from packages.tenancy import all_tenant_ids, tenant_session
 
 from .jobs import DEFAULT_DAILY_GEMI_MAX_LOOKUPS, default_jobs
 from .scheduler import run_due_jobs
@@ -384,7 +385,12 @@ async def _run_once(
                 print(f"framework memberships: FAILED -> {type(exc).__name__}: {exc}")
 
             try:
-                phrase_results = await evaluate_all_phrase_monitors(conn)
+                phrase_results: dict[str, int] = {}
+                for tenant_id in await all_tenant_ids(conn):
+                    async with tenant_session(conn, tenant_id):
+                        tenant_results = await evaluate_all_phrase_monitors(conn)
+                    for key, value in tenant_results.items():
+                        phrase_results[key] = phrase_results.get(key, 0) + value
                 print(f"document phrase monitors: {phrase_results}")
             except Exception as exc:  # noqa: BLE001 - marts can still refresh from existing data
                 await conn.rollback()
@@ -399,10 +405,12 @@ async def _run_once(
                     date_to=today,
                     snapshot_date=today,
                 )
-                cross_border_runs = await refresh_all_cross_border_matches(
-                    conn,
-                    as_of=today,
-                )
+                cross_border_runs = []
+                for tenant_id in await all_tenant_ids(conn):
+                    async with tenant_session(conn, tenant_id):
+                        cross_border_runs.extend(
+                            await refresh_all_cross_border_matches(conn, as_of=today)
+                        )
                 print(
                     "European intelligence: "
                     f"cohorts={benchmark_count} "
@@ -438,16 +446,22 @@ async def _run_once(
 
             if with_opportunity_scoring:
                 try:
-                    tenant_ids = await tenant_ids_with_business_profiles(conn)
+                    tenant_ids = await all_tenant_ids(conn)
                     total_scores = 0
+                    scored_tenants = 0
                     for tenant_id in tenant_ids:
-                        score_result = await score_opportunities_for_tenant(
-                            conn,
-                            tenant_id=tenant_id,
-                            lookback_days=scoring_lookback_days,
-                        )
+                        async with tenant_session(conn, tenant_id):
+                            profile_tenant_ids = await tenant_ids_with_business_profiles(conn)
+                            if not profile_tenant_ids:
+                                continue
+                            score_result = await score_opportunities_for_tenant(
+                                conn,
+                                tenant_id=tenant_id,
+                                lookback_days=scoring_lookback_days,
+                            )
                         total_scores += score_result.scores_written
-                    print(f"tenant opportunity scoring: tenants={len(tenant_ids)} scores={total_scores}")
+                        scored_tenants += 1
+                    print(f"tenant opportunity scoring: tenants={scored_tenants} scores={total_scores}")
                 except Exception as exc:  # noqa: BLE001 - delivery must still run
                     await conn.rollback()
                     print(f"tenant opportunity scoring: FAILED -> {type(exc).__name__}: {exc}")
@@ -476,8 +490,15 @@ async def _run_once(
 
             if with_webhook_retries:
                 try:
+                    retried = 0
+                    reminder_counts: dict[str, int] = {}
                     async with httpx.AsyncClient(timeout=10.0) as client:
-                        retried = await retry_pending_deliveries(conn, client)
+                        for tenant_id in await all_tenant_ids(conn):
+                            async with tenant_session(conn, tenant_id):
+                                retried += await retry_pending_deliveries(conn, client)
+                        # This service performs its own RLS-aware tenant sweep.
+                        # Running it inside the loop above repeats all work once
+                        # for every tenant and can overcount failed deliveries.
                         reminder_counts = await deliver_due_reminders(conn, client)
                     print(f"webhook delivery retries: processed={retried}")
                     print(f"bid reminders: {reminder_counts}")
@@ -486,7 +507,10 @@ async def _run_once(
                     print(f"webhook delivery retries: FAILED -> {type(exc).__name__}: {exc}")
 
             try:
-                expired_exports = await cleanup_expired_exports(conn)
+                expired_exports = 0
+                for tenant_id in await all_tenant_ids(conn):
+                    async with tenant_session(conn, tenant_id):
+                        expired_exports += await cleanup_expired_exports(conn)
                 print(f"expired exports: cleaned={expired_exports}")
             except Exception as exc:  # noqa: BLE001 - maintenance must not hide completed ingestion
                 await conn.rollback()
@@ -577,7 +601,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    for name in ("run-once", "run-daily", "run-forever"):
+    for name in ("run-once", "run-daily", "run-forever", "run-worker"):
         sub = subparsers.add_parser(name)
         sub.add_argument("--database-url", default=os.environ.get("DATABASE_URL"))
         sub.add_argument("--raw-root", default=os.environ.get("RAW_STORE_ROOT", "./raw"))
@@ -637,7 +661,7 @@ def main() -> None:
                 ),
                 help="maximum wait before recomputing wall-clock time",
             )
-        if name == "run-forever":
+        if name in {"run-forever", "run-worker"}:
             sub.add_argument("--poll-interval-seconds", type=float, default=300.0)
 
     args = parser.parse_args()
@@ -702,6 +726,14 @@ def main() -> None:
                 not args.no_webhook_retries,
                 not args.no_ckan_refresh,
                 args.timezone,
+            )
+        )
+    elif args.command == "run-worker":
+        asyncio.run(
+            run_durable_worker(
+                args.database_url,
+                raw_root=args.raw_root,
+                poll_interval_seconds=args.poll_interval_seconds,
             )
         )
 

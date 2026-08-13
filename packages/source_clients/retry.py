@@ -8,6 +8,7 @@ breaker.
 from __future__ import annotations
 
 import random
+import time
 from dataclasses import dataclass, field
 
 import httpx
@@ -29,27 +30,44 @@ class TransientServerError(Exception):
 class CircuitOpenError(Exception):
     """Too many consecutive failures; short-circuit further attempts."""
 
+    def __init__(self, message: str, *, retry_after: float) -> None:
+        self.retry_after = max(0.0, retry_after)
+        super().__init__(message)
+
 
 @dataclass
 class CircuitBreaker:
     failure_threshold: int = 5
+    recovery_timeout: float = 60.0
     _consecutive_failures: int = field(default=0, init=False)
     _open: bool = field(default=False, init=False)
+    _opened_at: float | None = field(default=None, init=False)
 
     def record_success(self) -> None:
         self._consecutive_failures = 0
         self._open = False
+        self._opened_at = None
 
     def record_failure(self) -> None:
         self._consecutive_failures += 1
         if self._consecutive_failures >= self.failure_threshold:
             self._open = True
+            self._opened_at = time.monotonic()
 
     def raise_if_open(self) -> None:
-        if self._open:
-            raise CircuitOpenError(
-                f"circuit open after {self._consecutive_failures} consecutive failures"
-            )
+        if not self._open:
+            return
+        elapsed = time.monotonic() - (self._opened_at or 0.0)
+        retry_after = max(0.0, self.recovery_timeout - elapsed)
+        if retry_after <= 0:
+            self._open = False
+            self._opened_at = None
+            self._consecutive_failures = 0
+            return
+        raise CircuitOpenError(
+            f"circuit open after {self._consecutive_failures} consecutive failures",
+            retry_after=retry_after,
+        )
 
 
 def _wait_for_retry(retry_state: RetryCallState) -> float:

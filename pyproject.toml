@@ -21,6 +21,8 @@ dependencies = [
     "pillow>=10",
     "pyjwt[crypto]>=2.8",
     "fpdf2>=2.8",
+    "boto3>=1.35",
+    "defusedxml>=0.7",
 ]
 # No opensearch-py here: the official client pulls in grpcio/protobuf for
 # gRPC support this codebase never uses, and its transport isn't httpx-based
@@ -31,9 +33,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "bandit>=1.7",
+    "pip-audit>=2.7",
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "respx>=0.21",
+    "ruff>=0.8",
 ]
 
 [tool.setuptools.packages.find]
@@ -44,3 +49,12 @@ include = ["packages*", "services*", "apps*"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = ["apps/web", "artifacts", "build"]
+
+[tool.ruff.lint]
+# Keep this gate focused on execution-breaking and dead-code defects. Security
+# checks are enforced separately by Bandit and dependency audits in CI.
+select = ["E4", "E7", "E9", "F"]

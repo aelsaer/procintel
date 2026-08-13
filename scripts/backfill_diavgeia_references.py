@@ -17,7 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from packages.source_clients.raw_store import LocalFilesystemRawStore  # noqa: E402
+from packages.source_clients.raw_store import configured_raw_store  # noqa: E402
 from services.ingestion.connectors.diavgeia.client import DiavgeiaClient  # noqa: E402
 from services.ingestion.connectors.diavgeia.config import (  # noqa: E402
     DiavgeiaConnectorConfig,
@@ -38,7 +38,7 @@ def _database_name(url: str) -> str:
 async def _run(args: argparse.Namespace) -> dict[str, int]:
     engine = create_async_engine(_async_url(args.database_url))
     client = DiavgeiaClient(DiavgeiaConnectorConfig.from_env())
-    raw_store = LocalFilesystemRawStore(args.raw_root)
+    raw_store = configured_raw_store(args.raw_root)
     try:
         async with engine.connect() as conn:
             return await backfill_decision_references(

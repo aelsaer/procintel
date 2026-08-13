@@ -6,7 +6,7 @@
   "registrationAllowed": true,
   "registrationEmailAsUsername": true,
   "rememberMe": true,
-  "verifyEmail": false,
+  "verifyEmail": true,
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
   "resetPasswordAllowed": true,
@@ -26,7 +26,42 @@
   "offlineSessionIdleTimeout": 2592000,
   "revokeRefreshToken": true,
   "refreshTokenMaxReuse": 0,
+  "smtpServer": {
+    "host": "mailpit",
+    "port": "1025",
+    "from": "no-reply@procintel.local",
+    "fromDisplayName": "Procintel",
+    "ssl": "false",
+    "starttls": "false",
+    "auth": "false"
+  },
   "passwordPolicy": "length(12) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1)",
+  "requiredActions": [
+    {
+      "alias": "CONFIGURE_TOTP",
+      "name": "Configure OTP",
+      "providerId": "CONFIGURE_TOTP",
+      "enabled": true,
+      "defaultAction": true,
+      "priority": 10
+    },
+    {
+      "alias": "VERIFY_EMAIL",
+      "name": "Verify Email",
+      "providerId": "VERIFY_EMAIL",
+      "enabled": true,
+      "defaultAction": true,
+      "priority": 20
+    },
+    {
+      "alias": "UPDATE_PASSWORD",
+      "name": "Update Password",
+      "providerId": "UPDATE_PASSWORD",
+      "enabled": true,
+      "defaultAction": false,
+      "priority": 30
+    }
+  ],
   "internationalizationEnabled": true,
   "supportedLocales": [
     "el",
@@ -91,10 +126,11 @@
     {
       "clientId": "procintel-web",
       "name": "Procintel Web",
-      "description": "Public browser client using Authorization Code and PKCE",
+      "description": "Confidential BFF client using Authorization Code and PKCE",
       "enabled": true,
       "protocol": "openid-connect",
-      "publicClient": true,
+      "publicClient": false,
+      "secret": "${PROCINTEL_OIDC_CLIENT_SECRET}",
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,

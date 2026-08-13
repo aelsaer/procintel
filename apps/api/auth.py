@@ -64,7 +64,7 @@ def api_key_role(scopes: frozenset[str]) -> str:
 
 
 async def _apply_subject_tenant_binding(user: AuthenticatedUser) -> AuthenticatedUser:
-    """Prefer the server-side organization binding over a bootstrap JWT claim."""
+    """Resolve OIDC tenant, user and role from the authoritative DB membership."""
     if user.auth_method != "OIDC":
         return user
     issuer = os.environ.get("OIDC_ISSUER_URL", "").rstrip("/")
@@ -74,22 +74,63 @@ async def _apply_subject_tenant_binding(user: AuthenticatedUser) -> Authenticate
         from .db import get_engine
 
         async with get_engine().connect() as conn:
-            tenant_id = (
+            binding = (
                 await conn.execute(
                     sa.text(
                         """
-                        SELECT tenant_id
+                        SELECT tenant_id, user_id
                         FROM oidc_subject_tenant_bindings
                         WHERE issuer = :issuer AND subject = :subject
                         """
                     ),
                     {"issuer": issuer, "subject": user.subject},
                 )
+            ).first()
+            if binding is None:
+                # Bootstrap JWT tenant/role claims must never grant workspace access.
+                # Provisioning and invitation acceptance are the only endpoints that
+                # intentionally accept an unbound OIDC identity.
+                return replace(user, tenant_id=None, role="VIEWER", user_id=None)
+            await conn.execute(
+                sa.text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(binding.tenant_id)},
+            )
+            role = (
+                await conn.execute(
+                    sa.text(
+                        """
+                        SELECT role
+                        FROM tenant_memberships
+                        WHERE tenant_id = :tenant_id AND user_id = :user_id
+                        """
+                    ),
+                    {"tenant_id": binding.tenant_id, "user_id": binding.user_id},
+                )
             ).scalar_one_or_none()
-        return replace(user, tenant_id=str(tenant_id)) if tenant_id else user
-    except (RuntimeError, SQLAlchemyError):
-        # Migration-free developer/test environments continue using the JWT claim.
+        if role is None:
+            raise HTTPException(status_code=403, detail="Workspace membership is inactive")
+        return replace(
+            user,
+            tenant_id=str(binding.tenant_id),
+            user_id=str(binding.user_id),
+            role=str(role),
+        )
+    except HTTPException:
+        raise
+    except (RuntimeError, SQLAlchemyError) as exc:
+        if os.environ.get("PROCINTEL_ENV", "development").casefold() in {"production", "staging"}:
+            raise HTTPException(status_code=503, detail="Workspace authorization is unavailable") from exc
+        # Migration-free unit/developer environments can still exercise JWT verification.
         return user
+
+
+def _mfa_required(role: str) -> bool:
+    required = {
+        item.strip().upper()
+        for item in os.environ.get("OIDC_REQUIRE_MFA_ROLES", "OWNER,ADMIN").split(",")
+        if item.strip()
+    }
+    return role.upper() in required
 
 
 async def get_current_user(
@@ -105,6 +146,7 @@ async def get_current_user(
             scopes=frozenset({"read", "write", "admin"}),
             auth_method="DEV",
             mfa_verified=True,
+            email_verified=True,
         )
         if request is not None:
             request.state.auth_user = user
@@ -161,12 +203,16 @@ async def get_current_user(
             scopes=scopes,
             auth_method="API_KEY",
             mfa_verified=True,
+            email_verified=True,
+            user_id=str(row.created_by),
         )
         if request is not None:
             request.state.auth_user = user
         return user
     try:
         user = await _apply_subject_tenant_binding(await get_verifier().verify(token))
+        if _mfa_required(user.role) and not user.mfa_verified:
+            raise HTTPException(status_code=401, detail=f"MFA is required for role {user.role}")
         if request is not None:
             request.state.auth_user = user
         return user

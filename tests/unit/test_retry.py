@@ -94,3 +94,23 @@ def test_circuit_breaker_opens_after_threshold_and_recovers_on_success():
 
     breaker.record_success()
     breaker.raise_if_open()  # closed again
+
+
+def test_circuit_breaker_recovers_after_cooldown(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("packages.source_clients.retry.time.monotonic", lambda: now[0])
+    breaker = CircuitBreaker(failure_threshold=2, recovery_timeout=30.0)
+
+    breaker.record_failure()
+    breaker.record_failure()
+    with pytest.raises(CircuitOpenError) as exc_info:
+        breaker.raise_if_open()
+    assert exc_info.value.retry_after == pytest.approx(30.0)
+
+    now[0] = 129.0
+    with pytest.raises(CircuitOpenError) as exc_info:
+        breaker.raise_if_open()
+    assert exc_info.value.retry_after == pytest.approx(1.0)
+
+    now[0] = 130.0
+    breaker.raise_if_open()

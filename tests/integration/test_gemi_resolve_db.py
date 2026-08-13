@@ -12,7 +12,6 @@ the negative-result-is-not-permanent behavior (§18.3).
 import json
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx

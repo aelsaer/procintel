@@ -20,6 +20,7 @@ from packages.domain.tables import (
     audit_log,
     webhook_deliveries,
 )
+from packages.network_safety import validate_public_http_url
 
 from ..auth import get_current_user, require_role
 from ..db import get_tenant_scoped_conn
@@ -127,7 +128,7 @@ def _as_uuid(value: str) -> uuid.UUID:
         raise HTTPException(status_code=422, detail="Invalid UUID") from exc
 
 
-def _validate(body: AlertRuleCreateRequest) -> None:
+async def _validate(body: AlertRuleCreateRequest) -> None:
     unknown_events = set(body.event_types) - _EVENT_TYPES
     unknown_channels = set(body.delivery_channels) - _CHANNELS
     if not body.event_types or unknown_events:
@@ -144,8 +145,12 @@ def _validate(body: AlertRuleCreateRequest) -> None:
         if target.channel_type in {"WEBHOOK", "TEAMS", "SLACK"}:
             try:
                 HttpUrl(target.target)
+                await validate_public_http_url(target.target)
             except ValueError as exc:
-                raise HTTPException(status_code=422, detail="Webhook targets must be valid HTTP(S) URLs") from exc
+                raise HTTPException(
+                    status_code=422,
+                    detail="Webhook targets must be public HTTP(S) URLs",
+                ) from exc
 
 
 async def _serialize_rule(conn: AsyncConnection, tenant_id: uuid.UUID, rule_id: uuid.UUID) -> AlertRuleResponse:
@@ -193,7 +198,7 @@ async def create_alert_rule(
     conn: AsyncConnection = Depends(get_tenant_scoped_conn),
     user: AuthenticatedUser = Depends(require_role(*_NON_VIEWER_ROLES)),
 ) -> AlertRuleResponse:
-    _validate(body)
+    await _validate(body)
     tenant_id = tenant_uuid(user)
     user_id = await ensure_workspace_user(conn, user)
     rule_id = uuid.uuid4()
@@ -314,7 +319,7 @@ async def update_alert_rule(
     conn: AsyncConnection = Depends(get_tenant_scoped_conn),
     user: AuthenticatedUser = Depends(require_role(*_NON_VIEWER_ROLES)),
 ) -> AlertRuleResponse:
-    _validate(body)
+    await _validate(body)
     target_id = _as_uuid(rule_id)
     tenant_id = tenant_uuid(user)
     user_id = await ensure_workspace_user(conn, user)

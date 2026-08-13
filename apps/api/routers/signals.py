@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.auth.jwt_verifier import AuthenticatedUser
-from packages.domain.tables import business_profiles, entities, procurement_signals
+from packages.domain.tables import business_profiles
 
 from ..auth import get_current_user
 from ..db import get_tenant_scoped_conn

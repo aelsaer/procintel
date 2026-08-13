@@ -25,6 +25,7 @@ from packages.domain.tables import (
     bid_tasks,
     bid_workspaces,
     crm_handoffs,
+    document_act_links,
     documents,
     procurement_acts,
     procurement_processes,
@@ -868,7 +869,14 @@ async def create_bid_requirement(
         document_exists = (
             await conn.execute(
                 sa.select(documents.c.id)
-                .join(procurement_acts, procurement_acts.c.id == documents.c.act_id)
+                .join(
+                    document_act_links,
+                    document_act_links.c.document_id == documents.c.id,
+                )
+                .join(
+                    procurement_acts,
+                    procurement_acts.c.id == document_act_links.c.act_id,
+                )
                 .where(
                     documents.c.id == body.evidence_document_id,
                     procurement_acts.c.process_id == process_id,
@@ -1232,6 +1240,61 @@ async def update_bid_reminder(
     ).mappings().first()
     if row is None:
         raise HTTPException(status_code=404, detail="reminder not found")
+    await conn.commit()
+    return dict(row)
+
+
+@router.post("/{process_id}/reminders/{reminder_id}/retry", response_model=dict)
+async def retry_bid_reminder(
+    process_id: uuid.UUID,
+    reminder_id: uuid.UUID,
+    conn: AsyncConnection = Depends(get_tenant_scoped_conn),
+    user: AuthenticatedUser = Depends(require_role(*_WRITE_ROLES)),
+) -> dict:
+    tenant_id = tenant_uuid(user)
+    user_id = await ensure_workspace_user(conn, user)
+    workspace_id = await _workspace_id_for_process(
+        conn, process_id=process_id, tenant_id=tenant_id
+    )
+    row = (
+        await conn.execute(
+            bid_reminders.update()
+            .where(
+                bid_reminders.c.id == reminder_id,
+                bid_reminders.c.bid_workspace_id == workspace_id,
+                bid_reminders.c.tenant_id == tenant_id,
+                bid_reminders.c.status == "FAILED",
+            )
+            .values(
+                status="PENDING",
+                sent_at=None,
+                attempt_count=0,
+                last_attempt_at=None,
+                next_retry_at=None,
+                last_error=None,
+            )
+            .returning(bid_reminders)
+        )
+    ).mappings().first()
+    if row is None:
+        exists = await conn.scalar(
+            sa.select(sa.literal(True)).where(
+                bid_reminders.c.id == reminder_id,
+                bid_reminders.c.bid_workspace_id == workspace_id,
+                bid_reminders.c.tenant_id == tenant_id,
+            )
+        )
+        if exists:
+            raise HTTPException(status_code=409, detail="only failed reminders can be retried")
+        raise HTTPException(status_code=404, detail="reminder not found")
+    await _audit(
+        conn,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        action="bid.reminder.retried",
+        object_id=workspace_id,
+        details={"reminder_id": str(reminder_id)},
+    )
     await conn.commit()
     return dict(row)
 

@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.domain.tables import (
     act_locations,
+    document_act_links,
     document_pages,
     documents,
     geocoding_cache,
@@ -149,8 +150,16 @@ async def _document_texts(conn: AsyncConnection, act_id: uuid.UUID) -> list[str]
     rows = (
         await conn.execute(
             sa.select(document_pages.c.text)
-            .select_from(document_pages.join(documents, documents.c.id == document_pages.c.document_id))
-            .where(documents.c.act_id == act_id)
+            .select_from(
+                document_pages.join(
+                    documents,
+                    documents.c.id == document_pages.c.document_id,
+                ).join(
+                    document_act_links,
+                    document_act_links.c.document_id == documents.c.id,
+                )
+            )
+            .where(document_act_links.c.act_id == act_id)
             .order_by(document_pages.c.page_number)
         )
     ).all()

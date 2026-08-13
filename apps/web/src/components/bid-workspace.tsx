@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Bell, CheckCircle2, ClipboardCheck, FileBadge, Loader2, MessageSquare, Plus, Send, Sparkles, Trash2 } from "lucide-react";
+import { Bell, CheckCircle2, ClipboardCheck, FileBadge, Loader2, MessageSquare, Plus, RefreshCw, Send, Sparkles, Trash2 } from "lucide-react";
 import {
   ApiError,
   apiFetch,
@@ -483,8 +483,15 @@ export function BidWorkspacePanel({ processId }: { processId: string }) {
             {workspace.reminders.map((reminder) => (
               <div className="bid-list-row" key={reminder.id}>
                 <Bell size={16} />
-                <span><strong>{new Intl.DateTimeFormat("el-GR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(reminder.remind_at))}</strong><small>{reminder.channel}</small></span>
-                <Badge tone={reminder.status === "PENDING" ? "amber" : "green"}>{reminder.status}</Badge>
+                <span><strong>{new Intl.DateTimeFormat("el-GR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(reminder.remind_at))}</strong><small>{reminder.channel}{reminder.last_error?.message ? ` · ${reminder.last_error.message}` : ""}</small></span>
+                <Badge tone={reminder.status === "FAILED" ? "red" : reminder.status === "PENDING" ? "amber" : reminder.status === "SENT" ? "green" : "neutral"}>{reminder.status}</Badge>
+                {reminder.status === "FAILED" ? <button className="icon-button" type="button" title="Επανάληψη αποστολής" disabled={busy} onClick={() => void mutate(
+                  async () => {
+                    await apiFetch(`/v1/bids/${processId}/reminders/${reminder.id}/retry`, { method: "POST" });
+                    return reloadWorkspace();
+                  },
+                  setWorkspace,
+                )}><RefreshCw size={15} /></button> : null}
                 <button className="icon-button is-danger" type="button" title="Διαγραφή υπενθύμισης" onClick={() => void mutate(
                   async () => {
                     await apiFetch(`/v1/bids/${processId}/reminders/${reminder.id}`, { method: "DELETE" });

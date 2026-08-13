@@ -217,5 +217,6 @@ async def refresh_due_ckan_datasets(
             )
         finally:
             await advisory_unlock(conn, lock_key)
+            await conn.commit()
 
     return outcomes

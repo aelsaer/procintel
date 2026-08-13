@@ -45,7 +45,7 @@ def _asyncpg_url() -> str:
 @respx.mock
 async def test_process_document_writes_documents_pages_and_provenance_and_is_idempotent(tmp_path):
     respx.get(URL).mock(return_value=httpx.Response(200, content=FIXTURE_BYTES))
-    config = DocumentPipelineConfig()
+    config = DocumentPipelineConfig(allow_test_hosts=True)
     blob_store = LocalFilesystemDocumentBlobStore(tmp_path / "documents")
     engine = create_async_engine(_asyncpg_url())
 
@@ -131,7 +131,7 @@ async def test_process_document_retains_official_pdf_when_extraction_page_limit_
                 conn,
                 url=URL,
                 document_type="PAGE_LIMIT_TEST",
-                config=DocumentPipelineConfig(max_pages=0),
+                config=DocumentPipelineConfig(max_pages=0, allow_test_hosts=True),
                 blob_store=blob_store,
             )
             await conn.commit()
@@ -149,5 +149,44 @@ async def test_process_document_retains_official_pdf_when_extraction_page_limit_
                     select(document_pages).where(document_pages.c.document_id == result.document_id)
                 )
             ).all()
+    finally:
+        await engine.dispose()
+
+
+@respx.mock
+async def test_process_document_skips_only_pages_that_exceed_the_pixel_limit(tmp_path):
+    pixel_limit_fixture = FIXTURE_BYTES + b"\n% pixel-limit retention test\n"
+    respx.get(URL).mock(return_value=httpx.Response(200, content=pixel_limit_fixture))
+    blob_store = LocalFilesystemDocumentBlobStore(tmp_path / "documents")
+    engine = create_async_engine(_asyncpg_url())
+
+    try:
+        async with engine.connect() as conn:
+            result = await process_document(
+                conn,
+                url=URL,
+                document_type="PIXEL_LIMIT_TEST",
+                config=DocumentPipelineConfig(
+                    allow_test_hosts=True,
+                    min_text_layer_chars_per_page=10_000,
+                    max_page_pixels=1,
+                ),
+                blob_store=blob_store,
+            )
+            await conn.commit()
+
+            document_row = (
+                await conn.execute(select(documents).where(documents.c.id == result.document_id))
+            ).one()
+            pages = (
+                await conn.execute(
+                    select(document_pages).where(document_pages.c.document_id == result.document_id)
+                )
+            ).all()
+            assert result.is_new is True
+            assert document_row.text_extraction_status == "PARTIAL_PIXEL_LIMIT"
+            assert [(page.page_number, page.extraction_method, page.text) for page in pages] == [
+                (1, "SKIPPED_PIXEL_LIMIT", ""),
+            ]
     finally:
         await engine.dispose()

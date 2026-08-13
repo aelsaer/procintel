@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import logging
 import os
 import time
 import uuid
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 
 import sqlalchemy as sa
 from fastapi import FastAPI, Request, Response
@@ -27,6 +27,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from .db import get_engine
 from packages.domain.tables import audit_log, users
+from packages.request_rate_limit import consume_request_quota, prune_request_quota
 
 from .routers import (
     account,
@@ -117,12 +118,34 @@ _rate_windows: dict[str, deque[float]] = defaultdict(deque)
 _rate_lock = asyncio.Lock()
 
 
-def _request_rate_key(request: Request) -> str:
+def _client_ip(request: Request) -> str:
+    environment = os.environ.get("PROCINTEL_ENV", "development").casefold()
+    internal_client = request.headers.get("x-procintel-client-ip", "").strip()
+    if environment in {"production", "staging"} and internal_client:
+        try:
+            return str(ipaddress.ip_address(internal_client))
+        except ValueError:
+            pass
+    return request.client.host if request.client else "unknown"
+
+
+def _request_rate_keys(request: Request) -> tuple[str, ...]:
+    client_host = _client_ip(request)
+    keys = [f"ip:{client_host}"]
     authorization = request.headers.get("authorization", "")
     if authorization:
-        return "credential:" + hashlib.sha256(authorization.encode("utf-8")).hexdigest()
-    client_host = request.client.host if request.client else "unknown"
-    return f"ip:{client_host}"
+        keys.append("credential:" + hashlib.sha256(authorization.encode("utf-8")).hexdigest())
+    return tuple(keys)
+
+
+def _prune_rate_windows(cutoff: float, *, max_keys: int) -> None:
+    expired = [key for key, window in _rate_windows.items() if not window or window[-1] <= cutoff]
+    for key in expired:
+        _rate_windows.pop(key, None)
+    if len(_rate_windows) > max_keys:
+        oldest = sorted(_rate_windows, key=lambda key: _rate_windows[key][-1])
+        for key in oldest[: len(_rate_windows) - max_keys]:
+            _rate_windows.pop(key, None)
 
 
 @app.middleware("http")
@@ -130,26 +153,52 @@ async def enforce_request_rate_limit(request: Request, call_next):
     if request.url.path in {"/health", "/health/ready", "/metrics"}:
         return await call_next(request)
     limit = max(1, int(os.environ.get("PROCINTEL_RATE_LIMIT_PER_MINUTE", "600")))
-    now = time.monotonic()
-    cutoff = now - 60
-    key = _request_rate_key(request)
-    async with _rate_lock:
-        window = _rate_windows[key]
-        while window and window[0] <= cutoff:
-            window.popleft()
-        if len(window) >= limit:
-            retry_after = max(1, int(60 - (now - window[0])))
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "Request rate limit exceeded"},
-                headers={
-                    "Retry-After": str(retry_after),
-                    "X-RateLimit-Limit": str(limit),
-                    "X-RateLimit-Remaining": "0",
-                },
-            )
-        window.append(now)
-        remaining = max(0, limit - len(window))
+    keys = _request_rate_keys(request)
+    environment = os.environ.get("PROCINTEL_ENV", "development").casefold()
+    if environment in {"production", "staging"}:
+        try:
+            async with get_engine().begin() as conn:
+                decision = await consume_request_quota(conn, keys, limit=limit)
+                if uuid.uuid4().int % 1000 == 0:
+                    await prune_request_quota(conn)
+        except Exception:  # noqa: BLE001 - production limiter fails closed
+            logger.exception("Distributed request limiter is unavailable")
+            return JSONResponse(status_code=503, content={"detail": "Request throttling is unavailable"})
+        remaining = decision.remaining
+        retry_after = decision.retry_after
+        blocked = not decision.allowed
+    else:
+        now = time.monotonic()
+        cutoff = now - 60
+        max_keys = max(100, int(os.environ.get("PROCINTEL_RATE_LIMIT_MAX_KEYS", "10000")))
+        async with _rate_lock:
+            _prune_rate_windows(cutoff, max_keys=max_keys)
+            effective_keys = []
+            for key in keys:
+                effective_key = key if key in _rate_windows or len(_rate_windows) < max_keys else "overflow"
+                if effective_key not in effective_keys:
+                    effective_keys.append(effective_key)
+                window = _rate_windows[effective_key]
+                while window and window[0] <= cutoff:
+                    window.popleft()
+            windows = [_rate_windows[key] for key in effective_keys]
+            blocked_window = next((window for window in windows if len(window) >= limit), None)
+            retry_after = max(1, int(60 - (now - blocked_window[0]))) if blocked_window else 0
+            blocked = blocked_window is not None
+            if not blocked:
+                for window in windows:
+                    window.append(now)
+            remaining = max(0, limit - max(len(window) for window in windows))
+    if blocked:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Request rate limit exceeded"},
+            headers={
+                "Retry-After": str(retry_after),
+                "X-RateLimit-Limit": str(limit),
+                "X-RateLimit-Remaining": "0",
+            },
+        )
     response = await call_next(request)
     response.headers["X-RateLimit-Limit"] = str(limit)
     response.headers["X-RateLimit-Remaining"] = str(remaining)
@@ -223,7 +272,7 @@ async def _record_request_audit(
                         "role": user.role,
                         "auth_method": user.auth_method,
                     },
-                    ip_address=request.client.host if request.client else None,
+                    ip_address=_client_ip(request),
                     request_id=request_id,
                     outcome="SUCCESS" if response_status < 400 else "DENIED",
                 )

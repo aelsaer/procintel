@@ -89,7 +89,7 @@ from services.ingestion.enrichment_reconciliation import (  # noqa: E402
 from services.ingestion.enrichment_worker import (  # noqa: E402
     run_pending_enrichment_jobs,
 )
-from packages.source_clients.raw_store import LocalFilesystemRawStore  # noqa: E402
+from packages.source_clients.raw_store import configured_raw_store  # noqa: E402
 from services.search_index.config import OpenSearchConfig  # noqa: E402
 from services.search_index.indexer import (  # noqa: E402
     rebuild_all_indexes_atomic,
@@ -614,7 +614,7 @@ async def _run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                         return await backfill_decision_references(
                             conn,
                             client=client,
-                            raw_store=LocalFilesystemRawStore(args.raw_root),
+                            raw_store=configured_raw_store(args.raw_root),
                             limit=args.diavgeia_reference_budget,
                             process_documents=True,
                         )

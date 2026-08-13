@@ -52,6 +52,25 @@ async def test_get_current_user_returns_the_verified_user(monkeypatch):
     assert user == expected
 
 
+async def test_get_current_user_enforces_mfa_after_database_role_resolution(monkeypatch):
+    verified = AuthenticatedUser(
+        subject="u1", email="a@b.test", tenant_id=None, role="VIEWER", mfa_verified=False
+    )
+    elevated = AuthenticatedUser(
+        subject="u1", email="a@b.test", tenant_id="t1", role="OWNER", mfa_verified=False
+    )
+    monkeypatch.setattr(auth_module, "get_verifier", lambda: _FakeVerifier(user=verified))
+
+    async def apply_binding(user):
+        return elevated
+
+    monkeypatch.setattr(auth_module, "_apply_subject_tenant_binding", apply_binding)
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_module.get_current_user(authorization="Bearer some.jwt.token")
+    assert exc_info.value.status_code == 401
+    assert "MFA" in str(exc_info.value.detail)
+
+
 async def test_require_role_allows_a_permitted_role():
     check = auth_module.require_role("ANALYST", "ADMIN")
     user = AuthenticatedUser(subject="u1", email=None, tenant_id="t1", role="ANALYST")

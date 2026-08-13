@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from packages.source_clients.retry import CircuitOpenError
 from services.ingestion.connectors.mef.client import MefUpstreamUnavailableError
 from services.ingestion.enrichment_queue import ClaimedEnrichmentJob
 from services.ingestion.enrichment_worker import (
@@ -281,3 +282,84 @@ async def test_enrichment_sweep_claims_providers_round_robin(
 
     assert claimed_providers == ["PROVIDER_A", "PROVIDER_B"] * 2
     assert result.succeeded == 4
+
+
+async def test_open_circuit_defers_without_consuming_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = "KHMDHS_ADAMCHAIN"
+    job = ClaimedEnrichmentJob(
+        id=uuid.uuid4(),
+        provider=provider,
+        idempotency_key="adam:26PROC019999999",
+        payload={"adam": "26PROC019999999"},
+        object_type="act",
+        object_id=None,
+        source_record_id=None,
+        attempt_count=6,
+        max_attempts=8,
+    )
+    claims = [[job], []]
+    deferred_calls: list[dict[str, object]] = []
+
+    class FakeDependencies:
+        upstream_errors: dict[str, str] = {}
+        known_providers = {provider}
+        available_providers = {provider}
+
+        def __init__(self, raw_root: str) -> None:
+            self.runtime_unavailable_providers: set[str] = set()
+
+        async def aclose(self) -> None:
+            return None
+
+    class EmptyRows:
+        def all(self) -> list[object]:
+            return []
+
+    class FakeConnection:
+        async def execute(self, statement):
+            return EmptyRows()
+
+        async def commit(self) -> None:
+            return None
+
+        async def rollback(self) -> None:
+            return None
+
+    async def claim(*args, **kwargs):
+        return claims.pop(0)
+
+    async def dispatch(*args, **kwargs):
+        raise CircuitOpenError("provider cooling down", retry_after=17.0)
+
+    async def defer(*args, **kwargs) -> None:
+        deferred_calls.append(kwargs)
+
+    async def recover(*args, **kwargs) -> int:
+        return 0
+
+    monkeypatch.setattr(
+        "services.ingestion.enrichment_worker._Dependencies", FakeDependencies
+    )
+    monkeypatch.setattr(
+        "services.ingestion.enrichment_worker.claim_enrichment_jobs", claim
+    )
+    monkeypatch.setattr("services.ingestion.enrichment_worker._dispatch", dispatch)
+    monkeypatch.setattr(
+        "services.ingestion.enrichment_worker.defer_enrichment", defer
+    )
+    monkeypatch.setattr(
+        "services.ingestion.enrichment_worker.recover_stale_enrichment_jobs", recover
+    )
+    result = await run_pending_enrichment_jobs(
+        FakeConnection(),
+        raw_root="/tmp/raw",
+        limit=2,
+        providers={provider},
+    )
+
+    assert deferred_calls == [{"refund_attempt": True, "retry_after": 17.0}]
+    assert result.claimed == 1
+    assert result.failed == 0
+    assert result.by_provider == {provider: {"circuit_deferred": 1}}

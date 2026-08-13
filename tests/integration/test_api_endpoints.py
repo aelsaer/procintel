@@ -10,7 +10,7 @@ needed).
 import json
 import os
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path
 
 import httpx
@@ -19,7 +19,7 @@ import respx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from packages.domain.tables import act_parties, entities, entity_identifiers
+from packages.domain.tables import entities, entity_identifiers
 from packages.source_clients.raw_store import LocalFilesystemRawStore
 from services.ingestion.connectors.khmdhs.adamchain import resolve_adam_chain_for_act
 from services.ingestion.connectors.khmdhs.client import KhmdhsClient
@@ -46,6 +46,9 @@ def _asyncpg_url() -> str:
 @respx.mock
 async def test_api_endpoints_against_a_seeded_contract(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", DATABASE_URL)
+    monkeypatch.setenv("PROCINTEL_DEV_AUTH", "true")
+    monkeypatch.setenv("PROCINTEL_DEV_TENANT_ID", str(uuid.uuid4()))
+    monkeypatch.setenv("PROCINTEL_DEV_EMAIL", f"api-{uuid.uuid4().hex}@example.test")
 
     respx.post(f"{BASE_URL}/khmdhs-opendata/contract").mock(return_value=httpx.Response(200, json=SAMPLE_BODY))
     respx.get(f"{BASE_URL}/khmdhs-opendata/adamChain/{SEED_ADAM}").mock(

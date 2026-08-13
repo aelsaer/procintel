@@ -59,6 +59,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.domain.tables import act_cpv_codes, act_locations, act_parties, alert_events, alert_rules, procurement_acts
+from packages.tenancy import all_tenant_ids, tenant_session
 from services.ingestion.connectors.khmdhs.db_writer import ActUpsertResult
 from services.search_index.lexical import lexical_query_matches
 
@@ -352,6 +353,24 @@ async def evaluate_and_fire(
     return fired_count
 
 
+async def evaluate_and_fire_all_tenants(
+    conn: AsyncConnection,
+    *,
+    act_upsert: ActUpsertResult,
+    delivery_channel: DeliveryChannel,
+) -> int:
+    """Evaluate one shared procurement act against every isolated workspace."""
+    fired = 0
+    for tenant_id in await all_tenant_ids(conn):
+        async with tenant_session(conn, tenant_id):
+            fired += await evaluate_and_fire(
+                conn,
+                act_upsert=act_upsert,
+                delivery_channel=delivery_channel,
+            )
+    return fired
+
+
 async def evaluate_company_status_change_and_fire(
     conn: AsyncConnection,
     *,
@@ -386,6 +405,27 @@ async def evaluate_company_status_change_and_fire(
     return fired_count
 
 
+async def evaluate_company_status_change_for_all_tenants(
+    conn: AsyncConnection,
+    *,
+    entity_id: uuid.UUID,
+    old_status: str | None,
+    new_status: str | None,
+    delivery_channel: DeliveryChannel,
+) -> int:
+    fired = 0
+    for tenant_id in await all_tenant_ids(conn):
+        async with tenant_session(conn, tenant_id):
+            fired += await evaluate_company_status_change_and_fire(
+                conn,
+                entity_id=entity_id,
+                old_status=old_status,
+                new_status=new_status,
+                delivery_channel=delivery_channel,
+            )
+    return fired
+
+
 async def evaluate_buyer_new_procurement_and_fire(
     conn: AsyncConnection,
     *,
@@ -412,6 +452,25 @@ async def evaluate_buyer_new_procurement_and_fire(
     )
     await conn.commit()
     return fired_count
+
+
+async def evaluate_buyer_new_procurement_for_all_tenants(
+    conn: AsyncConnection,
+    *,
+    process_id: uuid.UUID,
+    buyer_entity_id: uuid.UUID,
+    delivery_channel: DeliveryChannel,
+) -> int:
+    fired = 0
+    for tenant_id in await all_tenant_ids(conn):
+        async with tenant_session(conn, tenant_id):
+            fired += await evaluate_buyer_new_procurement_and_fire(
+                conn,
+                process_id=process_id,
+                buyer_entity_id=buyer_entity_id,
+                delivery_channel=delivery_channel,
+            )
+    return fired
 
 
 async def evaluate_expiring_contracts_and_fire(

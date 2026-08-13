@@ -739,6 +739,28 @@ documents = sa.Table(
     sa.Column("created_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.func.now()),
 )
 
+document_act_links = sa.Table(
+    "document_act_links",
+    metadata,
+    sa.Column(
+        "document_id",
+        UUID(as_uuid=True),
+        sa.ForeignKey("documents.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    sa.Column(
+        "act_id",
+        UUID(as_uuid=True),
+        sa.ForeignKey("procurement_acts.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    sa.Column("source_record_id", UUID(as_uuid=True), sa.ForeignKey("source_records.id")),
+    sa.Column("document_type", sa.Text),
+    sa.Column("title", sa.Text),
+    sa.Column("source_url", sa.Text),
+    sa.Column("created_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.func.now()),
+)
+
 field_provenance = sa.Table(
     "field_provenance",
     metadata,
@@ -1351,6 +1373,10 @@ bid_reminders = sa.Table(
     sa.Column("channel", sa.Text, nullable=False, server_default="IN_APP"),
     sa.Column("status", sa.Text, nullable=False, server_default="PENDING"),
     sa.Column("sent_at", sa.TIMESTAMP(timezone=True)),
+    sa.Column("attempt_count", sa.Integer, nullable=False, server_default="0"),
+    sa.Column("last_attempt_at", sa.TIMESTAMP(timezone=True)),
+    sa.Column("next_retry_at", sa.TIMESTAMP(timezone=True)),
+    sa.Column("last_error", JSONB),
     sa.Column("created_by", UUID(as_uuid=True), sa.ForeignKey("users.id"), nullable=False),
     sa.Column("created_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.func.now()),
 )
@@ -1539,11 +1565,13 @@ webhook_deliveries = sa.Table(
     sa.Column("endpoint_url", sa.Text, nullable=False),
     sa.Column("idempotency_key", sa.Text, nullable=False),
     sa.Column("signature", sa.Text, nullable=False),
+    sa.Column("request_body", sa.Text),
     sa.Column("status", sa.Text, nullable=False, server_default="PENDING"),
     sa.Column("attempt_count", sa.Integer, nullable=False, server_default="0"),
     sa.Column("last_attempt_at", sa.TIMESTAMP(timezone=True)),
     sa.Column("next_retry_at", sa.TIMESTAMP(timezone=True)),
     sa.Column("response_status", sa.Integer),
+    sa.Column("last_error", JSONB),
     sa.Column("created_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.func.now()),
 )
 
@@ -1597,6 +1625,9 @@ alert_digest_runs = sa.Table(
     sa.Column("status", sa.Text, nullable=False, server_default="PENDING"),
     sa.Column("channels", sa.ARRAY(sa.Text), nullable=False, server_default="{}"),
     sa.Column("error", JSONB),
+    sa.Column("attempt_count", sa.Integer, nullable=False, server_default="0"),
+    sa.Column("last_attempt_at", sa.TIMESTAMP(timezone=True)),
+    sa.Column("next_retry_at", sa.TIMESTAMP(timezone=True)),
     sa.Column("created_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.func.now()),
     sa.Column("delivered_at", sa.TIMESTAMP(timezone=True)),
 )

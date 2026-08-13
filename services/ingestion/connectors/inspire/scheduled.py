@@ -8,7 +8,7 @@ from datetime import timedelta
 import httpx
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from packages.source_clients.raw_store import LocalFilesystemRawStore
+from packages.source_clients.raw_store import configured_raw_store
 
 from .capabilities import CapabilityCheckResult, validate_wms_service
 from .config import InspireReferenceConfig
@@ -37,7 +37,7 @@ async def refresh_inspire_reference_sources(
     config: InspireReferenceConfig | None = None,
 ) -> InspireRefreshResult:
     config = config or InspireReferenceConfig.from_env()
-    raw_store = LocalFilesystemRawStore(raw_root)
+    raw_store = configured_raw_store(raw_root)
     async with httpx.AsyncClient(
         timeout=config.request_timeout_seconds,
         follow_redirects=True,

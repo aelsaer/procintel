@@ -1,24 +1,26 @@
 """On-demand provider fetch requests.
 
 These endpoints make exact-identifier misses observable. They do not block
-on provider calls; work is persisted and then processed in a FastAPI
-background task using the same rate-limited source clients as ingestion.
+on provider calls; work is persisted and drained by the durable worker.
 """
 
 from __future__ import annotations
 
-import os
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.domain.tables import fetch_requests
+from packages.auth.jwt_verifier import AuthenticatedUser
 from packages.schemas.responses import FetchRequestCreate, FetchRequestResponse
-from services.ingestion.on_demand import ensure_fetch_request, process_fetch_request
+from services.ingestion.on_demand import ensure_fetch_request
+from services.product.entitlements import EntitlementLimitExceeded, consume_entitlement
 
-from ..db import get_conn, get_engine
+from ..auth import get_current_user
+from ..db import get_tenant_scoped_conn
+from ..workspace import tenant_uuid
 
 router = APIRouter(prefix="/v1/fetch-requests", tags=["fetch-requests"])
 
@@ -52,31 +54,40 @@ async def load_fetch_request(conn: AsyncConnection, request_id: uuid.UUID):
     return row
 
 
-def schedule_fetch_request(background_tasks: BackgroundTasks, request_id: uuid.UUID) -> None:
-    background_tasks.add_task(
-        process_fetch_request,
-        get_engine(),
-        request_id,
-        raw_root=os.environ.get("RAW_ROOT", "./raw"),
-    )
-
-
 @router.post("", response_model=FetchRequestResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_fetch_request(
     body: FetchRequestCreate,
-    background_tasks: BackgroundTasks,
-    conn: AsyncConnection = Depends(get_conn),
+    user: AuthenticatedUser = Depends(get_current_user),
+    conn: AsyncConnection = Depends(get_tenant_scoped_conn),
 ) -> FetchRequestResponse:
+    try:
+        await consume_entitlement(
+            conn,
+            tenant_id=tenant_uuid(user),
+            metric_code="provider_fetches_month",
+        )
+    except EntitlementLimitExceeded as exc:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "ENTITLEMENT_LIMIT",
+                "metric": exc.metric_code,
+                "limit": exc.limit,
+                "usage": exc.usage,
+            },
+        ) from exc
     request_id = await ensure_fetch_request(conn, body.identifier)
     if request_id is None:
         raise HTTPException(status_code=422, detail="Only exact ΑΔΑΜ/ΑΔΑ identifiers can be fetched on demand")
 
     row = await load_fetch_request(conn, request_id)
-    if row.status == "QUEUED":
-        schedule_fetch_request(background_tasks, request_id)
     return build_fetch_request_response(row)
 
 
 @router.get("/{request_id}", response_model=FetchRequestResponse)
-async def get_fetch_request(request_id: uuid.UUID, conn: AsyncConnection = Depends(get_conn)) -> FetchRequestResponse:
+async def get_fetch_request(
+    request_id: uuid.UUID,
+    _: AuthenticatedUser = Depends(get_current_user),
+    conn: AsyncConnection = Depends(get_tenant_scoped_conn),
+) -> FetchRequestResponse:
     return build_fetch_request_response(await load_fetch_request(conn, request_id))

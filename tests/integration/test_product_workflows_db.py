@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from apps.api.main import app
 from packages.domain.tables import procurement_processes
+from services.exports.generate import process_export_job_by_id
 
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -21,8 +22,9 @@ def _async_url() -> str:
 
 
 async def test_tenant_product_workflows_end_to_end(monkeypatch, tmp_path):
+    tenant_id = uuid.uuid4()
     monkeypatch.setenv("PROCINTEL_DEV_AUTH", "true")
-    monkeypatch.setenv("PROCINTEL_DEV_TENANT_ID", str(uuid.uuid4()))
+    monkeypatch.setenv("PROCINTEL_DEV_TENANT_ID", str(tenant_id))
     monkeypatch.setenv("PROCINTEL_DEV_EMAIL", f"workflow-{uuid.uuid4().hex}@example.test")
     monkeypatch.setenv("EXPORT_ROOT", str(tmp_path / "exports"))
     process_id = uuid.uuid4()
@@ -123,6 +125,9 @@ async def test_tenant_product_workflows_end_to_end(monkeypatch, tmp_path):
         })
         assert export.status_code == 202
         export_id = export.json()["id"]
+        pending = next(job for job in (await client.get("/v1/exports")).json() if job["id"] == export_id)
+        assert pending["status"] == "PENDING"
+        await process_export_job_by_id(uuid.UUID(export_id), tenant_id)
         jobs = (await client.get("/v1/exports")).json()
         completed = next(job for job in jobs if job["id"] == export_id)
         assert completed["status"] == "SUCCEEDED"

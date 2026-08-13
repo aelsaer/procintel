@@ -8,7 +8,7 @@ monkeypatched to no-ops so only the indexing hook itself is under test.
 """
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pytest
 
@@ -47,7 +47,7 @@ def _stub_enrichment_hooks(monkeypatch):
         return 0
 
     monkeypatch.setattr(scheduled_module, "resolve_adam_chain_for_act", _noop_resolve_adam_chain)
-    monkeypatch.setattr(scheduled_module, "evaluate_and_fire", _noop_evaluate_and_fire)
+    monkeypatch.setattr(scheduled_module, "evaluate_and_fire_all_tenants", _noop_evaluate_and_fire)
 
 
 async def test_indexes_every_upserted_act_when_opensearch_configured(monkeypatch):

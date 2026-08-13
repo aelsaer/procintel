@@ -400,7 +400,7 @@ async def run_data_quality_checks(
             "MISSING_OFFICIAL_DOCUMENT",
             "INFO",
             "a.act_type IN ('NOTICE', 'AWARD', 'CONTRACT') "
-            "AND NOT EXISTS (SELECT 1 FROM documents document WHERE document.act_id = a.id)",
+            "AND NOT EXISTS (SELECT 1 FROM document_act_links document WHERE document.act_id = a.id)",
             "jsonb_build_object('act_type', a.act_type)",
         ),
     )

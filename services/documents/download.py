@@ -10,9 +10,11 @@ same quota.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urljoin
 
 import httpx
 
+from packages.network_safety import validate_public_http_url
 from packages.source_clients.rate_limit import RateLimiter
 from packages.source_clients.retry import raise_for_retryable_status, retrying
 
@@ -46,26 +48,48 @@ async def download_document(
 
     @retrying(max_attempts=config.max_download_attempts)
     async def _download() -> DownloadedDocument:
-        if rate_limiter is not None:
-            await rate_limiter.acquire()
-        chunks: list[bytes] = []
-        total = 0
-        async with client.stream(
-            "GET", url, timeout=config.download_timeout_seconds
-        ) as response:
-            raise_for_retryable_status(response)
-            response.raise_for_status()
-            async for chunk in response.aiter_bytes():
-                total += len(chunk)
-                if total > config.max_file_size_bytes:
-                    raise DocumentTooLargeError(url, config.max_file_size_bytes)
-                chunks.append(chunk)
-            return DownloadedDocument(
-                url=url,
-                payload=b"".join(chunks),
-                http_status=response.status_code,
-                content_type=response.headers.get("content-type"),
-            )
+        current_url = url
+        for redirect_count in range(config.max_redirects + 1):
+            if config.validate_remote_destinations:
+                await validate_public_http_url(
+                    current_url,
+                    allow_test_hosts=config.allow_test_hosts,
+                )
+            if rate_limiter is not None:
+                await rate_limiter.acquire()
+            chunks: list[bytes] = []
+            total = 0
+            async with client.stream(
+                "GET",
+                current_url,
+                timeout=config.download_timeout_seconds,
+                follow_redirects=False,
+            ) as response:
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    if not location:
+                        response.raise_for_status()
+                    if redirect_count >= config.max_redirects:
+                        raise httpx.TooManyRedirects(
+                            "document download exceeded the redirect limit",
+                            request=response.request,
+                        )
+                    current_url = urljoin(current_url, location)
+                    continue
+                raise_for_retryable_status(response)
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if total > config.max_file_size_bytes:
+                        raise DocumentTooLargeError(url, config.max_file_size_bytes)
+                    chunks.append(chunk)
+                return DownloadedDocument(
+                    url=url,
+                    payload=b"".join(chunks),
+                    http_status=response.status_code,
+                    content_type=response.headers.get("content-type"),
+                )
+        raise AssertionError("redirect loop terminated unexpectedly")
 
     try:
         return await _download()

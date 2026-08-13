@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -24,7 +22,6 @@ from packages.domain.tables import (
     procurement_processes,
 )
 from services.analytics.profile_classification import CpvCatalogEntry, ClassifiedTerm, classify_business_description
-from services.analytics.scoring_worker import process_scoring_job_by_tenant
 
 from ..auth import get_current_user, require_role
 from ..db import get_tenant_scoped_conn
@@ -34,31 +31,6 @@ router = APIRouter(prefix="/v1/business-profile", tags=["workspace"])
 _WRITE_ROLES = ("OWNER", "ADMIN", "ANALYST", "SALES", "BID_MANAGER")
 _cpv_catalog_cache: tuple[CpvCatalogEntry, ...] = ()
 _cpv_catalog_count = -1
-_scoring_tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
-logger = logging.getLogger(__name__)
-
-
-async def _drain_scoring_jobs(tenant_id: uuid.UUID) -> None:
-    try:
-        await process_scoring_job_by_tenant(tenant_id)
-    except Exception:  # noqa: BLE001 - the durable job row records the failure
-        logger.exception("tenant opportunity scoring failed for %s", tenant_id)
-
-
-def _schedule_scoring(tenant_id: uuid.UUID) -> None:
-    existing = _scoring_tasks.get(tenant_id)
-    if existing is not None and not existing.done():
-        return
-    task = asyncio.create_task(_drain_scoring_jobs(tenant_id))
-    _scoring_tasks[tenant_id] = task
-
-    def remove_finished(finished: asyncio.Task[None]) -> None:
-        if _scoring_tasks.get(tenant_id) is finished:
-            _scoring_tasks.pop(tenant_id, None)
-
-    task.add_done_callback(remove_finished)
-
-
 class ProfileTermResponse(BaseModel):
     id: str | None = None
     term_type: str
@@ -374,7 +346,6 @@ async def set_relevance_feedback(
         )
     )
     await conn.commit()
-    _schedule_scoring(tenant_id)
     return RelevanceFeedbackResponse(
         id=str(row.id),
         process_id=str(row.process_id),
@@ -416,7 +387,6 @@ async def delete_relevance_feedback(
         )
     )
     await conn.commit()
-    _schedule_scoring(tenant_id)
 
 
 @router.put("", response_model=BusinessProfileResponse)
@@ -493,5 +463,4 @@ async def update_business_profile(
     )
     response = await _serialize(conn, actual_profile_id)
     await conn.commit()
-    _schedule_scoring(tenant_id)
     return response

@@ -240,16 +240,33 @@ async def fail_enrichment(
     )
 
 
-async def defer_enrichment(conn: AsyncConnection, job_id: uuid.UUID) -> None:
+async def defer_enrichment(
+    conn: AsyncConnection,
+    job_id: uuid.UUID,
+    *,
+    refund_attempt: bool = False,
+    retry_after: float | None = None,
+) -> None:
+    now = datetime.now(timezone.utc)
+    values: dict[str, Any] = {
+        "status": "QUEUED",
+        "locked_at": None,
+        "locked_by": None,
+        "updated_at": now,
+    }
+    if retry_after is not None:
+        values["available_at"] = now + timedelta(
+            seconds=max(0.0, retry_after)
+        )
+    if refund_attempt:
+        values["attempt_count"] = sa.func.greatest(
+            enrichment_jobs.c.attempt_count - 1,
+            0,
+        )
     await conn.execute(
         enrichment_jobs.update()
         .where(enrichment_jobs.c.id == job_id)
-        .values(
-            status="QUEUED",
-            locked_at=None,
-            locked_by=None,
-            updated_at=datetime.now(timezone.utc),
-        )
+        .values(**values)
     )
 
 
@@ -341,7 +358,10 @@ async def recover_stale_enrichment_jobs(
         enrichment_jobs.update()
         .where(
             enrichment_jobs.c.status == "RUNNING",
-            enrichment_jobs.c.locked_at < cutoff,
+            sa.or_(
+                enrichment_jobs.c.locked_at.is_(None),
+                enrichment_jobs.c.locked_at < cutoff,
+            ),
         )
         .values(
             status="QUEUED",

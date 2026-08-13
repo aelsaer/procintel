@@ -31,7 +31,10 @@ def _asyncpg_url() -> str:
     return url
 
 
-async def test_search_pagination_has_no_duplicates_or_gaps(tmp_path):
+async def test_search_pagination_has_no_duplicates_or_gaps(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROCINTEL_DEV_AUTH", "true")
+    monkeypatch.setenv("PROCINTEL_DEV_TENANT_ID", str(uuid.uuid4()))
+    monkeypatch.setenv("PROCINTEL_DEV_EMAIL", f"pagination-{uuid.uuid4().hex}@example.test")
     engine = create_async_engine(_asyncpg_url())
     query = f"PAGINATION-TEST-{uuid.uuid4().hex}"
 

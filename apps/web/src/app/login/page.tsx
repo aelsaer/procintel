@@ -46,7 +46,7 @@ export default function LoginPage() {
     setStarting(true);
     setError(null);
     try {
-      await startLoginRedirect({ intent, returnTo, organizationName });
+      startLoginRedirect({ intent, returnTo, organizationName });
     } catch (err) {
       setError((err as Error).message);
       setStarting(false);

@@ -34,6 +34,12 @@ services:
       timeout: 5s
       retries: 15
 
+  mailpit:
+    image: axllent/mailpit:v1.27.8
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MAILPIT_PORT:-8025}:8025"
+
   keycloak-workspace-bootstrap:
     image: postgres:16-alpine
     depends_on:
@@ -62,6 +68,8 @@ services:
         condition: service_healthy
       keycloak-workspace-bootstrap:
         condition: service_completed_successfully
+      mailpit:
+        condition: service_started
     command: ["start-dev", "--import-realm"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:-admin}
@@ -70,6 +78,7 @@ services:
       KC_DB_URL: jdbc:postgresql://keycloak-postgres:5432/${KEYCLOAK_DB:-keycloak}
       KC_DB_USERNAME: ${KEYCLOAK_DB_USER:-keycloak}
       KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak-local}
+      PROCINTEL_OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-procintel-local-bff-secret-change-me}
       KC_HOSTNAME: http://localhost:${KEYCLOAK_PORT:-8080}
       KC_HTTP_ENABLED: "true"
       KC_HEALTH_ENABLED: "true"
@@ -142,12 +151,32 @@ services:
     volumes:
       - procintel_raw_data:/var/lib/procintel/raw
       - procintel_document_data:/var/lib/procintel/documents
+
+  job-worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.scheduler
+    init: true
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - python
+      - -m
+      - services.ingestion.orchestration.cli
+      - run-worker
+      - --poll-interval-seconds
+      - ${JOB_WORKER_POLL_SECONDS:-5}
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-procintel}:${POSTGRES_PASSWORD:-procintel}@postgres:5432/${POSTGRES_DB:-procintel}
+      RAW_STORE_ROOT: /var/lib/procintel/raw
+      EXPORT_ROOT: /var/lib/procintel/exports
+      KHMDHS_API_BASE_URL: ${KHMDHS_API_BASE_URL:-https://cerpp.eprocurement.gov.gr}
+      DIAVGEIA_API_BASE_URL: ${DIAVGEIA_API_BASE_URL:-https://diavgeia.gov.gr/opendata}
+    volumes:
+      - procintel_raw_data:/var/lib/procintel/raw
       - procintel_export_data:/var/lib/procintel/exports
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health/ready"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
 
   web:
     build:
@@ -163,8 +192,11 @@ services:
     environment:
       API_BASE_URL: http://api:8000
       OIDC_ISSUER_URL: http://localhost:${KEYCLOAK_PORT:-8080}/realms/procintel
+      OIDC_INTERNAL_ISSUER_URL: http://keycloak:8080/realms/procintel
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-procintel-web}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-procintel-local-bff-secret-change-me}
       OIDC_REDIRECT_URI: http://localhost:${WEB_PORT:-3000}/callback
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:-procintel-local-cookie-secret-change-me}
     ports:
       - "${WEB_PORT:-3000}:3000"
 
@@ -259,4 +291,4 @@ volumes:
 
 # Redis and MinIO are intentionally still not included — this compose file
 # covers the local API, database, identity provider, search index and
-# persistent daily ingestion runner.
+# persistent ingestion and durable user-job runners.

@@ -15,7 +15,7 @@ import json
 import os
 import uuid
 from copy import deepcopy
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -32,7 +32,6 @@ from packages.domain.tables import (
     process_members,
     ted_notice_details,
 )
-from packages.source_clients.raw_store import LocalFilesystemRawStore
 from services.ingestion.connectors.khmdhs.db_writer import ingest_khmdhs_record
 from services.ingestion.connectors.ted.client import TedClient
 from services.ingestion.connectors.ted.config import TedConnectorConfig
@@ -90,10 +89,9 @@ def _asyncpg_url() -> str:
 
 
 @respx.mock
-async def test_matching_notice_links_and_foreign_supplier_triggers_vies(tmp_path):
+async def test_matching_notice_links_and_foreign_supplier_triggers_vies():
     ted_client = TedClient(TedConnectorConfig(base_url=BASE_URL, rate_limit_per_minute=6000))
     vies_client = ViesClient(ViesConnectorConfig(base_url=VIES_BASE_URL, rate_limit_per_minute=6000))
-    raw_store = LocalFilesystemRawStore(tmp_path / "raw")
     engine = create_async_engine(_asyncpg_url())
 
     respx.post(f"{VIES_BASE_URL}/checkVatService").mock(

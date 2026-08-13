@@ -320,8 +320,12 @@ export interface BidReminder {
   assigned_user_id: string | null;
   remind_at: string;
   channel: "IN_APP" | "EMAIL" | "WEBHOOK";
-  status: "PENDING" | "SENT" | "DISMISSED" | "FAILED";
+  status: "PENDING" | "DELIVERING" | "SENT" | "DISMISSED" | "FAILED";
   sent_at: string | null;
+  attempt_count: number;
+  last_attempt_at: string | null;
+  next_retry_at: string | null;
+  last_error: { message?: string } | null;
 }
 
 export interface TenantCertificate {

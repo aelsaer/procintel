@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.domain.tables import (
     act_parties,
-    documents,
     process_participations,
     procurement_acts,
 )
@@ -190,16 +189,17 @@ async def load_document_pages_for_participation_backfill(conn: AsyncConnection):
         await conn.execute(
             sa.text(
                 """
-                SELECT d.id AS document_id, d.act_id, d.source_record_id,
+                SELECT d.id AS document_id, dal.act_id,
+                       COALESCE(dal.source_record_id, d.source_record_id) AS source_record_id,
                        dp.page_number, dp.text,
                        CASE WHEN dp.extraction_method = 'OCR'
                             THEN COALESCE(dp.ocr_mean_confidence / 100.0, 0.5)
                             ELSE 1.0 END AS confidence_scale
                 FROM documents d
+                JOIN document_act_links dal ON dal.document_id = d.id
                 JOIN document_pages dp ON dp.document_id = d.id
-                JOIN procurement_acts a ON a.id = d.act_id
-                WHERE d.act_id IS NOT NULL
-                  AND d.source_record_id IS NOT NULL
+                JOIN procurement_acts a ON a.id = dal.act_id
+                WHERE COALESCE(dal.source_record_id, d.source_record_id) IS NOT NULL
                   AND a.process_id IS NOT NULL
                   AND NULLIF(BTRIM(dp.text), '') IS NOT NULL
                 ORDER BY d.id, dp.page_number
@@ -207,4 +207,3 @@ async def load_document_pages_for_participation_backfill(conn: AsyncConnection):
             )
         )
     ).all()
-

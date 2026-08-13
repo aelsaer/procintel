@@ -16,7 +16,10 @@ URL = "https://example.test/tender-doc.pdf"
 @respx.mock
 async def test_downloads_payload_under_the_size_limit():
     respx.get(URL).mock(return_value=httpx.Response(200, content=b"%PDF-1.4 fake pdf content"))
-    result = await download_document(URL, config=DocumentPipelineConfig(max_file_size_bytes=1_000_000))
+    result = await download_document(
+        URL,
+        config=DocumentPipelineConfig(max_file_size_bytes=1_000_000, allow_test_hosts=True),
+    )
     assert result.payload == b"%PDF-1.4 fake pdf content"
     assert result.http_status == 200
 
@@ -25,14 +28,17 @@ async def test_downloads_payload_under_the_size_limit():
 async def test_rejects_payload_over_the_size_limit_while_streaming():
     respx.get(URL).mock(return_value=httpx.Response(200, content=b"x" * 1000))
     with pytest.raises(DocumentTooLargeError):
-        await download_document(URL, config=DocumentPipelineConfig(max_file_size_bytes=100))
+        await download_document(
+            URL,
+            config=DocumentPipelineConfig(max_file_size_bytes=100, allow_test_hosts=True),
+        )
 
 
 @respx.mock
 async def test_raises_on_non_2xx_status():
     respx.get(URL).mock(return_value=httpx.Response(404))
     with pytest.raises(httpx.HTTPStatusError):
-        await download_document(URL, config=DocumentPipelineConfig())
+        await download_document(URL, config=DocumentPipelineConfig(allow_test_hosts=True))
 
 
 @respx.mock
@@ -46,9 +52,25 @@ async def test_retries_rate_limited_download_with_shared_provider_quota():
 
     result = await download_document(
         URL,
-        config=DocumentPipelineConfig(max_download_attempts=2),
+        config=DocumentPipelineConfig(max_download_attempts=2, allow_test_hosts=True),
         rate_limiter=limiter,
     )
 
     assert result.payload == b"%PDF-1.4 retried"
     assert route.call_count == 2
+
+
+@respx.mock
+async def test_revalidates_each_redirect_destination():
+    respx.get(URL).mock(
+        return_value=httpx.Response(
+            302,
+            headers={"Location": "http://127.0.0.1/latest/meta-data"},
+        )
+    )
+
+    with pytest.raises(ValueError, match="non-public network address"):
+        await download_document(
+            URL,
+            config=DocumentPipelineConfig(allow_test_hosts=True),
+        )

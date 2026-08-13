@@ -20,7 +20,7 @@ from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
-from packages.source_clients.raw_store import LocalFilesystemRawStore
+from packages.source_clients.raw_store import configured_raw_store
 from services.ingestion.connectors.vies.client import ViesClient
 from services.ingestion.connectors.vies.config import ViesConnectorConfig
 from services.ingestion.connectors.vies.resolve import check_and_record_vies
@@ -86,7 +86,7 @@ async def _run_backfill(
     with_vies: bool,
 ) -> None:
     client = TedClient(TedConnectorConfig.from_env())
-    raw_store = LocalFilesystemRawStore(raw_root)
+    raw_store = configured_raw_store(raw_root)
     engine = create_async_engine(_to_asyncpg_url(database_url))
 
     vies_client = None

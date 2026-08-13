@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from packages.source_clients.raw_store import LocalFilesystemRawStore
+from packages.source_clients.raw_store import configured_raw_store
 from services.ingestion.connectors.vies.client import ViesClient
 from services.ingestion.connectors.vies.config import ViesConnectorConfig
 from services.ingestion.connectors.vies.resolve import check_and_record_vies
@@ -48,7 +48,7 @@ async def run_scheduled_window(
         if opensearch_config is not None
         else None
     )
-    raw_store = LocalFilesystemRawStore(raw_root)
+    raw_store = configured_raw_store(raw_root)
     enrichment_attempts: dict[str, int] = {}
     enrichment_succeeded: dict[str, int] = {}
     enrichment_failures: list[dict[str, str]] = []

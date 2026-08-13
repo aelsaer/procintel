@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from packages.domain.tables import data_quality_issues, external_datasets, source_records
-from packages.source_clients.raw_store import LocalFilesystemRawStore
+from packages.source_clients.raw_store import RawStore, configured_raw_store
 
 from .client import CkanClient, PackageShowResponse
 from .config import CkanConnectorConfig
@@ -200,7 +200,7 @@ async def _sync_catalog_quality_issue(
 async def _record_catalog_metadata(
     conn: AsyncConnection,
     *,
-    raw_store: LocalFilesystemRawStore,
+    raw_store: RawStore,
     package: PackageShowResponse,
 ) -> None:
     payload = json.dumps(
@@ -254,7 +254,7 @@ async def refresh_curated_catalog(
     now = now or datetime.now(timezone.utc)
     own_client = client is None
     client = client or CkanClient(CkanConnectorConfig.from_env())
-    raw_store = LocalFilesystemRawStore(raw_root)
+    raw_store = configured_raw_store(raw_root)
     outcomes: list[CatalogRefreshOutcome] = []
     try:
         for item in CURATED_SUPPLEMENTARY_DATASETS:
